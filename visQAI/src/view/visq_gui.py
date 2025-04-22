@@ -84,7 +84,7 @@ class ViscosityPredictorGUI(QMainWindow):
         self.surfactant_conc_sb = QDoubleSpinBox()
         self.surfactant_conc_sb.setRange(0, 100)
         self.surfactant_conc_sb.setDecimals(2)
-        self.surfactant_conc_sb.setSuffix(" UNITS")
+        self.surfactant_conc_sb.setSuffix(" %w")
         form_layout.addRow("Surf. Conc:", self.surfactant_conc_sb)
 
         inputs_group.setLayout(form_layout)
