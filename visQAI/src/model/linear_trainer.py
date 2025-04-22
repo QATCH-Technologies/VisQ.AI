@@ -90,7 +90,7 @@ class ViscosityRegressorLM:
 
 
 if __name__ == "__main__":
-    DATA_PATH = os.path.join('content', 'formulation_data_04222025.csv')
+    DATA_PATH = os.path.join('content', 'formulation_data_04222025_2.csv')
     SAVE_PATH = os.path.join('visQAI', 'objects', 'linear_regressor')
     df = pd.read_csv(DATA_PATH)
     feature_cols = ["Protein type", "Protein", "Temperature", "Buffer",

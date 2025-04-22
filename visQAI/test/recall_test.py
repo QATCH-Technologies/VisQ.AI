@@ -6,6 +6,7 @@ import numpy as np
 from linear_predictor import LinearPredictor
 from nn_predictor import NNPredictor
 from xgb_predictor import XGBPredictor
+from cnn_predictor import CNNPredictor
 CSV_PATH = os.path.join("content", "formulation_data_04222025.csv")
 TARGET_COLS = [
     "Viscosity100", "Viscosity1000",
@@ -26,6 +27,9 @@ def predict_viscosity(params, predictor_type: str):
     elif predictor_type == "Neural Net":
         pred = NNPredictor(os.path.join(
             'visqAI', 'objects', 'nn_regressor')).predict(df)
+    elif predictor_type == "CNN":
+        pred = CNNPredictor(os.path.join(
+            'visqAI', 'objects', 'cnn_regressor')).predict(df)
     else:
         pred = LinearPredictor(os.path.join(
             'visqAI', 'objects', 'linear_regressor')).predict(df)
@@ -43,7 +47,7 @@ def test_per_sample_rmse_improved():
     X = df.drop(columns=TARGET_COLS)
     y = df[TARGET_COLS]
 
-    models = ["Linear", "Neural Net", "XGB"]
+    models = ["Linear", "XGB", "CNN",  "Neural Net"]
     errors = {m: [] for m in models}
 
     # per-sample RMSE & individual plots
@@ -114,7 +118,7 @@ def test_first_last_measurement_errors_improved():
     X = df.drop(columns=TARGET_COLS)
     y = df[TARGET_COLS]
 
-    models = ["Linear", "Neural Net", "XGB"]
+    models = ["Linear", "CNN", "XGB", "Neural Net"]
     first_errors = {m: [] for m in models}
     last_errors = {m: [] for m in models}
 

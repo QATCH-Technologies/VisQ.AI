@@ -15,6 +15,7 @@ import os
 from linear_predictor import LinearPredictor
 from xgb_predictor import XGBPredictor
 from nn_predictor import NNPredictor
+from cnn_predictor import CNNPredictor
 
 
 class ViscosityPredictorGUI(QMainWindow):
@@ -36,7 +37,7 @@ class ViscosityPredictorGUI(QMainWindow):
 
         # Model selector
         self.model_cb = QComboBox()
-        self.model_cb.addItems(["XGB", "Neural Net", "Linear"])
+        self.model_cb.addItems(["XGB", "Neural Net", "Linear", "CNN"])
         form_layout.addRow("Model:", self.model_cb)
 
         # Protein type
@@ -77,7 +78,7 @@ class ViscosityPredictorGUI(QMainWindow):
 
         # Surfactant
         self.surfactant_cb = QComboBox()
-        self.surfactant_cb.addItems(["None", "Tween-20"])
+        self.surfactant_cb.addItems(["None", "Tween-20", "Tween-80"])
         form_layout.addRow("Surfactant:", self.surfactant_cb)
 
         # Surfactant concentration
@@ -223,6 +224,9 @@ class ViscosityPredictorGUI(QMainWindow):
         elif predictor_type == "Neural Net":
             predictor = NNPredictor(os.path.join(
                 'visqAI', 'objects', 'nn_regressor'))
+        elif predictor_type == "CNN":
+            predictor = CNNPredictor(os.path.join(
+                'visqAI', 'objects', 'cnn_regressor'))
         else:
             predictor = LinearPredictor(os.path.join(
                 'visqAI', 'objects', 'linear_regressor'))
