@@ -6,7 +6,6 @@ import numpy as np
 from linear_predictor import LinearPredictor
 from nn_predictor import NNPredictor
 from xgb_predictor import XGBPredictor
-
 CSV_PATH = os.path.join("content", "formulation_data_04222025.csv")
 TARGET_COLS = [
     "Viscosity100", "Viscosity1000",
@@ -119,7 +118,7 @@ def test_first_last_measurement_errors_improved():
     first_errors = {m: [] for m in models}
     last_errors = {m: [] for m in models}
 
-    # collect raw values for plotting
+    # collect raw values for plotting and Excel
     actual_first = []
     actual_last = []
     first_preds = {m: [] for m in models}
@@ -149,7 +148,38 @@ def test_first_last_measurement_errors_improved():
         )
         print(f"Sample {sample_ids[idx]}  ->  {errs}")
 
-    # enhanced combined plot
+    # --- write results to Excel ---
+    # build per-sample DataFrame
+    per_sample_data = {
+        "Sample ID": sample_ids,
+        "Actual First (100)": actual_first,
+        "Actual Last (15e6)": actual_last,
+    }
+    for m in models:
+        per_sample_data[f"{m} Pred First"] = first_preds[m]
+        per_sample_data[f"{m} Error First"] = first_errors[m]
+        per_sample_data[f"{m} Pred Last"] = last_preds[m]
+        per_sample_data[f"{m} Error Last"] = last_errors[m]
+
+    per_sample_df = pd.DataFrame(per_sample_data)
+
+    # build summary DataFrame
+    summary_data = {
+        "Model": models,
+        "Avg Error First": [np.mean(first_errors[m]) for m in models],
+        "Avg Error Last":  [np.mean(last_errors[m]) for m in models]
+    }
+    summary_df = pd.DataFrame(summary_data)
+
+    # write both sheets
+    excel_path = os.path.join(OUTPUT_DIR, "first_last_results.xlsx")
+    with pd.ExcelWriter(excel_path, engine="xlsxwriter") as writer:
+        per_sample_df.to_excel(writer, sheet_name="Per_Sample", index=False)
+        summary_df.to_excel(writer, sheet_name="Summary",    index=False)
+
+    print(f"\nWrote detailed results to {excel_path}")
+
+    # --- (rest of your plotting code unchanged) ---
     x = np.arange(len(sample_ids))
     cmap = plt.get_cmap("tab10")
     colors = {m: cmap(i) for i, m in enumerate(models)}
@@ -168,11 +198,9 @@ def test_first_last_measurement_errors_improved():
     for m in models:
         ax1.scatter(x, first_preds[m], marker='x',
                     s=60, color=colors[m], label=m)
-        # error connectors
         for xi, (a, p) in enumerate(zip(actual_first, first_preds[m])):
             ax1.vlines(xi, a, p, linestyles='dashed',
                        color=colors[m], alpha=0.5)
-        # annotate worst sample
         worst_i = np.argmax(np.abs(np.array(first_preds[m]) - actual_first))
         ax1.annotate(
             f"{m} worst: {sample_ids[worst_i]}",
