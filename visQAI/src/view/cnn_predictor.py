@@ -21,12 +21,12 @@ class CNNPredictor:
     def __init__(self, model_dir: str):
         # validate paths
         self.model_dir = model_dir
-        model_path = os.path.join(model_dir, "cnn_model")
+        model_path = os.path.join(model_dir, "cnn_model.keras")
         prep_path = os.path.join(model_dir, "preprocessor.pkl")
 
-        if not os.path.isdir(model_path):
-            raise FileNotFoundError(
-                f"SavedModel directory not found at {model_path}")
+        # if not os.path.isdir(model_path):
+        #     raise FileNotFoundError(
+        #         f"SavedModel directory not found at {model_path}")
         if not os.path.isfile(prep_path):
             raise FileNotFoundError(
                 f"Preprocessor pickle not found at {prep_path}")
@@ -77,4 +77,7 @@ class CNNPredictor:
             # fallback generic names
             target_cols = [f"viscosity_{i}" for i in range(preds.shape[1])]
 
-        return pd.DataFrame(preds, columns=target_cols, index=X.index)
+        return pd.DataFrame(preds, columns=target_cols, index=X.index), preds
+
+    def fine_tune(self, X, y):
+        return

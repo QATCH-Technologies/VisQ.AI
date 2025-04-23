@@ -2,16 +2,20 @@ import sys
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFormLayout, QComboBox,
     QDoubleSpinBox, QPushButton, QVBoxLayout, QHBoxLayout,
-    QGroupBox, QFrame, QTableWidget, QTableWidgetItem, QTabWidget
+    QGroupBox, QFrame, QTableWidget, QTableWidgetItem,
+    QTabWidget, QStackedWidget
 )
 from PyQt5.QtCore import Qt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+from matplotlib.tri import Triangulation
+from sklearn.decomposition import PCA
+from scipy.interpolate import griddata
+
 import numpy as np
-from scipy.interpolate import interp1d
 import pandas as pd
 import os
-
+from scipy.interpolate import interp1d
 from linear_predictor import LinearPredictor
 from xgb_predictor import XGBPredictor
 from nn_predictor import NNPredictor
@@ -95,7 +99,7 @@ class ViscosityPredictorGUI(QMainWindow):
         self.predict_btn.clicked.connect(self.on_predict)
 
         # -- Results table ----------------------------------------------
-        results_group = QGroupBox("Raw Predictions")
+        results_group = QGroupBox("Viscosity Profile")
         results_layout = QVBoxLayout()
         self.results_table = QTableWidget(0, 2)
         self.results_table.setHorizontalHeaderLabels(
@@ -127,47 +131,110 @@ class ViscosityPredictorGUI(QMainWindow):
         predict_tab.setLayout(predict_layout)
         self.tab_widget.addTab(predict_tab, "Predict")
 
-        # Learn Tab (empty placeholder)
         learn_tab = QWidget()
         learn_layout = QVBoxLayout()
-        learn_layout.addStretch()
+
+        # 1) Define headers in the user-specified order
+        headers = [
+            "ID", "Protein type", "Protein", "Temperature", "Buffer",
+            "Sugar", "Sugar (M)", "Surfactant", "TWEEN",
+            "Viscosity100", "Viscosity1000", "Viscosity10000",
+            "Viscosity100000", "Viscosity15000000",
+        ]
+
+        self.learn_table = QTableWidget(0, len(headers))
+        self.learn_table.setHorizontalHeaderLabels(headers)
+        self.learn_table.horizontalHeader().setStretchLastSection(True)
+        self.learn_table.verticalHeader().setVisible(False)
+        self.learn_table.setAlternatingRowColors(True)
+        self.learn_table.setShowGrid(True)
+        self.learn_table.setGridStyle(Qt.SolidLine)
+        self.learn_table.setStyleSheet("""
+            QTableWidget { gridline-color: #888; }
+            QTableWidget::item { border: 1px solid #888; }
+            QHeaderView::section { border: 1px solid #888; background: #eaeaea; }
+        """)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        add_btn = QPushButton("Add Measurement")
+        add_btn.clicked.connect(self.add_measurement_row)
+        btn_layout.addWidget(add_btn)
+        remove_btn = QPushButton("Remove Measurement")
+        remove_btn.clicked.connect(self.remove_measurement_row)
+        btn_layout.addWidget(remove_btn)
+
+        left_widget = QWidget()
+        left_layout = QVBoxLayout()
+        left_layout.addWidget(self.learn_table)
+        left_layout.addLayout(btn_layout)
+        left_widget.setLayout(left_layout)
+
+        learn_layout.addWidget(left_widget)
         learn_tab.setLayout(learn_layout)
         self.tab_widget.addTab(learn_tab, "Learn")
 
-        # Optimize Tab (empty placeholder)
+        # Optimize Tab
         optimize_tab = QWidget()
-        optimize_layout = QVBoxLayout()
-        optimize_layout.addStretch()
-        optimize_tab.setLayout(optimize_layout)
+        # ... existing optimize setup here ...
         self.tab_widget.addTab(optimize_tab, "Optimize")
 
-        # -- Main Layout -------------------------------------------------
+        # Plot canvases
+        self.profile_fig = Figure(figsize=(5, 4))
+        self.profile_canvas = FigureCanvas(self.profile_fig)
+        self.profile_ax = self.profile_fig.add_subplot(111)
+
+        self.surface_fig = Figure(figsize=(5, 4))
+        self.surface_canvas = FigureCanvas(self.surface_fig)
+        self.surface_ax = self.surface_fig.add_subplot(111, projection='3d')
+
+        self.plot_stack = QStackedWidget()
+        self.plot_stack.addWidget(self.profile_canvas)
+        self.plot_stack.addWidget(self.surface_canvas)
+
         main_layout = QHBoxLayout()
         main_layout.addWidget(self.tab_widget, 1)
+        divider = QFrame()
+        divider.setFrameShape(QFrame.VLine)
         main_layout.addWidget(divider)
-        main_layout.addWidget(self.canvas, 2)
+        main_layout.addWidget(self.plot_stack, 2)
 
         central = QWidget()
         central.setLayout(main_layout)
         self.setCentralWidget(central)
 
+        # Initialize Learn
+        self.add_measurement_row()
+        self.tab_widget.currentChanged.connect(self.on_tab_changed)
+        self.on_tab_changed(0)
+
+    def on_tab_changed(self, index: int):
+        # Predict tab = 0, Learn = 1, Optimize = 2
+        if index == 1:
+            # in Learn, show surface
+            self.plot_stack.setCurrentIndex(1)
+            self.update_surface_plot()
+        else:
+            # Predict or Optimize: show profile plot
+            self.plot_stack.setCurrentIndex(0)
+
     def apply_styles(self):
         self.setStyleSheet("""
             QWidget { font-family: Arial; font-size: 13px; }
-            QGroupBox { 
-                font-weight: bold; 
-                border: 1px solid #aaa; 
-                border-radius: 4px; 
+            QGroupBox {
+                font-weight: bold;
+                border: 1px solid #aaa;
+                border-radius: 4px;
                 margin-top: 6px;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 10px; padding: 0 3px 0 3px;
             }
-            QPushButton { 
-                background-color: #4679BD; 
-                color: white; 
-                border-radius: 4px; 
+            QPushButton {
+                background-color: #4679BD;
+                color: white;
+                border-radius: 4px;
                 padding: 6px 12px;
             }
         """)
@@ -242,6 +309,73 @@ class ViscosityPredictorGUI(QMainWindow):
         else:
             visc = arr.flatten()[:len(shear_rates)]
         return shear_rates, visc.tolist()
+
+    def add_measurement_row(self):
+        row = self.learn_table.rowCount()
+        self.learn_table.insertRow(row)
+        self.learn_table.setItem(row, 0, QTableWidgetItem(str(row+1)))
+        drop_cols = {1: self.protein_type_cb, 4: self.buffer_cb,
+                     5: self.sugar_cb, 7: self.surfactant_cb}
+        for col, template in drop_cols.items():
+            combo = QComboBox()
+            for i in range(template.count()):
+                combo.addItem(template.itemText(i))
+            self.learn_table.setCellWidget(row, col, combo)
+        for col in range(self.learn_table.columnCount()):
+            if col in drop_cols or col == 0:
+                continue
+            self.learn_table.setItem(row, col, QTableWidgetItem(""))
+        self.update_surface_plot()
+
+    def remove_measurement_row(self):
+        count = self.learn_table.rowCount()
+        if count:
+            self.learn_table.removeRow(count-1)
+        for r in range(self.learn_table.rowCount()):
+            self.learn_table.setItem(r, 0, QTableWidgetItem(str(r+1)))
+        self.update_surface_plot()
+
+    def update_surface_plot(self):
+        # Gather data into DataFrame
+        headers = [self.learn_table.horizontalHeaderItem(i).text()
+                   for i in range(self.learn_table.columnCount())]
+        records = []
+        for r in range(self.learn_table.rowCount()):
+            rec = {}
+            for c, h in enumerate(headers):
+                if c in (1, 4, 5, 7):
+                    w = self.learn_table.cellWidget(r, c)
+                    rec[h] = w.currentText() if w else None
+                else:
+                    itm = self.learn_table.item(r, c)
+                    rec[h] = itm.text() if itm else None
+            records.append(rec)
+        df = pd.DataFrame(records)
+        num_cols = ["Protein", "Temperature", "Sugar (M)", "TWEEN",
+                    "Viscosity100", "Viscosity1000", "Viscosity10000",
+                    "Viscosity100000", "Viscosity15000000"]
+        df[num_cols] = df[num_cols].apply(pd.to_numeric, errors='coerce')
+        cat_cols = ["Protein type", "Buffer", "Sugar", "Surfactant"]
+        df_cat = pd.get_dummies(df[cat_cols], dummy_na=False)
+        X = pd.concat([df[num_cols], df_cat], axis=1).dropna()
+        if X.empty:
+            self.surface_ax.clear()
+            self.surface_canvas.draw()
+            return
+        n_pts, n_feat = X.shape
+        n_comp = min(3, n_pts, n_feat)
+        pca = PCA(n_components=n_comp)
+        coords = pca.fit_transform(X)
+        xs = coords[:, 0]
+        ys = coords[:, 1] if n_comp > 1 else np.zeros_like(xs)
+        zs = coords[:, 2] if n_comp > 2 else np.zeros_like(xs)
+        self.surface_ax.clear()
+        # Scatter all points in 3D
+        self.surface_ax.scatter(xs, ys, zs, c=zs, cmap='hot', s=50)
+        self.surface_ax.set_xlabel('PC1')
+        self.surface_ax.set_ylabel('PC2')
+        self.surface_ax.set_zlabel('PC3')
+        self.surface_canvas.draw()
 
 
 if __name__ == "__main__":

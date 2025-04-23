@@ -171,7 +171,7 @@ class ViscosityTrainerCNN:
 
     def save(self, model_dir):
         os.makedirs(model_dir, exist_ok=True)
-        self.model.save(os.path.join(model_dir, "cnn_model"))
+        self.model.save(os.path.join(model_dir, "cnn_model.keras"))
         joblib.dump(self.preprocessor, os.path.join(
             model_dir, "preprocessor.pkl"))
 
@@ -192,13 +192,13 @@ if __name__ == "__main__":
     X, y = df[feature_cols], df[target_cols]
 
     trainer = ViscosityTrainerCNN(cv_splits=4)
-    print("🔍 Tuning hyperparameters…")
+    print("Tuning hyperparameters…")
     study = trainer.tune(X, y, n_trials=30, epochs=15, batch_size=16)
     print("Best params:", study.best_params)
 
-    print("🔄 Cross‑validating final model…")
+    print("Cross‑validating final model…")
     rmses = trainer.cross_validate(X, y, epochs=50, batch_size=16)
 
-    print(f"💾 Saving final model to {SAVE_PATH}")
+    print(f"Saving final model to {SAVE_PATH}")
     trainer.save(SAVE_PATH)
-    print("✅ Done.")
+    print("Done.")
