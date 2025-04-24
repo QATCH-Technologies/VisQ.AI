@@ -1,7 +1,6 @@
-from typing import List, Optional, Type
-from collections import defaultdict
-from excipient import Excipient
-from viscosity import ViscosityProfile
+from typing import List, Optional
+from .excipient import Excipient
+from .viscosity import ViscosityProfile
 
 
 class Formulation:

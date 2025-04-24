@@ -7,7 +7,7 @@ from matplotlib.figure import Figure
 from scipy.interpolate import interp1d
 import numpy as np
 import os
-from predictors.viscosity_predictor import ViscosityPredictor
+from src.predictors.viscosity_predictor import ViscosityPredictor
 
 
 class PredictWindow(QWidget):

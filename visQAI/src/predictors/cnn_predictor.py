@@ -1,13 +1,11 @@
-from abc import ABC, abstractmethod
 import pandas as pd
-import numpy as np
 import os
 import tensorflow as tf
 import joblib
-from visQAI.src.predictors.base_predictor import Predictor
+from .base_predictor import BasePredictor
 
 
-class CNNPredictor(Predictor):
+class CNNPredictor(BasePredictor):
     def __init__(self, model_dir: str):
         self.model_dir = model_dir
         model_path = os.path.join(model_dir, "cnn_model.keras")

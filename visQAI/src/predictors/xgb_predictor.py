@@ -1,5 +1,5 @@
 # xgb_predictor.py
-from base_predictor import BasePredictor
+from .base_predictor import BasePredictor
 import os
 import joblib
 import pandas as pd

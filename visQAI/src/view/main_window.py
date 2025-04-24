@@ -1,8 +1,8 @@
 # main_window.py
 from PyQt5.QtWidgets import QMainWindow, QTabWidget, QFrame, QHBoxLayout, QWidget
-from predict_window import PredictWindow
-from learn_window import LearnWidnow
-from optimize_window import OptimizeWindow
+from .predict_window import PredictWindow
+from .learn_window import LearnWindow
+from .optimize_window import OptimizeWindow
 
 
 class MainWindow(QMainWindow):
@@ -16,9 +16,8 @@ class MainWindow(QMainWindow):
     def init_ui(self):
         self.tab_widget = QTabWidget()
         self.tab_widget.addTab(PredictWindow(), "Predict")
-        self.tab_widget.addTab(LearnWidnow(), "Learn")
+        self.tab_widget.addTab(LearnWindow(), "Learn")
         self.tab_widget.addTab(OptimizeWindow(), "Optimize")
-        self.tab_widget.currentChanged.connect(self.on_tab_changed)
 
         divider = QFrame()
         divider.setFrameShape(QFrame.VLine)
@@ -32,10 +31,6 @@ class MainWindow(QMainWindow):
         central = QWidget()
         central.setLayout(main_layout)
         self.setCentralWidget(central)
-
-    def on_tab_changed(self, index):
-        # hook if main needs to adjust shared elements
-        pass
 
     def apply_styles(self):
         self.setStyleSheet("""

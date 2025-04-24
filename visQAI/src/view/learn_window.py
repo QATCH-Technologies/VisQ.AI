@@ -6,13 +6,13 @@ from sklearn.decomposition import PCA
 import pandas as pd
 
 
-class LearnWidnow(QWidget):
+class LearnWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.init_ui()
 
     def init_ui(self):
-        headers = ["ID", "Protein type", "Protein", ...]
+        headers = ["ID", "Protein type", "Protein"]
         self.table = QTableWidget(0, len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         add_btn = QPushButton("Add Measurement")

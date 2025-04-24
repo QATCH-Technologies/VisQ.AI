@@ -1,9 +1,9 @@
 # viscosity_predictor.py
 from typing import Type
-from base_predictor import BasePredictor
-from cnn_predictor import CNNPredictor
-from xgb_predictor import XGBPredictor
-from nn_predictor import NNPredictor
+from .base_predictor import BasePredictor
+from .cnn_predictor import CNNPredictor
+from .xgb_predictor import XGBPredictor
+from .nn_predictor import NNPredictor
 import pandas as pd
 
 
