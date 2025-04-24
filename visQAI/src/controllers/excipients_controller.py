@@ -11,20 +11,20 @@ class ExcipientsController:
     def all(self):
         rows = self.db.list_excipients()
         return [Excipient(
-            etype=r["etype"],
-            name=r["name"],
-            concentration=r["concentration"],
-            unit=r["unit"],
+            _etype=r["etype"],
+            _name=r["name"],
+            _concentration=r["concentration"],
+            _unit=r["unit"],
             _id=r["id"]
         ) for r in rows]
 
     def get(self, exc_id):
         r = self.db.get_excipient(exc_id)
         return None if not r else Excipient(
-            etype=r["etype"],
-            name=r["name"],
-            concentration=r["concentration"],
-            unit=r["unit"],
+            _etype=r["etype"],
+            _name=r["name"],
+            _concentration=r["concentration"],
+            _unit=r["unit"],
             _id=r["id"]
         )
 
@@ -40,7 +40,6 @@ class ExcipientsController:
 
     def edit(self, exc: Excipient):
         self.db.update_excipient(
-            exc.get_id(),
             etype=exc.get_excipient_type,
             name=exc.get_name(),
             concentration=exc.get_concentration(),
