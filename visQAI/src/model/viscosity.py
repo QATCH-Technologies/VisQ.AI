@@ -58,9 +58,6 @@ class ViscosityProfile:
         raise KeyError(f"No viscosity point found at shear rate {shear_rate}.")
 
     def list_points(self) -> List[ViscosityPoint]:
-        """
-        Return all viscosity points sorted by shear rate.
-        """
         return sorted(self._profile, key=lambda p: p.shear_rate)
 
     def clear(self) -> None:

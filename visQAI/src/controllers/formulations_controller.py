@@ -57,7 +57,6 @@ class FormulationsController:
         if row.get("viscosity_json"):
             data = json.loads(row["viscosity_json"])
             f.viscosity_profile = ViscosityProfile.from_dict(data)
-        # load excipient objects
         exc_ids = self.db.get_excipient_ids_for(f._id)
         for eid in exc_ids:
             f.add_excipient(self.exc_ctrl.get(eid))

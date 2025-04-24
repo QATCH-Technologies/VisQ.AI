@@ -11,7 +11,7 @@ class ExcipientsController:
     def all(self):
         rows = self.db.list_excipients()
         return [Excipient(
-            category=r["category"],
+            etype=r["etype"],
             name=r["name"],
             concentration=r["concentration"],
             unit=r["unit"],
@@ -21,7 +21,7 @@ class ExcipientsController:
     def get(self, exc_id):
         r = self.db.get_excipient(exc_id)
         return None if not r else Excipient(
-            category=r["category"],
+            etype=r["etype"],
             name=r["name"],
             concentration=r["concentration"],
             unit=r["unit"],
@@ -40,8 +40,8 @@ class ExcipientsController:
 
     def edit(self, exc: Excipient):
         self.db.update_excipient(
-            exc._id,
-            category=exc.category(),
+            exc.get_id(),
+            etype=exc.get_excipient_type,
             name=exc.get_name(),
             concentration=exc.get_concentration(),
             unit=exc.get_unit()

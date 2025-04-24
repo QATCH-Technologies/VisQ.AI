@@ -14,11 +14,18 @@ class ConcentrationUnit(Enum):
 
 
 class Excipient:
-    def __init__(self, name: str, excipient_type: str, concentration: float, unit: ConcentrationUnit = ConcentrationUnit.MOLAR):
+    def __init__(self, id: int, name: str, excipient_type: str, concentration: float, unit: ConcentrationUnit = ConcentrationUnit.MOLAR):
+        self._id = id
         self._name = name
         self._excipient_type = excipient_type
         self._concentration = concentration
         self._unit = unit
+
+    def set_id(self, id: int):
+        self._id = id
+
+    def get_id(self):
+        return self._id
 
     def get_excipient_type(self):
         return self._excipient_type
