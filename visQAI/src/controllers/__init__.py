@@ -1,4 +1,4 @@
 # visQAI/src/controllers/__init__.py
-
-from .experiment_suggester import ExperimentSuggester
-from .formulation_optimzer import FormulationOptimizer
+from .formulations_controller import FormulationsController
+from .excipients_controller import ExcipientsController
+from .predictors_controller import PredictorsController

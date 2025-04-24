@@ -1,112 +1,70 @@
-import numpy as np
-import matplotlib.pyplot as plt
-from typing import List, Union, Dict
-from scipy.interpolate import interp1d
+from dataclasses import dataclass
+from typing import List, Optional
+
+
+@dataclass
+class ViscosityPoint:
+    """
+    Represents a viscosity measurement at a specific shear rate.
+    """
+    shear_rate: float
+    viscosity: float
 
 
 class ViscosityProfile:
     """
-    Represents a viscosity profile composed of multiple ViscosityPoints,
-    with log-log interpolation support.
+    Maintains a collection of viscosity points (shear_rate -> viscosity) and provides CRUD operations.
     """
 
-    class ViscosityPoint:
+    def __init__(self):
+        self._profile: List[ViscosityPoint] = []
+
+    def add_point(self, shear_rate: float, viscosity: float) -> None:
         """
-        Represents a single viscosity value at a specific shear rate.
+        Create a new viscosity point. Raises ValueError if a point at the same shear rate exists.
         """
-
-        def __init__(self, shear_rate: float, viscosity: float):
-            self.shear_rate = shear_rate
-            self.viscosity = viscosity
-
-        def __repr__(self):
-            return f"({self.shear_rate} 1/s, {self.viscosity} cP)"
-
-    def __init__(self, viscosities: List[float], shear_rates: List[float] = None):
-        shear_rates = shear_rates or [100, 1000, 10000, 100000, 15000000]
-        if len(viscosities) != len(shear_rates):
+        if any(p.shear_rate == shear_rate for p in self._profile):
             raise ValueError(
-                "Viscosities and shear_rates must be the same length.")
+                f"A point at shear rate {shear_rate} already exists.")
+        self._profile.append(ViscosityPoint(shear_rate, viscosity))
 
-        self._points = [
-            self.ViscosityPoint(sr, vis) for sr, vis in zip(shear_rates, viscosities)
-        ]
-        self._update_interpolator()
-
-    def _update_interpolator(self):
-        shear_rates = [p.shear_rate for p in self._points]
-        viscosities = [p.viscosity for p in self._points]
-        self._log_interp = interp1d(
-            np.log10(shear_rates),
-            np.log10(viscosities),
-            bounds_error=False,
-            fill_value="extrapolate"
-        )
-
-    def get_viscosity(self, shear_rate: Union[float, List[float]]) -> Union[float, List[float]]:
+    def get_point(self, shear_rate: float) -> Optional[ViscosityPoint]:
         """
-        Returns interpolated viscosity at one or more shear rates.
+        Retrieve the viscosity point for the given shear rate, or None if not found.
         """
-        if isinstance(shear_rate, list):
-            log_interp_vals = self._log_interp(np.log10(shear_rate))
-            return list(10 ** log_interp_vals)
-        else:
-            return float(10 ** self._log_interp(np.log10(shear_rate)))
-
-    def get_profile(self) -> List['ViscosityProfile.ViscosityPoint']:
-        return self._points
-
-    def set_profile(self, viscosities: List[float], shear_rates: List[float]):
-        if len(viscosities) != len(shear_rates):
-            raise ValueError(
-                "Mismatch between viscosity and shear rate lengths.")
-        self._points = [
-            self.ViscosityPoint(sr, vis) for sr, vis in zip(shear_rates, viscosities)
-        ]
-        self._update_interpolator()
-
-    def get_point(self, shear_rate: float) -> Union['ViscosityProfile.ViscosityPoint', None]:
-        for point in self._points:
-            if point.shear_rate == shear_rate:
-                return point
+        for p in self._profile:
+            if p.shear_rate == shear_rate:
+                return p
         return None
 
-    def add_point(self, shear_rate: float, viscosity: float):
-        self._points.append(self.ViscosityPoint(shear_rate, viscosity))
-        self._points.sort(key=lambda p: p.shear_rate)
-        self._update_interpolator()
-
-    def plot(self, loglog: bool = True, title: str = "Viscosity Profile"):
-        x = [p.shear_rate for p in self._points]
-        y = [p.viscosity for p in self._points]
-
-        plt.figure(figsize=(6, 4))
-        if loglog:
-            plt.loglog(x, y, marker='o')
-        else:
-            plt.plot(x, y, marker='o')
-
-        plt.xlabel("Shear Rate (1/s)")
-        plt.ylabel("Viscosity (cP)")
-        plt.title(title)
-        plt.grid(True, which="both", ls="--")
-        plt.tight_layout()
-        plt.show()
-
-    def compute_log_slope(self) -> float:
-        x = np.log10([p.shear_rate for p in self._points])
-        y = np.log10([p.viscosity for p in self._points])
-        slope, _ = np.polyfit(x, y, deg=1)
-        return slope
-
-    def compare_to(self, other: 'ViscosityProfile') -> Dict[float, float]:
+    def update_point(self, shear_rate: float, viscosity: float) -> None:
         """
-        Compare to another profile at this profile's shear rates.
+        Update the viscosity value for an existing shear rate. Raises KeyError if not found.
         """
-        return {
-            p.shear_rate: abs(p.viscosity - other.get_viscosity(p.shear_rate))
-            for p in self._points
-        }
+        for p in self._profile:
+            if p.shear_rate == shear_rate:
+                p.viscosity = viscosity
+                return
+        raise KeyError(f"No viscosity point found at shear rate {shear_rate}.")
 
-    def __repr__(self):
-        return f"ViscosityProfile({self._points})"
+    def remove_point(self, shear_rate: float) -> None:
+        """
+        Delete the viscosity point at the specified shear rate. Raises KeyError if not found.
+        """
+        for i, p in enumerate(self._profile):
+            if p.shear_rate == shear_rate:
+                del self._profile[i]
+                return
+        raise KeyError(f"No viscosity point found at shear rate {shear_rate}.")
+
+    def list_points(self) -> List[ViscosityPoint]:
+        """
+        Return all viscosity points sorted by shear rate.
+        """
+        return sorted(self._profile, key=lambda p: p.shear_rate)
+
+    def clear(self) -> None:
+        """
+        Remove all viscosity points from the profile.
+        """
+        self._profile.clear()
