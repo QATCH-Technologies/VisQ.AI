@@ -13,7 +13,6 @@ setup(
         "joblib>=1.2.0",
         "pandas>=1.5.0",
         "PyQt5>=5.15.0",
-        "pysqlcipher3>=1.0.3",
         "tensorflow>=2.10.0",
         "optuna>=3.0.0",
         "matplotlib>=3.6.0",
