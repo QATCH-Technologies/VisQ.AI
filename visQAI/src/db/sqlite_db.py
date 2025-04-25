@@ -7,7 +7,7 @@ from pathlib import Path
 #     from pysqlcipher3 import dbapi2 as sqlite3
 #     _USE_ENCRYPTION = True
 # except ImportError:
-#     import sqlite3
+import sqlite3
 _USE_ENCRYPTION = False
 
 
