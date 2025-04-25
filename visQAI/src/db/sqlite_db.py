@@ -3,12 +3,12 @@ import json
 import uuid
 from pathlib import Path
 
-try:
-    from pysqlcipher3 import dbapi2 as sqlite3
-    _USE_ENCRYPTION = True
-except ImportError:
-    import sqlite3
-    _USE_ENCRYPTION = False
+# try:
+#     from pysqlcipher3 import dbapi2 as sqlite3
+#     _USE_ENCRYPTION = True
+# except ImportError:
+#     import sqlite3
+_USE_ENCRYPTION = False
 
 
 def _enable_foreign_keys(conn):
