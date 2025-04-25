@@ -7,8 +7,9 @@ setup(
     author="Paul MacNichol",
     author_email="paul.macnichol@qatchtech.com",
     description="VisQ.AI core package",
-    packages=find_packages(where="src"),
-    package_dir={"": "src"},
+    # <-- look for packages in visQAI/src, not src
+    packages=find_packages(where="visQAI/src"),
+    package_dir={"": "visQAI/src"},
     install_requires=[
         "joblib>=1.2.0",
         "pandas>=1.5.0",
