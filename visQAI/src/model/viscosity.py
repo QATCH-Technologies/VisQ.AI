@@ -1,9 +1,9 @@
-# visQAI/src/model/viscosity.py
 """
 Module: viscosity
 
 Provides data models and CRUD operations for managing viscosity measurements
-in a profile, including individual points and profile-level operations.
+in a profile, including individual points and profile-level operations, as well as
+serialization helpers.
 
 Author:
     Paul MacNichol (paul.macnichol@qatchtech.com)
@@ -12,10 +12,10 @@ Date:
     2025-04-25
 
 Version:
-    1.0.0
+    1.2.0
 """
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 
 @dataclass(frozen=True)
@@ -52,7 +52,8 @@ class ViscosityPoint:
 
 class ViscosityProfile:
     """
-    Maintains a collection of ViscosityPoint objects and provides CRUD operations.
+    Maintains a collection of ViscosityPoint objects and provides CRUD operations
+    and dictionary serialization.
 
     Attributes:
         _points: Internal list of ViscosityPoint instances.
@@ -77,13 +78,12 @@ class ViscosityProfile:
 
         Args:
             shear_rate: Non-negative shear rate.
-            viscosity: Non-negative viscosity.
+            viscosity: New non-negative viscosity.
 
         Raises:
             ValueError: If a point at the same shear rate already exists.
             TypeError: If inputs are not numeric.
         """
-        # Creation will validate types and values
         new_point = ViscosityPoint(shear_rate, viscosity)
         if any(p.shear_rate == new_point.shear_rate for p in self._points):
             raise ValueError(
@@ -128,7 +128,6 @@ class ViscosityProfile:
             raise TypeError("update_point 'viscosity' must be a number.")
         for idx, p in enumerate(self._points):
             if p.shear_rate == shear_rate:
-                # Replace with new validated point
                 self._points[idx] = ViscosityPoint(shear_rate, viscosity)
                 return
         raise KeyError(f"No viscosity point found at shear rate {shear_rate}.")
@@ -157,3 +156,36 @@ class ViscosityProfile:
         Remove all viscosity points from the profile.
         """
         self._points.clear()
+
+    def to_dict(self) -> Dict[float, float]:
+        """
+        Convert the viscosity profile to a dictionary mapping shear_rate to viscosity.
+
+        Returns:
+            Dict where keys are shear rates and values are viscosities.
+        """
+        return {p.shear_rate: p.viscosity for p in self.points}
+
+    @classmethod
+    def from_dict(cls, data: Dict[Any, Any]) -> "ViscosityProfile":
+        """
+        Create a ViscosityProfile from a dictionary mapping shear_rate to viscosity.
+
+        Args:
+            data: Dict with shear_rate as key (numeric or str) and viscosity as value.
+
+        Returns:
+            A populated ViscosityProfile instance.
+
+        Raises:
+            ValueError: If dict contains invalid rates or viscosities.
+        """
+        vp = cls()
+        for rate_key, visc in data.items():
+            try:
+                rate = float(rate_key)
+                visc_val = float(visc)
+            except (TypeError, ValueError):
+                raise ValueError(f"Invalid data in dict: {rate_key}: {visc}")
+            vp.add_point(rate, visc_val)
+        return vp

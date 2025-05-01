@@ -1,4 +1,3 @@
-# visQAI/src/model/formulation.py
 """
 Module: formulation
 
@@ -12,9 +11,12 @@ Date:
     2025-04-25
 
 Version:
-    1.0.0
+    1.1.0
 """
+import uuid
+from uuid import UUID
 from typing import List, Optional
+
 from .excipient import VisQExcipient
 from .viscosity import ViscosityProfile
 
@@ -22,24 +24,28 @@ from .viscosity import ViscosityProfile
 class Formulation:
     """
     Domain model for a formulation:
+      - id: unique identifier for persistence or referencing
       - name: formulation identifier
       - excipients: list of concentration-specific VisQExcipients
       - notes: optional textual notes
       - viscosity_profile: optional ViscosityProfile
     """
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, id: Optional[UUID] = None):
         """
         Initialize a Formulation.
 
         Args:
             name: Non-empty string identifying the formulation.
+            id: Optional UUID; if not provided, a new UUID will be generated.
 
         Raises:
-            TypeError: If name is not a string.
+            TypeError: If name is not a string or id is not a UUID.
             ValueError: If name is empty or whitespace.
         """
         self._validate_name(name)
+        self._validate_id(id)
+        self._id: UUID = id or uuid.uuid4()
         self._name: str = name.strip()
         self._excipients: List[VisQExcipient] = []
         self._notes: str = ""
@@ -61,6 +67,40 @@ class Formulation:
             raise TypeError("Formulation 'name' must be a string.")
         if not name.strip():
             raise ValueError("Formulation 'name' must be a non-empty string.")
+
+    @staticmethod
+    def _validate_id(id_value: object) -> None:
+        """
+        Validates the formulation id.
+
+        Args:
+            id_value: Value to validate.
+
+        Raises:
+            TypeError: If id_value is not a UUID or None.
+        """
+        if id_value is not None and not isinstance(id_value, UUID):
+            raise TypeError(
+                "Formulation 'id' must be a uuid.UUID instance or None.")
+
+    @property
+    def id(self) -> UUID:
+        """Unique identifier for the formulation."""
+        return self._id
+
+    @id.setter
+    def id(self, value: UUID) -> None:
+        """
+        Sets the formulation id after validation.
+
+        Args:
+            value: UUID instance.
+
+        Raises:
+            TypeError: If value is not a UUID.
+        """
+        self._validate_id(value)
+        self._id = value
 
     @property
     def name(self) -> str:
