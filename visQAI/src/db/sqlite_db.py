@@ -258,5 +258,46 @@ class SQLiteDB:
         self.conn.row_factory = sqlite3.Row
         self._create_tables()
 
+    def update_base_excipient(self, base_id: str, name: str, etype: str) -> None:
+        """
+        Update the name and etype of an existing BaseExcipient.
+
+        Args:
+            base_id: UUID string of the BaseExcipient to update.
+            name:   New name.
+            etype:  New etype.
+
+        Raises:
+            TypeError: if base_id is not a string.
+            ValueError: if base_id is not a valid UUID or no record exists.
+        """
+        if not isinstance(base_id, str):
+            raise TypeError(
+                "update_base_excipient 'base_id' must be a string.")
+        try:
+            uuid.UUID(base_id)
+        except (ValueError, TypeError):
+            raise ValueError(f"Invalid UUID for base_id: {base_id}")
+
+        # ensure record exists
+        cursor = self.conn.execute(
+            "SELECT 1 FROM base_excipients WHERE id = ?;",
+            (base_id,)
+        )
+        if cursor.fetchone() is None:
+            raise ValueError(f"No BaseExcipient found with id {base_id}")
+
+        # perform the update
+        self.conn.execute(
+            """
+            UPDATE base_excipients
+               SET name  = ?,
+                   etype = ?
+             WHERE id    = ?;
+            """,
+            (name, etype, base_id)
+        )
+        self.conn.commit()
+
     def close(self) -> None:
         self.conn.close()

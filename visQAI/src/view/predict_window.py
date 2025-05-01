@@ -1,3 +1,4 @@
+import os
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QSplitter, QWidget,
     QFormLayout, QComboBox, QLineEdit, QDoubleSpinBox, QPushButton, QLabel
@@ -14,7 +15,8 @@ class PredictWindow(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Predictor")
-        self.predictor_controller = PredictorsController()
+        self.predictor_controller = PredictorsController(
+            storage_dir=os.path.join('visQAI', 'objects'))
         self.formulations_controller = FormulationsController()
 
         # Main layout
@@ -87,14 +89,14 @@ class PredictWindow(QDialog):
 
     def _list_models(self):
         predictors = []
-        for p in self.predictor_controller.get_predictors():
-            predictors.append(p.name)
+        for p in self.predictor_controller.list():
+            predictors.append(p)
         return predictors
 
     def _load_formulations(self):
         # Fetch formulations from controller
         self.formulations = {
-            f.name: f for f in self.formulations_controller.get_formulations()}
+            f.name: f for f in self.formulations_controller.all()}
         self.formulation_combo.clear()
         self.formulation_combo.addItems(self.formulations.keys())
         if models := self.model_combo.currentText():

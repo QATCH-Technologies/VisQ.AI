@@ -185,11 +185,13 @@ class ExcipientsController:
         if not self.db.get_excipient(str(var_id)):
             raise ValueError(f"Variation with id {var_id} does not exist.")
         # Only concentration and unit are stored in excipients table
+        print(self.get_variation(var_id=var_id))
         self.db.update_excipient(
             str(var_id),
             concentration=exc.concentration,
             unit=str(exc.unit)
         )
+        print(self.get_variation(var_id=var_id))
 
     def delete_variation(self, var_id: str) -> None:
         """
@@ -227,3 +229,31 @@ class ExcipientsController:
                     unit=unit
                 )
         return profile
+
+    def update_base_excipient(self, base: BaseExcipient) -> None:
+        """
+        Update an existing BaseExcipient's name and etype in the database.
+
+        Args:
+            base: the BaseExcipient instance with the new name and/or etype and a valid UUID.
+
+        Raises:
+            TypeError: if `base` is not a BaseExcipient.
+            ValueError: if `base.id` is not a valid UUID or if no such record exists.
+        """
+        if not isinstance(base, BaseExcipient):
+            raise TypeError(
+                "update_base_excipient requires a BaseExcipient instance.")
+        base_id = base.id
+        if not isinstance(base_id, uuid.UUID):
+            raise ValueError("update_base_excipient 'base.id' must be a UUID.")
+        existing = self.db.get_base_excipient(str(base_id))
+        if existing is None:
+            raise ValueError(
+                f"BaseExcipient with id {base_id} does not exist.")
+
+        self.db.update_base_excipient(
+            base_id=str(base_id),
+            name=base.name,
+            etype=base.etype
+        )

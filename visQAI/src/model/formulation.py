@@ -184,7 +184,7 @@ class Formulation:
         else:
             for e in self._excipients:
                 lines.append(
-                    f"  • {e.name} ({e.etype}) @ {e.concentration}{e.unit}")
+                    f" {e.name} ({e.etype}) @ {e.concentration}{e.unit}")
         if self._notes:
             lines.append(f"Notes: {self._notes}")
         if self._viscosity_profile:

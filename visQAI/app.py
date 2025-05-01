@@ -5,6 +5,7 @@ from src.db.sqlite_db import SQLiteDB as init_db
 from src.controllers.excipients_controller import ExcipientsController
 from src.model.excipient import BaseExcipient
 from src.view.main_window import MainWindow
+from src.view.manage_windows import ExcipientsUI
 
 
 def main():
@@ -32,7 +33,7 @@ def main():
         print(e.name, e.etype)
 
     app = QApplication(sys.argv)
-    window = MainWindow()
+    window = ExcipientsUI()
     window.show()
     sys.exit(app.exec_())
 

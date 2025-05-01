@@ -54,15 +54,25 @@ class PredictorsController:
 
     def _load_index(self) -> Dict[str, Dict[str, Any]]:
         """
-        Load the index from the JSON file, or return an empty index if the file does not exist.
+        Load the index from the JSON file, or if missing, generate it from existing files.
 
         Returns:
-            Dict[str, Dict[str, Any]]: The loaded index mapping predictor names to metadata.
+            Dict[str, Dict[str, Any]]: The loaded or generated index mapping predictor names to metadata.
         """
         if self.index_file.exists():
             with open(self.index_file) as f:
                 return json.load(f)
-        return {}
+
+        index: Dict[str, Dict[str, Any]] = {}
+        for file in self.storage.iterdir():
+            if file.is_file() and file.suffix.lower() in self.SUPPORTED_EXT:
+                index[file.stem] = {'path': str(
+                    file), 'ext': file.suffix.lower()}
+
+        with open(self.index_file, 'w') as f:
+            json.dump(index, f, indent=2)
+
+        return index
 
     def _save_index(self) -> None:
         """

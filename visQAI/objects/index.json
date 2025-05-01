@@ -1,0 +1,14 @@
+{
+  "mock_predictor_joblib": {
+    "path": "visQAI\\objects\\mock_predictor_joblib.joblib",
+    "ext": ".joblib"
+  },
+  "mock_predictor_pickle": {
+    "path": "visQAI\\objects\\mock_predictor_pickle.pickle",
+    "ext": ".pickle"
+  },
+  "mock_predictor_pkl": {
+    "path": "visQAI\\objects\\mock_predictor_pkl.pkl",
+    "ext": ".pkl"
+  }
+}
