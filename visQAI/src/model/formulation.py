@@ -17,7 +17,7 @@ import uuid
 from uuid import UUID
 from typing import List, Optional
 
-from .excipient import VisQExcipient
+from .excipient import VisQExcipient, BaseExcipient
 from .viscosity import ViscosityProfile
 
 
@@ -137,8 +137,9 @@ class Formulation:
         Raises:
             TypeError: If exc is not a VisQExcipient.
         """
-        if not isinstance(exc, VisQExcipient):
-            raise TypeError("add_excipient requires a VisQExcipient instance.")
+        if not isinstance(exc, VisQExcipient) and not isinstance(exc, BaseExcipient):
+            raise TypeError(
+                f"add_excipient requires a VisQExcipient or BaseExcipient instance was {exc}.")
         if exc not in self._excipients:
             self._excipients.append(exc)
 

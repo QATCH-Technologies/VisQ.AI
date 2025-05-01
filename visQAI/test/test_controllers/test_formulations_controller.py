@@ -1,157 +1,132 @@
-import sqlite3
+#!/usr/bin/env python3
+"""
+Unit tests for FormulationsController.
+"""
 import unittest
-import uuid
+from uuid import UUID
+from pathlib import Path
 
-from src.controllers.excipients_controller import ExcipientsController
-from src.controllers.formulations_controller import FormulationsController
 from src.db.sqlite_db import SQLiteDB
-from src.model.excipient import BaseExcipient, VisQExcipient, ConcentrationUnit
+from src.controllers.formulations_controller import FormulationsController
+from src.controllers.excipients_controller import ExcipientsController
 from src.model.formulation import Formulation
-from src.model.viscosity import ViscosityProfile, ViscosityPoint
+from src.model.excipient import BaseExcipient, VisQExcipient, ConcentrationUnit
+from src.model.viscosity import ViscosityProfile
 
 
 class TestFormulationsController(unittest.TestCase):
     def setUp(self):
-        # in-memory SQLite for full isolation
-        conn = sqlite3.connect(':memory:')
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
+        # Initialize an in-memory SQLiteDB for testing
+        self.db = SQLiteDB(Path(':memory:'))
+        # Use the same DB in both controllers
+        self.ex_ctrl = ExcipientsController()
+        self.ex_ctrl.db = self.db
+        self.ctrl = FormulationsController(self.db)
 
-        # wrap it in our SQLiteDB and recreate tables
-        self.shared_db = SQLiteDB()
-        self.shared_db.conn.close()
-        self.shared_db.conn = conn
-        self.shared_db._create_tables()
-
-        # wire controllers to that same DB
-        self.exc_ctrl = ExcipientsController()
-        self.exc_ctrl.db = self.shared_db
-
-        self.ctrl = FormulationsController()
-        self.ctrl.db = self.shared_db
-        self.ctrl.exc_ctrl = self.exc_ctrl
-
-    def _make_excipient(self, name='TestBase', etype='T',
-                        conc=1.0, unit=ConcentrationUnit.MOLAR):
-        """Helper to add one VisQExcipient under a fresh BaseExcipient."""
-        base = self.exc_ctrl.add_base_excipient(
-            BaseExcipient(name=name, etype=etype))
-        var = VisQExcipient(
-            name=base.name,
-            etype=base.etype,
-            concentration=conc,
-            unit=unit
+        # Create a base excipient and capture its ID
+        base = self.ex_ctrl.add_base_excipient(
+            BaseExcipient(name='TestBase', etype='TestType')
         )
-        return self.exc_ctrl.add_variation(str(base.id), var)
+        self.base_id = str(base.id)
+
+        # Create a variation under that base
+        variation = self.ex_ctrl.add_variation(
+            self.base_id,
+            VisQExcipient(
+                name=base.name,
+                etype=base.etype,
+                concentration=1.0,
+                unit=ConcentrationUnit.MOLAR
+            )
+        )
+
+        self.exc_id = str(variation.id)
 
     def test_add_and_get_formulation(self):
-        # create two excipient variations
-        v1 = self._make_excipient(name='A', etype='X',
-                                  conc=2.5, unit=ConcentrationUnit.MILLIMOLAR)
-        v2 = self._make_excipient(name='B', etype='Y',
-                                  conc=7.5, unit=ConcentrationUnit.MICROGRAM_PER_ML)
+        # Build a formulation linking the variation and a viscosity profile
+        formulation = Formulation(name='FormA')
+        var = self.ex_ctrl.get_variation(self.exc_id)
+        formulation.add_excipient(var)
+        profile_data = {10: 100.0, 20: 200.0}
+        formulation.viscosity_profile = ViscosityProfile()
+        formulation.viscosity_profile.from_dict(profile_data)
+        added = self.ctrl.add_formulation(formulation)
+        self.assertEqual(added.id, formulation.id)
 
-        # build a Formulation
-        form = Formulation('MyForm')
-        form.add_excipient(v1)
-        form.add_excipient(v2)
-        form.notes = 'hello'
+        fetched = self.ctrl.get_formulation(str(formulation.id))
+        self.assertEqual(fetched.id, formulation.id)
+        self.assertEqual(fetched.name, 'FormA')
+        self.assertEqual(len(fetched.excipients), 1)
+        self.assertEqual(fetched.excipients[0].id, var.id)
+        self.assertIsNotNone(fetched.viscosity_profile)
+        self.assertEqual(fetched.viscosity_profile.to_dict(), profile_data)
 
-        # build a viscosity profile with two points
-        vp = ViscosityProfile()
-        vp.add_point(10.0, 100.0)
-        vp.add_point(50.0, 250.0)
-        form.viscosity_profile = vp
+    def test_list_formulations(self):
+        f1 = Formulation(name='F1')
+        f2 = Formulation(name='F2')
+        self.ctrl.add_formulation(f1)
+        self.ctrl.add_formulation(f2)
+        all_forms = self.ctrl.list_formulations()
+        ids = {f.id for f in all_forms}
+        self.assertIn(f1.id, ids)
+        self.assertIn(f2.id, ids)
 
-        # add to DB
-        added = self.ctrl.add(form)
-        self.assertIsNotNone(added.id, "should assign an ID")
+    def test_update_formulation(self):
+        form = Formulation(name='Initial')
+        self.ctrl.add_formulation(form)
+        # Modify fields
+        form.name = 'Updated'
+        form.notes = 'Some notes'
+        form.viscosity_profile = ViscosityProfile()
+        form.viscosity_profile.add_point(shear_rate=100, viscosity=10)
+        # Clear and re-link excipients
+        form._excipients.clear()
+        var = self.ex_ctrl.get_variation(self.exc_id)
+        form.add_excipient(var)
 
-        # retrieve it
-        fetched = self.ctrl.get(added.id)
-        self.assertIsNotNone(fetched)
-        self.assertEqual(fetched.name, 'MyForm')
-        self.assertEqual(fetched.notes, 'hello')
+        self.ctrl.update_formulation(form)
+        updated = self.ctrl.get_formulation(str(form.id))
+        self.assertEqual(updated.name, 'Updated')
+        self.assertEqual(updated.notes, 'Some notes')
+        self.assertEqual(updated.viscosity_profile.get_point(100), 10)
+        self.assertEqual(len(updated.excipients), 1)
 
-        # check viscosity_profile round-trip
-        self.assertIsInstance(fetched.viscosity_profile, ViscosityProfile)
-        points = fetched.viscosity_profile.points
-        # must be sorted by shear_rate
-        self.assertEqual(points, [
-            ViscosityPoint(10.0, 100.0),
-            ViscosityPoint(50.0, 250.0),
-        ])
+    def test_delete_formulation(self):
+        form = Formulation(name='ToRemove')
+        self.ctrl.add_formulation(form)
+        fid = str(form.id)
+        # Delete and then verify not found
+        self.ctrl.delete_formulation(fid)
+        with self.assertRaises(ValueError):
+            self.ctrl.get_formulation(fid)
 
-        # excipients match
-        fetched_ids = {e.id for e in fetched.excipients}
-        self.assertSetEqual(fetched_ids, {v1.id, v2.id})
+    def test_invalid_inputs(self):
+        # get with malformed ID
+        with self.assertRaises(TypeError):
+            self.ctrl.get_formulation('invalid-uuid')
+        # delete with malformed ID
+        with self.assertRaises(TypeError):
+            self.ctrl.delete_formulation('1234')
+        # delete non-existent
+        fake_id = str(UUID(int=0))
+        with self.assertRaises(ValueError):
+            self.ctrl.delete_formulation(fake_id)
+        # add invalid type
+        with self.assertRaises(TypeError):
+            self.ctrl.add_formulation('not-a-formulation')  # type: ignore
+        # update invalid type
+        with self.assertRaises(TypeError):
+            self.ctrl.update_formulation(123)  # type: ignore
+        # update non-existent formulation
+        new_form = Formulation(name='Ghost')
+        with self.assertRaises(ValueError):
+            self.ctrl.update_formulation(new_form)
 
-    def test_all_returns_everything(self):
-        # empty initially
-        self.assertEqual(self.ctrl.all(), [])
-
-        # add two formulations
-        v1 = self._make_excipient()
-        f1 = Formulation('F1')
-        f1.add_excipient(v1)
-        self.ctrl.add(f1)
-
-        v2 = self._make_excipient(name='C2', etype='Z', conc=9.9)
-        f2 = Formulation('F2')
-        f2.add_excipient(v2)
-        # leave notes + viscosity_profile at defaults
-        self.ctrl.add(f2)
-
-        names = {f.name for f in self.ctrl.all()}
-        self.assertSetEqual(names, {'F1', 'F2'})
-
-    def test_edit_updates_correctly(self):
-        # initial
-        v0 = self._make_excipient(name='Old', etype='O', conc=1.1)
-        form = Formulation('Orig')
-        form.add_excipient(v0)
-        form.notes = 'N0'
-        vp0 = ViscosityProfile()
-        vp0.add_point(5.0, 50.0)
-        form.viscosity_profile = vp0
-        added = self.ctrl.add(form)
-
-        # create another excipient
-        v1 = self._make_excipient(name='New', etype='N', conc=4.4)
-
-        # mutate object
-        added.name = 'Updated'
-        added.notes = 'N1'
-        vp1 = ViscosityProfile()
-        vp1.add_point(20.0, 200.0)
-        added.viscosity_profile = vp1
-        added.remove_excipient_by_name(v0.name)
-        added.add_excipient(v1)
-
-        self.ctrl.edit(added)
-
-        fetched = self.ctrl.get(added.id)
-        self.assertEqual(fetched.name, 'Updated')
-        self.assertEqual(fetched.notes, 'N1')
-        self.assertEqual(
-            fetched.viscosity_profile.points,
-            [ViscosityPoint(20.0, 200.0)]
-        )
-        self.assertEqual([e.id for e in fetched.excipients], [v1.id])
-
-    def test_delete_removes_formulation(self):
-        v = self._make_excipient()
-        f = Formulation('ToDel')
-        f.add_excipient(v)
-        added = self.ctrl.add(f)
-
-        self.assertIsNotNone(self.ctrl.get(added.id))
-        self.ctrl.delete(added.id)
-        self.assertIsNone(self.ctrl.get(added.id))
-
-    def test_get_nonexistent_returns_none(self):
-        # generate a random UUID not in DB
-        self.assertIsNone(self.ctrl.get(uuid.uuid4()))
+    def tearDown(self):
+        try:
+            self.db.close()
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':

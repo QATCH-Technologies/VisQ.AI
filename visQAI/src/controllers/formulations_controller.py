@@ -1,114 +1,204 @@
-# src/controllers/formulations_controller.py
+#!/usr/bin/env python3
+"""
+Module: formulations_controller
 
-from uuid import UUID
+Provides CRUD operations for the Formulation domain model.
+
+All SQL interactions are delegated to the SQLiteDB abstraction layer.
+
+Author:
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2025-05-01
+
+Version:
+    1.1.0
+"""
 import json
+from uuid import UUID
 from typing import List, Optional
 
 from src.db.sqlite_db import SQLiteDB
 from src.model.formulation import Formulation
-from .excipients_controller import ExcipientsController
 from src.model.viscosity import ViscosityProfile
+from src.controllers.excipients_controller import ExcipientsController
 
 
 class FormulationsController:
     """
-    Controller to manage Formulation objects, each of which contains
-    concentration-specific (VisQ) excipients, identified by UUIDs.
+    Controller for managing Formulation objects.
+    Delegates all raw SQL queries to the SQLiteDB layer for separation of concerns.
     """
 
-    def __init__(self):
-        self.db = SQLiteDB()
-        self.exc_ctrl = ExcipientsController()
-
-    def all(self) -> List[Formulation]:
+    def __init__(self, db: Optional[SQLiteDB] = None):
         """
-        Retrieve all formulations from the database.
+        Initialize controller and ensure DB schema is in place.
+
+        Args:
+            db: Optional SQLiteDB instance. If omitted, a new one is created.
         """
-        records = self.db.list_formulations()
-        formulations: List[Formulation] = []
-        for rec in records:
-            # parse UUID from stored string
-            form_id = UUID(rec['id'])
-            form = Formulation(name=rec['name'], id=form_id)
+        self.db = db or SQLiteDB()
+        self.ex_ctrl = ExcipientsController()
+        # Ensure tables exist via DB methods
+        self.db.create_formulations_table()
+        self.db.create_formulation_excipients_table()
 
-            # notes
-            form.notes = rec.get('notes', '') or ''
-
-            # viscosity profile
-            vis_json = rec.get('viscosity_json')
-            if vis_json:
-                data = json.loads(vis_json)
-                vp = ViscosityProfile()
-                for rate, visc in data.items():
-                    vp.add_point(float(rate), float(visc))
-                form.viscosity_profile = vp
-
-            # excipients
-            exc_ids = self.db.get_excipient_ids_for(str(form_id))
-            for eid in exc_ids:
-                exc = self.exc_ctrl.get(eid)
-                if exc:
-                    form.add_excipient(exc)
-
-            formulations.append(form)
-        return formulations
-
-    def get(self, form_id: UUID) -> Optional[Formulation]:
+    def list_formulations(self) -> List[Formulation]:
         """
-        Retrieve a single formulation by UUID.
+        Retrieve all formulations.
+
+        Returns:
+            List of Formulation instances.
         """
-        rec = self.db.get_formulation(str(form_id))
-        if not rec:
-            return None
-        form = Formulation(name=rec['name'], id=form_id)
-        form.notes = rec.get('notes', '') or ''
+        rows = self.db.fetch_all_formulations()
+        return [self._row_to_formulation(row) for row in rows]
 
-        vis_json = rec.get('viscosity_json')
-        if vis_json:
-            data = json.loads(vis_json)
-            vp = ViscosityProfile()
-            for rate, visc in data.items():
-                vp.add_point(float(rate), float(visc))
-            form.viscosity_profile = vp
-
-        exc_ids = self.db.get_excipient_ids_for(str(form_id))
-        for eid in exc_ids:
-            exc = self.exc_ctrl.get(eid)
-            if exc:
-                form.add_excipient(exc)
-
-        return form
-
-    def add(self, form: Formulation) -> Formulation:
+    def get_formulation(self, formulation_id: str) -> Formulation:
         """
-        Insert a new formulation into the database and assign its UUID.
+        Fetch a single formulation by its UUID.
+
+        Args:
+            formulation_id: UUID string.
+
+        Returns:
+            Formulation instance.
+
+        Raises:
+            TypeError: If the ID is not a valid UUID.
+            ValueError: If not found.
         """
-        exc_ids = [str(exc.id) for exc in form.excipients]
-        new_id_str = self.db.add_formulation(
-            name=form.name,
-            notes=form.notes,
-            viscosity=form.viscosity_profile.to_dict(),
-            excipient_ids=exc_ids
+        try:
+            fid = UUID(formulation_id)
+        except Exception:
+            raise TypeError("get_formulation requires a valid UUID string.")
+
+        row = self.db.fetch_formulation_by_id(str(fid))
+        if not row:
+            raise ValueError(
+                f"Formulation with id {formulation_id} not found.")
+        return self._row_to_formulation(row)
+
+    def add_formulation(self, formulation: Formulation) -> Formulation:
+        """
+        Persist a new formulation and its excipient links.
+
+        Args:
+            formulation: Formulation instance.
+
+        Returns:
+            The same Formulation (ID pre-set).
+
+        Raises:
+            TypeError: If input is not Formulation.
+        """
+        if not isinstance(formulation, Formulation):
+            raise TypeError("add_formulation requires a Formulation instance.")
+
+        vis_json = (
+            json.dumps(formulation.viscosity_profile.to_dict())
+            if formulation.viscosity_profile else None
         )
-        new_uuid = UUID(new_id_str)
-        form.id = new_uuid
-        return form
 
-    def edit(self, form: Formulation) -> None:
+        self.db.insert_formulation(
+            id=str(formulation.id),
+            name=formulation.name,
+            notes=formulation.notes,
+            viscosity_json=vis_json
+        )
+        for exc in formulation.excipients:
+            self.db.add_formulation_excipient(
+                formulation_id=str(formulation.id),
+                excipient_id=str(exc.id)
+            )
+        return formulation
+
+    def update_formulation(self, formulation: Formulation) -> None:
         """
-        Update an existing formulation in the database by UUID.
+        Update metadata, excipients, and viscosity for an existing formulation.
+
+        Args:
+            formulation: Updated Formulation instance.
+
+        Raises:
+            TypeError: If not Formulation.
+            ValueError: If formulation does not exist.
         """
-        exc_ids = [str(exc.id) for exc in form.excipients]
+        if not isinstance(formulation, Formulation):
+            raise TypeError(
+                "update_formulation requires a Formulation instance.")
+
+        if not self.db.exists_formulation(str(formulation.id)):
+            raise ValueError(
+                f"Formulation with id {formulation.id} does not exist.")
+
+        vis_json = (
+            json.dumps(formulation.viscosity_profile.to_dict())
+            if formulation.viscosity_profile else None
+        )
+
         self.db.update_formulation(
-            formulation_id=str(form.id),
-            name=form.name,
-            notes=form.notes,
-            viscosity=form.viscosity_profile.to_dict(),
-            excipient_ids=exc_ids
+            id=str(formulation.id),
+            name=formulation.name,
+            notes=formulation.notes,
+            viscosity_json=vis_json
         )
+        # Reset excipient links
+        self.db.remove_formulation_excipients(str(formulation.id))
+        for exc in formulation.excipients:
+            self.db.add_formulation_excipient(
+                formulation_id=str(formulation.id),
+                excipient_id=str(exc.id)
+            )
 
-    def delete(self, form_id: UUID) -> None:
+    def delete_formulation(self, formulation_id: str) -> None:
         """
-        Delete a formulation from the database by UUID.
+        Remove a formulation and its linked excipients.
+
+        Args:
+            formulation_id: UUID string to delete.
+
+        Raises:
+            TypeError: If ID invalid.
+            ValueError: If not found.
         """
-        self.db.delete_formulation(str(form_id))
+        try:
+            fid = UUID(formulation_id)
+        except Exception:
+            raise TypeError("delete_formulation requires a valid UUID string.")
+
+        if not self.db.exists_formulation(str(fid)):
+            raise ValueError(
+                f"Formulation with id {formulation_id} does not exist.")
+
+        self.db.delete_formulation(str(fid))
+
+    def _row_to_formulation(self, row: tuple) -> Formulation:
+        """
+        Map a DB row to a Formulation, loading excipients and viscosity.
+
+        Args:
+            row: Tuple of fields from fetch.
+
+        Returns:
+            Populated Formulation.
+        """
+        fid_str, name, notes, vis_json = row
+        formulation = Formulation(name=name, id=UUID(fid_str))
+        formulation.notes = notes or ""
+
+        if vis_json:
+            try:
+                data = json.loads(vis_json)
+                formulation.viscosity_profile = ViscosityProfile()
+                formulation.viscosity_profile.from_dict(data)
+            except Exception as e:
+                raise ValueError(f"Error parsing viscosity JSON: {e}")
+
+        # Load excipient IDs and fetch each variation
+        exc_ids = self.db.fetch_excipients_for_formulation(fid_str)
+        for eid in exc_ids:
+            exc = self.ex_ctrl.get_variation(eid)
+            formulation.add_excipient(exc)
+
+        return formulation
