@@ -299,5 +299,37 @@ class SQLiteDB:
         )
         self.conn.commit()
 
+    def get_base_excipient_by_name(self, name: str) -> dict | None:
+        """
+        Retrieve a BaseExcipient record by its name.
+
+        Args:
+            name (str): The unique name of the BaseExcipient.
+
+        Returns:
+            dict: A dict containing keys ['id', 'etype', 'name', 'created_at']
+                  or None if no matching record is found.
+
+        Raises:
+            TypeError:  If `name` is not a string.
+            ValueError: If `name` is an empty string.
+        """
+        # --- input validation ---
+        if not isinstance(name, str):
+            raise TypeError(
+                "get_base_excipient_by_name: 'name' must be a string.")
+        name = name.strip()
+        if not name:
+            raise ValueError(
+                "get_base_excipient_by_name: 'name' cannot be empty.")
+
+        # --- fetch from DB ---
+        cur = self.conn.execute(
+            "SELECT * FROM base_excipients WHERE name = ?",
+            (name,)
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
     def close(self) -> None:
         self.conn.close()

@@ -146,6 +146,36 @@ class TestExcipientsController(unittest.TestCase):
         # non-existent base returns None
         self.assertIsNone(self.ctrl.get_profile(str(uuid.uuid4())))
 
+    def test_get_existing_base_by_name(self):
+        # Add a new base excipient
+        base = BaseExcipient(name="TestCompound", etype="TypeA", id=None)
+        added = self.ctrl.add_base_excipient(base)
+        # Fetch it back by name
+        fetched = self.ctrl.get_base_excipient_by_name("TestCompound")
+        self.assertIsNotNone(
+            fetched, "Should return a BaseExcipient for an existing name")
+        # Compare IDs, names, and etype
+        self.assertIsInstance(fetched.id, uuid.UUID)
+        self.assertEqual(
+            fetched, added, "Fetched object should have the same UUID")
+        self.assertEqual(fetched.name, "TestCompound")
+        self.assertEqual(fetched.etype, "TypeA")
+
+    def test_get_nonexistent_base_returns_none(self):
+        result = self.ctrl.get_base_excipient_by_name("NoSuchName")
+        self.assertIsNone(
+            result, "Should return None for a name that doesn't exist")
+
+    def test_invalid_type_raises_type_error(self):
+        with self.assertRaises(TypeError):
+            self.ctrl.get_base_excipient_by_name(123)  # non-string
+
+    def test_empty_name_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            self.ctrl.get_base_excipient_by_name("")      # empty
+        with self.assertRaises(ValueError):
+            self.ctrl.get_base_excipient_by_name("   ")
+
 
 if __name__ == '__main__':
     unittest.main()

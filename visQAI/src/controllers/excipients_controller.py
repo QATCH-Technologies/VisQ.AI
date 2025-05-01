@@ -74,6 +74,39 @@ class ExcipientsController:
             id=bid
         )
 
+    def get_base_excipient_by_name(self, name: str) -> Optional[BaseExcipient]:
+        """
+        Retrieve a single BaseExcipient by its unique name.
+
+        Args:
+            name (str): The exact name of the BaseExcipient.
+
+        Returns:
+            BaseExcipient or None if not found.
+
+        Raises:
+            TypeError:  If `name` is not a string.
+            ValueError: If `name` is empty or only whitespace.
+        """
+        if not isinstance(name, str):
+            raise TypeError(
+                "get_base_excipient_by_name 'name' must be a string.")
+        name = name.strip()
+        if not name:
+            raise ValueError(
+                "get_base_excipient_by_name 'name' cannot be empty.")
+
+        r = self.db.get_base_excipient_by_name(name)
+        if r is None:
+            return None
+
+        bid = uuid.UUID(r['id'])
+        return BaseExcipient(
+            name=r['name'],
+            etype=r['etype'],
+            id=bid
+        )
+
     def add_base_excipient(self, base: BaseExcipient) -> BaseExcipient:
         """
         Add a new BaseExcipient (with name+etype) to the database.
@@ -179,19 +212,17 @@ class ExcipientsController:
         if not isinstance(exc, VisQExcipient):
             raise TypeError(
                 "update_variation requires a VisQExcipient instance.")
-        var_id = exc.id
-        if not isinstance(var_id, uuid.UUID):
+        if not isinstance(exc.id, uuid.UUID):
             raise ValueError("update_variation 'exc.id' must be a UUID.")
-        if not self.db.get_excipient(str(var_id)):
-            raise ValueError(f"Variation with id {var_id} does not exist.")
-        # Only concentration and unit are stored in excipients table
-        print(self.get_variation(var_id=var_id))
+
+        var_id_str = str(exc.id)
+        if not self.db.get_excipient(var_id_str):
+            raise ValueError(f"Variation with id {var_id_str} does not exist.")
         self.db.update_excipient(
-            str(var_id),
+            var_id_str,
             concentration=exc.concentration,
             unit=str(exc.unit)
         )
-        print(self.get_variation(var_id=var_id))
 
     def delete_variation(self, var_id: str) -> None:
         """
