@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Module: excipient
 
@@ -7,9 +8,14 @@ This module provides data models for managing excipients and their concentration
   - `VisQExcipient`: specialized excipient that adds type, concentration, unit, and optional id
   - `ExcipientProfile`: grouping container for multiple `VisQExcipient` variants under a base excipient
 
-Author: Paul MacNichol (paul.macnichol@qatchtech.com)
-Date: 2025-04-25
-Version: 1.0.1
+Author:
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2025-04-25
+
+Version:
+    1.0.1
 """
 import uuid
 from enum import Enum

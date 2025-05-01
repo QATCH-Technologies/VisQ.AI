@@ -1,188 +1,262 @@
+# visQAI/src/model/predictor.py
+"""
+Module: predictor
+
+Provides utilities to load predictor implementations either from Python source files
+or serialized binaries, and wraps them in a unified BasePredictor interface.
+
+Author:
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2025-05-01
+
+Version:
+    1.0.0
+"""
+import importlib.util
 import os
+import sys
+import pickle
+from pathlib import Path
+from types import ModuleType
+from typing import Any, Optional
 import joblib
-from abc import ABC, abstractmethod
 
 
-class AbstractPredictor(ABC):
+def load_module_from_file(module_path: str) -> ModuleType:
     """
-    Abstract base class for all predictors.
-    Defines the interface for predict and update methods, and manages a name attribute.
+    Dynamically load a Python module from a file path.
+
+    Args:
+        module_path (str): Filesystem path to the .py module to load.
+
+    Returns:
+        ModuleType: The imported module object.
+
+    Raises:
+        TypeError: If module_path is not a string.
+        FileNotFoundError: If the specified module file does not exist.
+        ImportError: If the module spec cannot be created or loaded.
+    """
+    if not isinstance(module_path, str):
+        raise TypeError(
+            f"module_path must be a string, got {type(module_path)}")
+    if not os.path.isfile(module_path):
+        raise FileNotFoundError(f"Module file not found: {module_path}")
+    module_name = Path(module_path).stem
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load spec for module: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as e:
+        raise ImportError(f"Error loading module '{module_path}': {e}")
+    return module
+
+
+def load_binary_predictor(binary_path: str) -> Any:
+    """
+    Load a predictor object from a serialized binary file.
+
+    Supports .joblib, .pkl, and .pickle extensions.
+
+    Args:
+        binary_path (str): Filesystem path to the serialized predictor.
+
+    Returns:
+        Any: The deserialized predictor object.
+
+    Raises:
+        TypeError: If binary_path is not a string.
+        FileNotFoundError: If the binary file does not exist.
+        ValueError: If the file extension is not supported.
+        pickle.UnpicklingError: If loading a .pickle file fails.
+    """
+    if not isinstance(binary_path, str):
+        raise TypeError(
+            f"binary_path must be a string, got {type(binary_path)}")
+    if not os.path.isfile(binary_path):
+        raise FileNotFoundError(f"Binary file not found: {binary_path}")
+    ext = Path(binary_path).suffix.lower()
+    try:
+        if ext in {'.joblib', '.pkl'}:
+            return joblib.load(binary_path)
+        if ext == '.pickle':
+            with open(binary_path, 'rb') as f:
+                return pickle.load(f)
+    except Exception as e:
+        raise ValueError(f"Failed to load predictor from '{binary_path}': {e}")
+    raise ValueError(f"Unsupported predictor format: {ext}")
+
+
+class BasePredictor:
+    """
+    Unified interface for loading and invoking predictors from Python source or binary formats.
+
+    Attributes:
+        VERSION (str): Version string of the BasePredictor interface.
+
+    Instance Attributes:
+        _path (Path): Path to the predictor file or module.
+        _module (Optional[ModuleType]): Loaded Python module, if source-based.
+        _instance (Optional[Any]): Loaded predictor instance, if binary-based.
+        model (Optional[Any]): Underlying model object from the predictor.
+        preprocessor (Optional[Any]): Optional preprocessor object, if provided.
     """
 
-    def __init__(self, name: str = None):
-        # Assign a default name based on class if none provided
-        self._name = name or self.__class__.__name__  # internal storage
+    VERSION = "1.0.0"
 
-    @property
-    def name(self) -> str:
+    def __init__(self, predictor_path: str):
         """
-        Get the predictor's name.
+        Initialize the BasePredictor by loading the underlying predictor.
+
+        Args:
+            predictor_path (str): Path to the predictor file (.py or binary).
+
+        Raises:
+            TypeError: If predictor_path is not a string.
+            FileNotFoundError: If the predictor file does not exist.
+            AttributeError: If the loaded predictor lacks a callable 'predict'.
         """
-        return self._name
-
-    @name.setter
-    def name(self, value: str):
-        """
-        Set the predictor's name.
-        """
-        self._name = value
-
-    @abstractmethod
-    def predict(self, data):
-        """
-        Generate a viscosity profile prediction from input data.
-        :param data: Raw or preprocessed input data.
-        :return: Predicted viscosity profile.
-        """
-        pass
-
-    @abstractmethod
-    def update(self, data):
-        """
-        Update the predictor with new data (e.g., for online learning).
-        :param data: New data to incorporate into the model.
-        """
-        pass
-
-
-class GenericPredictor:
-    """
-    Generic predictor loader and container for user-defined predictors.
-
-    Provides accessors and mutators for metadata:
-      - predictor_name
-      - model_directory
-      - preprocessor_obj
-      - base_model_obj
-      - predictor_class_obj
-      - full metadata dict via get_metadata()
-
-    Expects the following files in `model_dir`:
-      - `preprocessor.pkl`: a fitted preprocessing pipeline
-      - `model.pkl`: the trained predictive model object
-      - `predictor_class.pkl`: the user-defined predictor class (not instance) that inherits from AbstractPredictor
-
-    The user-defined predictor class should implement __init__(preprocessor, base_model), __init__(model_dir), or __init__(name).
-    """
-
-    def __init__(self, model_dir: str, name: str = None):
-        self._model_dir = model_dir
-        self._preprocessor = self._load_pickle('preprocessor.pkl')
-        self._base_model = self._load_pickle('model.pkl')
-        self._predictor_cls = self._load_pickle('predictor_class.pkl')
-        self._validate_predictor_class()
-
-        # instantiate the user-defined predictor
-        self._predictor: AbstractPredictor = self._instantiate_predictor(name)
-
-    def _load_pickle(self, filename: str):
-        path = os.path.join(self._model_dir, filename)
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"Missing file: {path}")
-        return joblib.load(path)
-
-    def _validate_predictor_class(self):
-        if not issubclass(self._predictor_cls, AbstractPredictor):
+        if not isinstance(predictor_path, str):
             raise TypeError(
-                "Loaded predictor_class must inherit from AbstractPredictor"
-            )
+                f"predictor_path must be a string, got {type(predictor_path)}")
+        self._path: Path = Path(predictor_path)
+        if not self._path.exists():
+            raise FileNotFoundError(f"Predictor file not found: {self._path}")
+        self._module: Optional[ModuleType] = None
+        self._instance: Optional[Any] = None
+        self.model: Optional[Any] = None
+        self.preprocessor: Optional[Any] = None
+        self._load_predictor()
 
-    def _instantiate_predictor(self, name: str = None) -> AbstractPredictor:
+    def _load_predictor(self) -> None:
         """
-        Instantiate the user-defined predictor class.
-        Supports signatures:
-          - __init__(preprocessor, base_model, name)
-          - __init__(preprocessor, base_model)
-          - __init__(model_dir, name)
-          - __init__(model_dir)
-          - __init__(name)
-        """
-        cls = self._predictor_cls
-        try:
-            return cls(self._preprocessor, self._base_model, name)
-        except TypeError:
-            try:
-                return cls(self._preprocessor, self._base_model)
-            except TypeError:
-                try:
-                    return cls(self._model_dir, name)
-                except TypeError:
-                    try:
-                        return cls(self._model_dir)
-                    except TypeError:
-                        # fallback: only name
-                        return cls(name)
+        Internal method to load the predictor based on file extension.
 
-    def predict(self, raw_data):
+        Raises:
+            AttributeError: If the loaded object/module does not define a callable `predict(data)`.
         """
-        Preprocess raw_data if possible and delegate to user predictor's predict.
-        :param raw_data: Raw input data (e.g., pandas DataFrame).
-        :return: Predicted viscosity profile.
-        """
-        try:
-            processed = self._preprocessor.transform(raw_data)
-        except Exception:
-            processed = raw_data
-        return self._predictor.predict(processed)
+        ext = self._path.suffix.lower()
+        if ext == '.py':
+            module = load_module_from_file(str(self._path))
+            if not hasattr(module, 'predict') or not callable(module.predict):
+                raise AttributeError(
+                    f"Module '{self._path}' must define a callable 'predict(data)'."
+                )
+            self._module = module
+            self.model = getattr(module, 'model', None)
+            self.preprocessor = getattr(module, 'preprocessor', None)
+        else:
+            predictor = load_binary_predictor(str(self._path))
+            if not hasattr(predictor, 'predict') or not callable(predictor.predict):
+                raise AttributeError(
+                    f"Object loaded from '{self._path}' must have a callable 'predict(data)'."
+                )
+            self._instance = predictor
+            self.model = getattr(predictor, 'model', None)
+            self.preprocessor = getattr(predictor, 'preprocessor', None)
 
-    def update(self, raw_data):
+    def predict(self, data: Any, *args, **kwargs) -> Any:
         """
-        Delegate update to user predictor.
-        :param raw_data: New data for online update.
-        :return: Result of update call.
-        """
-        return self._predictor.update(raw_data)
+        Invoke the predictor's `predict` method on input data.
 
-    # --- Accessors / Mutators ---
+        Args:
+            data (Any): Input data for prediction.
+            *args: Positional arguments forwarded to the predictor.
+            **kwargs: Keyword arguments forwarded to the predictor.
+
+        Returns:
+            Any: Prediction result from the underlying predictor.
+
+        Raises:
+            RuntimeError: If no predictor has been loaded successfully.
+        """
+        if data is None:
+            raise ValueError("Input data for prediction cannot be None.")
+        if self._module:
+            return self._module.predict(data, *args, **kwargs)
+        if self._instance:
+            return self._instance.predict(data, *args, **kwargs)
+        raise RuntimeError(
+            "No predictor loaded; check the predictor_path provided."
+        )
+
+    def reload(self) -> None:
+        """
+        Reload the predictor from its current path, resetting any cached state.
+
+        Raises:
+            Exception: Propagates any errors from underlying load operations.
+        """
+        self._module = None
+        self._instance = None
+        self.model = None
+        self.preprocessor = None
+        self._load_predictor()
+
+    def load(self, new_path: str) -> None:
+        """
+        Change the predictor path and reload the underlying predictor.
+
+        Args:
+            new_path (str): New filesystem path to the predictor.
+
+        Raises:
+            TypeError: If new_path is not a string.
+            FileNotFoundError: If the new predictor file does not exist.
+        """
+        if not isinstance(new_path, str):
+            raise TypeError(f"new_path must be a string, got {type(new_path)}")
+        self._path = Path(new_path)
+        if not self._path.exists():
+            raise FileNotFoundError(f"Predictor file not found: {self._path}")
+        self.reload()
 
     @property
-    def predictor_name(self) -> str:
-        """Get the name of the underlying predictor."""
-        return self._predictor.name
+    def path(self) -> str:
+        """
+        str: Current filesystem path of the predictor.
+        """
+        return str(self._path)
 
-    @predictor_name.setter
-    def predictor_name(self, value: str):
-        """Set the name of the underlying predictor."""
-        self._predictor.name = value
+    @path.setter
+    def path(self, new_path: str) -> None:
+        """
+        Set a new path for the predictor and reload it.
+
+        Args:
+            new_path (str): Filesystem path to the new predictor.
+
+        Raises:
+            TypeError: If new_path is not a string.
+            FileNotFoundError: If the new predictor file does not exist.
+        """
+        if not isinstance(new_path, str):
+            raise TypeError(f"new_path must be a string, got {type(new_path)}")
+        self._path = Path(new_path)
+        if not self._path.exists():
+            raise FileNotFoundError(f"Predictor file not found: {self._path}")
+        self.reload()
 
     @property
-    def model_directory(self) -> str:
-        """Path to the saved model directory."""
-        return self._model_dir
-
-    @property
-    def preprocessor_obj(self):
-        """Access the loaded preprocessor object."""
-        return self._preprocessor
-
-    @property
-    def base_model_obj(self):
-        """Access the loaded base model object."""
-        return self._base_model
-
-    @property
-    def predictor_class_obj(self):
-        """Access the loaded predictor class."""
-        return self._predictor_cls
-
-    def get_metadata(self) -> dict:
+    def predictor_type(self) -> str:
         """
-        Retrieve metadata about this generic predictor and its components.
-        :return: Dictionary with keys: name, model_dir, predictor_class,
-                 preprocessor_type, base_model_type
+        str: Type of the loaded predictor: 'module' for source, 'binary' for serialized.
         """
-        return {
-            'name': self.predictor_name,
-            'model_dir': self.model_directory,
-            'predictor_class': self._predictor_cls.__name__,
-            'preprocessor_type': type(self._preprocessor).__name__,
-            'base_model_type': type(self._base_model).__name__,
-        }
+        return 'module' if self._module else 'binary'
 
-    def set_metadata(self, name: str = None):
+    def __repr__(self) -> str:
         """
-        Set metadata properties. Currently only supports updating the name.
-        :param name: New name for the predictor.
+        Return an unambiguous representation of the BasePredictor.
+
+        Returns:
+            str: Informative string including version, type, and path.
         """
-        if name:
-            self.predictor_name = name
+        return (
+            f"<BasePredictor version={self.VERSION} "
+            f"type={self.predictor_type} path={self._path}>"
+        )

@@ -1,13 +1,18 @@
 # visQAI/src/model/formulation.py
 """
-Module: formulation_model
+Module: formulation
 
 Domain model for a formulation, managing its name, a list of concentration-specific excipients,
 optional notes, and an optional viscosity profile.
 
-Author: Paul MacNichol (paul.macnichol@qatchtech.com)
-Date: 2025-04-25
-Version: 1.0.0
+Author:
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2025-04-25
+
+Version:
+    1.0.0
 """
 from typing import List, Optional
 from .excipient import VisQExcipient

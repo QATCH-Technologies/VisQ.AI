@@ -5,9 +5,14 @@ Module: excipients_controller
 This controller provides CRUD operations and profile assembly for BaseExcipients and VisQExcipient variations
 in the VisQ.AI SQLite database.
 
-Author: Paul MacNichol (paul.macnichol@qatchtech.com)
-Date: 2025-04-25
-Version: 1.0.0
+Author:
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2025-04-25
+
+Version:
+    1.0.0
 """
 import uuid
 from typing import List, Optional

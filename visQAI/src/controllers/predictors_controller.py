@@ -1,185 +1,171 @@
-import os
-import shutil
+# visQAI/src/controllers/predictor_controller.py
+"""
+Module: predictors_controller
+
+This module provides a controller class for managing predictor files in a storage directory.
+It supports CRUD operations: adding, listing, retrieving, updating, and removing predictors.
+
+Author:
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2025-05-01
+
+Version:
+    1.0.0
+"""
 import json
 from pathlib import Path
-from datetime import datetime
-from dataclasses import dataclass
-from typing import Optional, List
-
-
-@dataclass
-class PredictorInfo:
-    """
-    Metadata container for a predictor asset.
-    """
-    name: str
-    description: str
-    created_at: datetime
+from typing import Any, Dict, List
+from src.model.predictor import BasePredictor
 
 
 class PredictorsController:
     """
-    Manages predictor assets on the filesystem under an 'objects' directory.
-    Each predictor has its own subdirectory named after the predictor name,
-    containing the predictor, model, preprocessor, and metadata.
+    Controller for managing predictor files with persistent indexing.
+
+    This class allows adding, listing, retrieving, updating, and removing predictor
+    files stored in a specified directory. Supported file types include Python modules
+    and binary model files.
+
+    Attributes:
+        SUPPORTED_EXT(set[str]): Allowed file extensions for predictor files.
+        storage(Path): Directory where predictor files are stored.
+        index_file(Path): JSON file path used to maintain an index of stored predictors.
+        _index(Dict[str, Dict[str, Any]]): In-memory index mapping predictor names to metadata.
     """
 
-    def __init__(self, base_dir: str = None):
-        # Base directory for storing predictor objects
-        self.base_dir = Path(base_dir or os.getcwd()) / "objects"
-        self.base_dir.mkdir(exist_ok=True)
+    SUPPORTED_EXT = {'.py', '.pkl', '.joblib', '.pickle'}
 
-    def get_predictors(self) -> List[PredictorInfo]:
+    def __init__(self, storage_dir: str):
         """
-        Returns a list of PredictorInfo for all stored predictors.
+        Initialize the controller and ensure the storage directory and index file exist.
+
+        Args:
+            storage_dir(str): Path to the directory for storing predictor files.
+
+        Raises:
+            OSError: If the storage directory cannot be created or accessed.
         """
-        predictors: List[PredictorInfo] = []
-        for p in self.base_dir.iterdir():
-            if not p.is_dir():
-                continue
-            meta_file = p / "metadata.json"
-            if meta_file.exists():
-                data = json.loads(meta_file.read_text())
-                name = data.get("name", p.name)
-                description = data.get("description", "")
-                created_at = datetime.fromisoformat(data.get("created_at"))
-            else:
-                name = p.name
-                description = ""
-                created_at = datetime.fromtimestamp(p.stat().st_ctime)
-            predictors.append(PredictorInfo(
-                name=name, description=description, created_at=created_at))
-        return predictors
+        self.storage = Path(storage_dir)
+        self.storage.mkdir(parents=True, exist_ok=True)
+        self.index_file = self.storage / 'index.json'
+        self._index: Dict[str, Dict[str, Any]] = self._load_index()
 
-    def add_predictor(
-        self,
-        name: str,
-        description: str,
-        predictor_path: str,
-        model_path: str,
-        preprocessor_path: str
-    ) -> PredictorInfo:
+    def _load_index(self) -> Dict[str, Dict[str, Any]]:
         """
-        Creates a new predictor directory under objects/<name> by copying the
-        given files, and writes metadata.json with name, description, and timestamp.
+        Load the index from the JSON file, or return an empty index if the file does not exist.
 
-        :return: PredictorInfo for the newly added predictor
+        Returns:
+            Dict[str, Dict[str, Any]]: The loaded index mapping predictor names to metadata.
         """
-        target_dir = self.base_dir / name
-        if target_dir.exists():
-            shutil.rmtree(target_dir)
-        target_dir.mkdir()
-        # Copy asset files
-        shutil.copy2(predictor_path, target_dir / "predictor.pkl")
-        shutil.copy2(model_path, target_dir / "model.pkl")
-        shutil.copy2(preprocessor_path, target_dir / "preprocessor.pkl")
+        if self.index_file.exists():
+            with open(self.index_file) as f:
+                return json.load(f)
+        return {}
 
-        created_at = datetime.now()
-        metadata = {
-            "name": name,
-            "description": description,
-            "created_at": created_at.isoformat()
-        }
-        (target_dir / "metadata.json").write_text(json.dumps(metadata))
-        return PredictorInfo(name=name, description=description, created_at=created_at)
-
-    def get_predictor(self, name: str) -> Optional[PredictorInfo]:
+    def _save_index(self) -> None:
         """
-        Retrieves metadata for a single predictor by name.
+        Persist the in -memory index to the JSON file with indentation for readability.
 
-        :return: PredictorInfo or None if not found
+        Returns:
+            None
         """
-        target_dir = self.base_dir / name
-        if not target_dir.exists():
-            return None
-        meta_file = target_dir / "metadata.json"
-        if meta_file.exists():
-            data = json.loads(meta_file.read_text())
-            description = data.get("description", "")
-            created_at = datetime.fromisoformat(data.get("created_at"))
-        else:
-            description = ""
-            created_at = datetime.fromtimestamp(target_dir.stat().st_ctime)
-        return PredictorInfo(name=name, description=description, created_at=created_at)
+        with open(self.index_file, 'w') as f:
+            json.dump(self._index, f, indent=2)
 
-    def update_predictor(
-        self,
-        name: str,
-        new_name: str,
-        description: str,
-        predictor_path: Optional[str] = None,
-        model_path: Optional[str] = None,
-        preprocessor_path: Optional[str] = None
-    ) -> Optional[PredictorInfo]:
+    def list(self) -> List[str]:
         """
-        Updates an existing predictor's files, metadata, and optionally renames it.
+        List all registered predictor names in the index.
 
-        :return: PredictorInfo for the updated predictor, or None if original not found
+        Returns:
+            List[str]: A list of predictor names.
         """
-        target_dir = self.base_dir / name
-        if not target_dir.exists():
-            return None
-        # Overwrite asset files if new paths provided
-        if predictor_path:
-            shutil.copy2(predictor_path, target_dir / "predictor.pkl")
-        if model_path:
-            shutil.copy2(model_path, target_dir / "model.pkl")
-        if preprocessor_path:
-            shutil.copy2(preprocessor_path, target_dir / "preprocessor.pkl")
-        # Load existing creation timestamp
-        meta_file = target_dir / "metadata.json"
-        if meta_file.exists():
-            data = json.loads(meta_file.read_text())
-            created_at = datetime.fromisoformat(data.get("created_at"))
-        else:
-            created_at = datetime.fromtimestamp(target_dir.stat().st_ctime)
-        # Rename directory if name changed
-        final_name = new_name.strip() or name
-        if final_name != name:
-            new_dir = self.base_dir / final_name
-            if new_dir.exists():
-                shutil.rmtree(new_dir)
-            target_dir.rename(new_dir)
-            target_dir = new_dir
-        # Write updated metadata
-        metadata = {
-            "name": final_name,
-            "description": description,
-            "created_at": created_at.isoformat()
-        }
-        (target_dir / "metadata.json").write_text(json.dumps(metadata))
-        return PredictorInfo(name=final_name, description=description, created_at=created_at)
+        return list(self._index.keys())
 
-    def delete_predictor(self, name: str) -> bool:
+    def add(self, name: str, predictor_path: str) -> None:
         """
-        Deletes the predictor directory and all its contents.
+        Add a new predictor file to storage and update the index.
 
-        :return: True if deleted, False if not found
+        Args:
+            name(str): Unique name to register for the predictor.
+            predictor_path(str): Path to the source predictor file to add.
+
+        Raises:
+            ValueError: If a predictor with the given name already exists or if the file extension is unsupported.
+            FileNotFoundError: If the source predictor file does not exist.
         """
-        target_dir = self.base_dir / name
-        if target_dir.exists():
-            shutil.rmtree(target_dir)
-            return True
-        return False
+        if name in self._index:
+            raise ValueError(f"Predictor '{name}' already exists.")
+        src = Path(predictor_path)
+        if not src.exists():
+            raise FileNotFoundError(f"File not found: {src}")
+        ext = src.suffix.lower()
+        if ext not in self.SUPPORTED_EXT:
+            raise ValueError(f"Unsupported extension: {ext}")
+        dest = self.storage / f"{name}{ext}"
+        dest.write_bytes(src.read_bytes())
+        self._index[name] = {'path': str(dest), 'ext': ext}
+        self._save_index()
 
-    def predictor_exists(self, name: str) -> bool:
+    def get(self, name: str) -> BasePredictor:
         """
-        Checks if a predictor with the given name exists under objects.
+        Retrieve a registered predictor by name and instantiate it.
+
+        Args:
+            name(str): Name of the predictor to retrieve.
+
+        Returns:
+            BasePredictor: An instance of the predictor initialized from its stored file.
+
+        Raises:
+            KeyError: If no predictor with the given name exists in the index.
         """
-        return (self.base_dir / name).is_dir()
+        if name not in self._index:
+            raise KeyError(f"No predictor '{name}'")
+        info = self._index[name]
+        return BasePredictor(info['path'])
 
-    # Utility methods to load assets
-    def load_preprocessor(self, name: str):
-        from joblib import load
-        path = self.base_dir / name / "preprocessor.pkl"
-        return load(path)
+    def update(self, name: str, predictor_path: str) -> None:
+        """
+        Replace an existing predictor file with a new one and update the index.
 
-    def load_model(self, name: str, model_filename: str = "model.pkl"):
-        import joblib
-        path = self.base_dir / name / model_filename
-        return joblib.load(path)
+        Args:
+            name(str): Name of the predictor to update.
+            predictor_path(str): Path to the new predictor file.
 
-    def load_predictor_class(self, name: str, predictor_filename: str = "predictor.pkl"):
-        import joblib
-        path = self.base_dir / name / predictor_filename
-        return joblib.load(path)
+        Raises:
+            KeyError: If no predictor with the given name exists.
+            ValueError: If the new file extension is unsupported.
+        """
+        if name not in self._index:
+            raise KeyError(f"No predictor '{name}' to update")
+        old = Path(self._index[name]['path'])
+        if old.exists():
+            old.unlink()
+        src = Path(predictor_path)
+        ext = src.suffix.lower()
+        if ext not in self.SUPPORTED_EXT:
+            raise ValueError(f"Unsupported extension: {ext}")
+        dest = self.storage / f"{name}{ext}"
+        dest.write_bytes(src.read_bytes())
+        self._index[name] = {'path': str(dest), 'ext': ext}
+        self._save_index()
+
+    def remove(self, name: str) -> None:
+        """
+        Remove a registered predictor file and delete its index entry.
+
+        Args:
+            name(str): Name of the predictor to remove.
+
+        Raises:
+            KeyError: If no predictor with the given name exists.
+        """
+        if name not in self._index:
+            raise KeyError(f"No predictor '{name}' to remove")
+        file = Path(self._index[name]['path'])
+        if file.exists():
+            file.unlink()
+        del self._index[name]
+        self._save_index()
