@@ -45,6 +45,7 @@ class SQLiteDB:
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS base_excipients (
                     id            TEXT PRIMARY KEY,
+                    etype         TEXT,
                     name          TEXT NOT NULL UNIQUE,
                     created_at    TEXT DEFAULT CURRENT_TIMESTAMP
                 );
@@ -54,7 +55,6 @@ class SQLiteDB:
                 CREATE TABLE IF NOT EXISTS excipients (
                     id            TEXT PRIMARY KEY,
                     base_id       TEXT NOT NULL,
-                    etype         TEXT,
                     concentration REAL,
                     unit          TEXT,
                     created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -84,12 +84,12 @@ class SQLiteDB:
                               )
 
     # Base Excipients CRUD
-    def add_base_excipient(self, name: str) -> str:
+    def add_base_excipient(self, type: str, name: str) -> str:
         bid = str(uuid.uuid4())
         with self.conn:
             self.conn.execute(
-                "INSERT INTO base_excipients (id, name) VALUES (?, ?)",
-                (bid, name)
+                "INSERT INTO base_excipients (id, etype, name) VALUES (?, ?, ?)",
+                (bid, type, name)
             )
         return bid
 
@@ -113,6 +113,13 @@ class SQLiteDB:
                 "DELETE FROM base_excipients WHERE id=?", (base_id,)
             )
 
+    def delete_base_excipient_by_name(self, name: str) -> None:
+        """Delete a BaseExcipient by its name."""
+        with self.conn:
+            self.conn.execute(
+                "DELETE FROM base_excipients WHERE name=?", (name,)
+            )
+
     # VisQ Excipients CRUD
     def add_excipient(self, base_id: str, etype: str = None, concentration: float = None, unit: str = None) -> str:
         eid = str(uuid.uuid4())
@@ -133,8 +140,8 @@ class SQLiteDB:
 
     def get_excipient(self, exc_id: str) -> dict | None:
         cur = self.conn.execute(
-            "SELECT e.*, b.name as base_name FROM excipients e "
-            "JOIN base_excipients b ON e.base_id=b.id "
+            "SELECT e.*, b.name, b.etype as base_name FROM excipients e "
+            "JOIN base_excipients b ON e.base_id=b.id, e.etype=b.etype "
             "WHERE e.id=?", (exc_id,)
         )
         row = cur.fetchone()
