@@ -1,0 +1,2 @@
+class ManageExcipientsWindow:
+    pass
