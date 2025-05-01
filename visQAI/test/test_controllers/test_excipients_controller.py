@@ -26,7 +26,7 @@ class TestExcipientsController(unittest.TestCase):
 
     # Base excipient CRUD
     def test_add_and_get_base_excipient(self):
-        base = BaseExcipient(name='Base1')
+        base = BaseExcipient(name='Base1', etype='TestType')
         created = self.ctrl.add_base_excipient(base)
         self.assertIsInstance(created, BaseExcipient)
         self.assertEqual(created.name, 'Base1')
@@ -51,7 +51,8 @@ class TestExcipientsController(unittest.TestCase):
         self.assertIsNone(self.ctrl.get_base_excipient(new_id))
 
     def test_delete_base_excipient(self):
-        base = self.ctrl.add_base_excipient(BaseExcipient(name='ToDelete'))
+        base = self.ctrl.add_base_excipient(
+            BaseExcipient(name='ToDelete', etype='TestType'))
         bid = str(base.id)
         # Delete valid
         self.ctrl.delete_base_excipient(bid)
@@ -65,7 +66,8 @@ class TestExcipientsController(unittest.TestCase):
 
     # Variation CRUD
     def test_add_and_list_variations(self):
-        base = self.ctrl.add_base_excipient(BaseExcipient(name='B'))
+        base = self.ctrl.add_base_excipient(
+            BaseExcipient(name='B', etype='TestType'))
         var = VisQExcipient(name='B', etype='Type',
                             concentration=1.0, unit=ConcentrationUnit.MOLAR)
         created = self.ctrl.add_variation(str(base.id), var)
@@ -80,12 +82,14 @@ class TestExcipientsController(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.ctrl.add_variation('bad-uuid', None)
         # exc type
-        base = self.ctrl.add_base_excipient(BaseExcipient(name='B'))
+        base = self.ctrl.add_base_excipient(
+            BaseExcipient(name='B', etype='TestType'))
         with self.assertRaises(TypeError):
             self.ctrl.add_variation(str(base.id), 'not an excipient')
 
     def test_get_update_delete_variation(self):
-        base = self.ctrl.add_base_excipient(BaseExcipient(name='Base'))
+        base = self.ctrl.add_base_excipient(
+            BaseExcipient(name='Base', etype='TestType'))
         var = VisQExcipient(name='Base', etype='E',
                             concentration=2.0, unit=ConcentrationUnit.MILLIMOLAR)
         created = self.ctrl.add_variation(str(base.id), var)
@@ -115,7 +119,8 @@ class TestExcipientsController(unittest.TestCase):
 
     # Profile retrieval
     def test_get_profile(self):
-        base = self.ctrl.add_base_excipient(BaseExcipient(name='Prof'))
+        base = self.ctrl.add_base_excipient(
+            BaseExcipient(name='Prof', etype='TestType'))
         base_id = str(base.id)
         # no variations => empty profile
         prof = self.ctrl.get_profile(base_id)
@@ -123,9 +128,11 @@ class TestExcipientsController(unittest.TestCase):
         self.assertEqual(prof.get_variations(), [])
         # add variations
         v1 = self.ctrl.add_variation(base_id, VisQExcipient(
-            name='Prof', etype='T1', concentration=1.0, unit=ConcentrationUnit.MOLAR))
+            name='Prof', etype='T1', concentration=1.0, unit=ConcentrationUnit.MOLAR
+        ))
         v2 = self.ctrl.add_variation(base_id, VisQExcipient(
-            name='Prof', etype='T2', concentration=2.0, unit=ConcentrationUnit.MILLIGRAM_PER_ML))
+            name='Prof', etype='T2', concentration=2.0, unit=ConcentrationUnit.MILLIGRAM_PER_ML
+        ))
         prof2 = self.ctrl.get_profile(base_id)
         vars_in_profile = prof2.get_variations()
         self.assertEqual({v1.concentration, v2.concentration}, {

@@ -3,4 +3,4 @@
 from .excipient import BaseExcipient, VisQExcipient, ExcipientProfile, ConcentrationUnit
 from .formulation import Formulation
 from .viscosity import ViscosityProfile
-from .predictor import GenericPredictor
+from .predictor import BasePredictor

@@ -1,15 +1,21 @@
+#!/usr/bin/env python3
 """
 Module: excipient
 
 This module provides data models for managing excipients and their concentration-specific variations in the VisQ.AI system. It defines:
   - `ConcentrationUnit`: supported units for concentration values
-  - `BaseExcipient`: foundational excipient with a UUID and name
-  - `VisQExcipient`: specialized excipient that adds type, concentration, unit, and optional id
+  - `BaseExcipient`: foundational excipient with a UUID, name, and type
+  - `VisQExcipient`: specialized excipient that adds concentration and unit
   - `ExcipientProfile`: grouping container for multiple `VisQExcipient` variants under a base excipient
 
-Author: Paul MacNichol (paul.macnichol@qatchtech.com)
-Date: 2025-04-25
-Version: 1.0.1
+Author:
+    Paul MacNichol (paul.macnichol@qatchtech.com)
+
+Date:
+    2025-04-25
+
+Version:
+    1.1.0
 """
 import uuid
 from enum import Enum
@@ -42,27 +48,32 @@ class ConcentrationUnit(Enum):
 
 class BaseExcipient:
     """
-    Represents the base concept of an excipient with a unique identifier and a name.
+    Represents the base concept of an excipient with a unique identifier, name, and type.
 
     Attributes:
         _id: UUID identifier for the excipient.
         _name: Name of the excipient.
+        _etype: Category/type of the excipient.
     """
 
-    def __init__(self, name: str, id: Optional[uuid.UUID] = None):
+    def __init__(self, name: str, etype: str, id: Optional[uuid.UUID] = None):
         """
         Initialize a BaseExcipient.
 
         Args:
             name: Non-empty string name of the excipient.
+            etype: Non-empty string category/type of the excipient.
             id: Optional UUID; if omitted, a new UUID is generated.
 
         Raises:
-            TypeError: If `name` is not a string or `id` is not a UUID.
-            ValueError: If `name` is empty or whitespace.
+            TypeError: If `name` or `etype` types are invalid, or `id` is not a UUID.
+            ValueError: If `name` or `etype` is empty or whitespace.
         """
         self._validate_name(name)
         self._name: str = name.strip()
+        self._validate_etype(etype)
+        self._etype: str = etype.strip()
+
         if id is not None and not isinstance(id, uuid.UUID):
             raise TypeError(
                 "BaseExcipient 'id' must be a uuid.UUID if provided.")
@@ -86,6 +97,17 @@ class BaseExcipient:
             raise ValueError(
                 "BaseExcipient 'name' must be a non-empty string.")
 
+    @staticmethod
+    def _validate_etype(etype: object) -> None:
+        """
+        Validates the excipient type/category.
+        """
+        if not isinstance(etype, str):
+            raise TypeError("BaseExcipient 'etype' must be a string.")
+        if not etype.strip():
+            raise ValueError(
+                "BaseExcipient 'etype' must be a non-empty string.")
+
     @property
     def name(self) -> str:
         """str: The name of the excipient."""
@@ -95,16 +117,19 @@ class BaseExcipient:
     def name(self, value: str) -> None:
         """
         Sets the name of the excipient after validation.
-
-        Args:
-            value: New non-empty string name.
-
-        Raises:
-            TypeError: If value is not a string.
-            ValueError: If value is empty or whitespace.
         """
         self._validate_name(value)
         self._name = value.strip()
+
+    @property
+    def etype(self) -> str:
+        """str: The type/category of the excipient."""
+        return self._etype
+
+    @etype.setter
+    def etype(self, value: str) -> None:
+        self._validate_etype(value)
+        self._etype = value.strip()
 
     @property
     def id(self) -> uuid.UUID:
@@ -129,12 +154,8 @@ class BaseExcipient:
 
 class VisQExcipient(BaseExcipient):
     """
-    Specialized excipient including type, concentration, and unit.
-    Attributes:
-        _etype: Category/type of the excipient.
-        _concentration: Numeric concentration value.
-        _unit: Unit of concentration as ConcentrationUnit.
-        _id: Inherited from BaseExcipient.
+    Specialized excipient including concentration and unit.
+    Inherits name and etype from BaseExcipient.
     """
 
     def __init__(
@@ -149,34 +170,21 @@ class VisQExcipient(BaseExcipient):
         Initialize a VisQExcipient variation.
 
         Args:
-            name: Base name.
-            etype: Non-empty string for excipient type/category.
+            name: Base name of the excipient.
+            etype: Category/type inherited to BaseExcipient.
             concentration: Non-negative number for concentration.
             unit: Unit enum for concentration.
             id: Optional UUID; if omitted, a new UUID is generated.
 
         Raises:
             TypeError: If types of args are invalid.
-            ValueError: If etype is empty or concentration is negative.
+            ValueError: If concentration is negative.
         """
-        super().__init__(name, id=id)
-        self._validate_etype(etype)
-        self._etype: str = etype.strip()
+        super().__init__(name=name, etype=etype, id=id)
         self._validate_concentration(concentration)
         self._concentration: float = float(concentration)
         self._validate_unit(unit)
         self._unit: ConcentrationUnit = unit
-
-    @staticmethod
-    def _validate_etype(etype: object) -> None:
-        """
-        Validates the excipient type.
-        """
-        if not isinstance(etype, str):
-            raise TypeError("VisQExcipient 'etype' must be a string.")
-        if not etype.strip():
-            raise ValueError(
-                "VisQExcipient 'etype' must be a non-empty string.")
 
     @staticmethod
     def _validate_concentration(conc: object) -> None:
@@ -197,16 +205,6 @@ class VisQExcipient(BaseExcipient):
         if not isinstance(unit, ConcentrationUnit):
             raise TypeError(
                 "VisQExcipient 'unit' must be a ConcentrationUnit.")
-
-    @property
-    def etype(self) -> str:
-        """str: The type/category of the excipient."""
-        return self._etype
-
-    @etype.setter
-    def etype(self, value: str) -> None:
-        self._validate_etype(value)
-        self._etype = value.strip()
 
     @property
     def concentration(self) -> float:
@@ -274,7 +272,6 @@ class ExcipientProfile:
 
     def add_variation(
         self,
-        etype: str,
         concentration: float,
         unit: ConcentrationUnit
     ) -> None:
@@ -283,13 +280,14 @@ class ExcipientProfile:
         """
         variant = VisQExcipient(
             name=self.base_excipient.name,
-            etype=etype,
+            etype=self.base_excipient.etype,
             concentration=concentration,
             unit=unit
         )
         if variant in self._variations:
             raise ValueError(
-                f"Variation {concentration}{unit} already exists for {self.base_excipient.name}."
+                f"Variation {concentration}{unit} already exists for "
+                f"{self.base_excipient.name}."
             )
         self._variations.add(variant)
 

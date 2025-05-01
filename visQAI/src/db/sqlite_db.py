@@ -1,3 +1,11 @@
+#!/usr/bin/env python3
+"""
+Module: sqlite_db
+
+SQLite database supporting BaseExcipient, VisQExcipient variations, and Formulations.
+
+Updated to store excipient type in base_excipients only and inherit etype for variations.
+"""
 import os
 import json
 import uuid
@@ -20,7 +28,7 @@ DB_PATH = Path(__file__).parent.parent / 'data' / 'app.db'
 
 class SQLiteDB:
     """
-    SQLite database supporting BaseExcipients, VisQExcipients, and Formulations.
+    SQLite database supporting BaseExcipients, VisQExcipient variations, and Formulations.
     """
 
     def __init__(self, db_path: Path = DB_PATH, encryption_key: str = None):
@@ -42,26 +50,27 @@ class SQLiteDB:
 
     def _create_tables(self):
         with self.conn:
+            # Base excipients hold name+etype
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS base_excipients (
-                    id            TEXT PRIMARY KEY,
-                    name          TEXT NOT NULL UNIQUE,
-                    created_at    TEXT DEFAULT CURRENT_TIMESTAMP
+                    id         TEXT PRIMARY KEY,
+                    etype      TEXT NOT NULL,
+                    name       TEXT NOT NULL UNIQUE,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
                 );
-            """
-                              )
+            """)
+            # Variations table: inherits etype via foreign key
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS excipients (
                     id            TEXT PRIMARY KEY,
                     base_id       TEXT NOT NULL,
-                    etype         TEXT,
-                    concentration REAL,
-                    unit          TEXT,
+                    concentration REAL NOT NULL,
+                    unit          TEXT NOT NULL,
                     created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY(base_id) REFERENCES base_excipients(id) ON DELETE CASCADE
                 );
-            """
-                              )
+            """)
+            # Formulations unchanged
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS formulations (
                     id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,8 +79,7 @@ class SQLiteDB:
                     viscosity_json TEXT,
                     created_at     TEXT    DEFAULT CURRENT_TIMESTAMP
                 );
-            """
-                              )
+            """)
             self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS formulation_excipients (
                     formulation_id INTEGER NOT NULL,
@@ -80,16 +88,18 @@ class SQLiteDB:
                     FOREIGN KEY(formulation_id) REFERENCES formulations(id) ON DELETE CASCADE,
                     FOREIGN KEY(excipient_id)   REFERENCES excipients(id)   ON DELETE CASCADE
                 );
-            """
-                              )
+            """)
 
     # Base Excipients CRUD
-    def add_base_excipient(self, name: str) -> str:
+    def add_base_excipient(self, etype: str, name: str) -> str:
+        """
+        Create a new BaseExcipient with type+name.
+        """
         bid = str(uuid.uuid4())
         with self.conn:
             self.conn.execute(
-                "INSERT INTO base_excipients (id, name) VALUES (?, ?)",
-                (bid, name)
+                "INSERT INTO base_excipients (id, etype, name) VALUES (?, ?, ?)",
+                (bid, etype, name)
             )
         return bid
 
@@ -107,35 +117,41 @@ class SQLiteDB:
         return dict(row) if row else None
 
     def delete_base_excipient(self, base_id: str) -> None:
-        """Delete a BaseExcipient by its UUID."""
         with self.conn:
             self.conn.execute(
                 "DELETE FROM base_excipients WHERE id=?", (base_id,)
             )
 
     # VisQ Excipients CRUD
-    def add_excipient(self, base_id: str, etype: str = None, concentration: float = None, unit: str = None) -> str:
+    def add_excipient(self, base_id: str, concentration: float, unit: str) -> str:
+        """
+        Create a new VisQExcipient variation under a BaseExcipient.
+        """
         eid = str(uuid.uuid4())
         with self.conn:
             self.conn.execute(
-                "INSERT INTO excipients (id, base_id, etype, concentration, unit) VALUES (?, ?, ?, ?, ?)",
-                (eid, base_id, etype, concentration, unit)
+                "INSERT INTO excipients (id, base_id, concentration, unit) VALUES (?, ?, ?, ?)",
+                (eid, base_id, concentration, unit)
             )
         return eid
 
     def list_excipients(self) -> list[dict]:
         cur = self.conn.execute(
-            "SELECT e.*, b.name as base_name FROM excipients e "
-            "JOIN base_excipients b ON e.base_id=b.id "
-            "ORDER BY e.created_at DESC"
+            "SELECT e.id, e.base_id, e.concentration, e.unit, e.created_at,"
+            " b.name AS base_name, b.etype"
+            " FROM excipients e"
+            " JOIN base_excipients b ON e.base_id = b.id"
+            " ORDER BY e.created_at DESC"
         )
         return [dict(r) for r in cur.fetchall()]
 
     def get_excipient(self, exc_id: str) -> dict | None:
         cur = self.conn.execute(
-            "SELECT e.*, b.name as base_name FROM excipients e "
-            "JOIN base_excipients b ON e.base_id=b.id "
-            "WHERE e.id=?", (exc_id,)
+            "SELECT e.id, e.base_id, e.concentration, e.unit, e.created_at,"
+            " b.name AS base_name, b.etype"
+            " FROM excipients e"
+            " JOIN base_excipients b ON e.base_id = b.id"
+            " WHERE e.id = ?", (exc_id,)
         )
         row = cur.fetchone()
         return dict(row) if row else None
@@ -144,7 +160,9 @@ class SQLiteDB:
         cols = ", ".join(f"{k}=?" for k in fields)
         vals = list(fields.values()) + [exc_id]
         with self.conn:
-            self.conn.execute(f"UPDATE excipients SET {cols} WHERE id=?", vals)
+            self.conn.execute(
+                f"UPDATE excipients SET {cols} WHERE id=?", vals
+            )
 
     def delete_excipient(self, exc_id: str) -> None:
         with self.conn:
@@ -216,6 +234,29 @@ class SQLiteDB:
                 formulation_id,)
         )
         return [r[0] for r in cur.fetchall()]
+
+    def drop_database(self) -> None:
+        """
+        Remove the current database file and recreate an empty one with tables.
+        """
+        try:
+            self.close()
+        except Exception:
+            pass
+        try:
+            self.db_path.unlink()
+        except FileNotFoundError:
+            pass
+        self._ensure_db_dir()
+        self.conn = sqlite3.connect(str(self.db_path))
+        if _USE_ENCRYPTION:
+            if not self.encryption_key:
+                raise ValueError(
+                    "Encryption key required for encrypted database")
+            self.conn.execute(f"PRAGMA key = '{self.encryption_key}';")
+        _enable_foreign_keys(self.conn)
+        self.conn.row_factory = sqlite3.Row
+        self._create_tables()
 
     def close(self) -> None:
         self.conn.close()
