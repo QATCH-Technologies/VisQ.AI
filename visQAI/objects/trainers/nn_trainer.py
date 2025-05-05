@@ -29,8 +29,13 @@ class XGBTrainer:
         os.makedirs(self.model_dir, exist_ok=True)
         # default feature/target sets
         self.feature_columns = feature_columns or [
-            "Protein type", "Protein", "Temperature", "Buffer",
-            "Sugar", "Sugar (M)", "Surfactant", "TWEEN"
+            "Protein type",
+            "MW(kDa)",
+            "PI_mean", "PI_range",
+            "Protein", "Temperature",
+            "Buffer", "Sugar",
+            "Sugar(M)", "Surfactant",
+            "Concentration"
         ]
         self.target_columns = target_columns or [
             "Viscosity100", "Viscosity1000",

@@ -7,33 +7,26 @@ import optuna
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.model_selection import KFold
-
 import tensorflow as tf
 from keras import layers, models, optimizers, losses, metrics, callbacks
+import pandas as pd
+from visQ_data_processor import VisQDataProcessor
+
+
+import pandas as pd
 
 
 class ViscosityTrainerCNN:
     def __init__(self,
-                 numeric_features=None,
-                 categorical_features=None,
+                 features=None,
                  cv_splits=3,
                  random_state=42):
-        self.numeric_features = numeric_features or [
-            "Protein", "Temperature", "Sugar (M)", "TWEEN"
-        ]
-        self.categorical_features = categorical_features or [
-            "Protein type", "Buffer", "Sugar", "Surfactant"
-        ]
+        self.features = features
         self.cv_splits = cv_splits
         self.random_state = random_state
-
-        # build the sklearn preprocessor
         self.preprocessor = ColumnTransformer([
-            ("num", StandardScaler(), self.numeric_features),
-            ("cat", OneHotEncoder(handle_unknown="ignore"), self.categorical_features),
+            ("num", StandardScaler(), self.features),
         ])
-
-        # placeholders:
         self.input_dim = None
         self.output_dim = None
         self.best_params = None
@@ -65,7 +58,7 @@ class ViscosityTrainerCNN:
         return model
 
     def tune(self, X, y, n_trials=20, epochs=20, batch_size=32):
-        # same as before...
+
         X_proc = self.preprocessor.fit_transform(X)
         y_arr = y.values if hasattr(y, "values") else np.asarray(y)
         self.input_dim, self.output_dim = X_proc.shape[1], y_arr.shape[1]
@@ -177,21 +170,28 @@ class ViscosityTrainerCNN:
 
 
 if __name__ == "__main__":
-    DATA_PATH = 'content/formulation_data_04222025_2.csv'
+    DATA_PATH = 'content/forumlation_data_05052025.csv'
     SAVE_PATH = 'visQAI/objects/cnn_regressor'
 
     df = pd.read_csv(DATA_PATH)
-    feature_cols = [
-        "Protein type", "Protein", "Temperature", "Buffer",
-        "Sugar", "Sugar (M)", "Surfactant", "TWEEN"
-    ]
     target_cols = [
-        "Viscosity100", "Viscosity1000",
-        "Viscosity10000", "Viscosity100000", "Viscosity15000000"
+        "Viscosity100",
+        "Viscosity1000",
+        "Viscosity10000",
+        "Viscosity100000",
+        "Viscosity15000000"
     ]
-    X, y = df[feature_cols], df[target_cols]
 
-    trainer = ViscosityTrainerCNN(cv_splits=4)
+    X, y = VisQDataProcessor.process(DATA_PATH)
+    X.drop(columns=['Temperature_norm'], inplace=True)
+    # iterate through columns
+    for col in X.columns:
+        # find the row indices where this column is NaN
+        null_rows = X.index[X[col].isna()].tolist()
+        for row in null_rows:
+            print(f"Row {row}, Column '{col}', Value {X.loc[row, col]}")
+    features = X.columns
+    trainer = ViscosityTrainerCNN(features=features, cv_splits=4)
     print("Tuning hyperparameters…")
     study = trainer.tune(X, y, n_trials=30, epochs=15, batch_size=16)
     print("Best params:", study.best_params)
