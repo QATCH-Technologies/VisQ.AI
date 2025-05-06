@@ -8,7 +8,7 @@ from sklearn.model_selection import KFold
 from keras import callbacks
 from generic_hypermodel import GenericHyperModel
 from visQ_data_processor import VisQDataProcessor
-from typing import Callable, Dict, Any, Union
+from typing import Callable, Dict, Any, Union, Optional
 
 
 class GenericTrainer:
