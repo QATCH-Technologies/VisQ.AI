@@ -9,6 +9,11 @@ from keras import layers, models, optimizers, losses, metrics
 # ─── 1) Define your architectures ────────────────────────────────────────────
 
 
+def invert(x):
+    # Keras can now serialize/deserialize this by name
+    return tf.subtract(1.0, x)
+
+
 def build_mlp(input_dim: int, output_dim: int,
               num_layers: int, units: int, learning_rate: float):
     inputs = layers.Input(shape=(input_dim,))
@@ -238,12 +243,11 @@ def build_highway_mlp(
             name=f"T_{i}"
         )(x)
 
-        carry = layers.Multiply(name=f"carry_{i}")([
-            layers.Lambda(lambda z: 1 - z, name=f"invT_{i}")(T),
-            x
-        ])
-        transform = layers.Multiply(name=f"transform_{i}")([T, H])
-        x = layers.Add(name=f"highway_out_{i}")([transform, carry])
+        invT = layers.Lambda(invert, name=f"invT_{i}")(T)
+
+        carry = layers.Multiply(name=f"carry_{i}")([invT, x])
+        transform = layers.Multiply(name=f"transform_{i}")([T,    H])
+        x = layers.Add(name=f"highway_out_{i}")([carry, transform])
 
     outputs = layers.Dense(output_dim, activation="linear", name="output")(x)
     return models.Model(inputs, outputs, name="highway_mlp")
@@ -490,7 +494,7 @@ def build_highway_bn_dropout(
             name=f"T_{i}"
         )(x)
         # carry = (1 - T) * x
-        invT = layers.Lambda(lambda z: 1 - z, name=f"invT_{i}")(T)
+        invT = layers.Lambda(invert, name=f"invT_{i}")(T)
         carry = layers.Multiply(name=f"carry_{i}")([invT, x])
         transform = layers.Multiply(name=f"transform_{i}")([T, H])
         # combine + norm
@@ -519,6 +523,14 @@ def highway_bn_dropout_compile(hp):
 
 # ─── New Architecture: Mixture-of-Experts MLP ─────────────────────────────────
 
+def expand_dims_last(x):
+    return tf.expand_dims(x, -1)
+
+
+def sum_over_experts(x):
+    # Keras will record "sum_over_experts" in the config and be able to reload it
+    return tf.reduce_sum(x, axis=1)
+
 
 def build_moe_mlp(
     input_dim: int,
@@ -542,8 +554,8 @@ def build_moe_mlp(
     gates = layers.Dense(num_experts, activation="softmax", name="gate_out")(g)
     # expand gates for broadcast
     gates_exp = layers.Lambda(
-        lambda x: tf.expand_dims(x, -1), name="gates_exp")(gates)
-
+        expand_dims_last, name="gates_exp"
+    )(gates)
     # Expert networks
     expert_outputs = []
     for i in range(num_experts):
@@ -555,14 +567,16 @@ def build_moe_mlp(
                            name=f"expert{i}_out")(x)
         expert_outputs.append(out)
 
-    # Stack expert outputs: shape (batch, num_experts, output_dim)
-    stacked = layers.Lambda(lambda xs: tf.stack(
-        xs, axis=1), name="stack_experts")(expert_outputs)
+    reshaped_experts = [
+        layers.Reshape((1, output_dim), name=f"exp{i}_expanddims")(out)
+        for i, out in enumerate(expert_outputs)
+    ]
+    stacked = layers.Concatenate(
+        axis=1, name="stack_experts")(reshaped_experts)
 
     # Weighted sum: apply gates and sum over experts axis
     weighted = layers.Multiply(name="weighted_experts")([stacked, gates_exp])
-    outputs = layers.Lambda(lambda x: tf.reduce_sum(
-        x, axis=1), name="moe_output")(weighted)
+    outputs = layers.Lambda(sum_over_experts, name="moe_output")(weighted)
 
     model = models.Model(inputs, outputs, name="moe_mlp")
     return model
@@ -624,8 +638,7 @@ def build_residual_moe(
     g = layers.Dense(residual_units, activation="relu",
                      name="gate_hid")(inputs)
     gates = layers.Dense(num_experts, activation="softmax", name="gate_out")(g)
-    gates_exp = layers.Lambda(
-        lambda x: tf.expand_dims(x, -1), name="gates_exp")(gates)
+    gates_exp = layers.Reshape((num_experts, 1), name="gates_exp")(gates)
 
     # Build each expert as a Residual MLP
     expert_outputs = []
@@ -644,13 +657,18 @@ def build_residual_moe(
                            name=f"exp{i}_out")(x)
         expert_outputs.append(out)
 
-    # Mix experts
-    stacked = layers.Lambda(lambda xs: tf.stack(
-        xs, axis=1), name="stack_experts")(expert_outputs)
-    weighted = layers.Multiply(name="weight_experts")([stacked, gates_exp])
-    outputs = layers.Lambda(lambda x: tf.reduce_sum(
-        x, axis=1), name="moe_residual_out")(weighted)
+    reshaped_experts = [
+        layers.Reshape((1, output_dim), name=f"exp{i}_expand")(out)
+        for i, out in enumerate(expert_outputs)
+    ]
 
+    stacked = layers.Concatenate(
+        axis=1, name="stack_experts")(reshaped_experts)
+
+    weighted = layers.Multiply(name="weight_experts")([stacked, gates_exp])
+
+    outputs = layers.Lambda(
+        sum_over_experts, name="moe_residual_out")(weighted)
     return models.Model(inputs, outputs, name="residual_moe")
 
 
@@ -691,19 +709,25 @@ def build_se_mlp(
     for i in range(num_blocks):
         x = layers.Dense(units, activation="relu", name=f"block{i}_dense")(x)
         # Squeeze: global pooling over features
-        se = layers.Lambda(lambda z: tf.expand_dims(
-            z, -1), name=f"block{i}_squeeze")(x)
+        se = layers.Reshape((units, 1), name=f"block{i}_squeeze")(x)
         se = layers.GlobalAveragePooling1D(name=f"block{i}_gap")(se)
-        # Excitation
-        se = layers.Dense(max(1, int(units * se_ratio)),
-                          activation="relu", name=f"block{i}_exc1")(se)
+
+        # 2) Excitation
+        se = layers.Dense(
+            max(1, int(units * se_ratio)),
+            activation="relu",
+            name=f"block{i}_exc1"
+        )(se)
         se = layers.Dense(units, activation="sigmoid",
                           name=f"block{i}_exc2")(se)
-        se = layers.Lambda(lambda z: tf.expand_dims(
-            z, -1), name=f"block{i}_scale")(se)
-        # apply gating
-        x = layers.Multiply(name=f"block{i}_scale_mul")(
-            [layers.Lambda(lambda z: tf.expand_dims(z, -1))(x), se])
+        # expand back to (batch, units, 1)
+        se = layers.Reshape((units, 1), name=f"block{i}_scale")(se)
+
+        # 3) Apply gating: expand x too
+        x_exp = layers.Reshape((units, 1), name=f"block{i}_expand_x")(x)
+        x = layers.Multiply(name=f"block{i}_scale_mul")([x_exp, se])
+
+        # 4) Collapse back to (batch, units) for next block
         x = layers.Reshape((units,), name=f"block{i}_reshape")(x)
 
     outputs = layers.Dense(output_dim, activation="linear", name="output")(x)
