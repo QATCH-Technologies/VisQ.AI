@@ -51,7 +51,6 @@ def load_predictor(path: str) -> Any:
 
 
 if __name__ == '__main__':
-    # Example usage
     predictor = MockPredictor()
     for ext in ['.pkl', '.pickle', '.joblib']:
         file_path = os.path.join('visQAI', 'objects', f'mock_predictor{ext}')
