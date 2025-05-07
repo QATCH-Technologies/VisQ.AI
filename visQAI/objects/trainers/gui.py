@@ -18,13 +18,13 @@ ARCH_DIR = os.path.join("visQAI", "objects", "architectures")
 
 # target columns / shear rates
 target_cols = [
-    "Viscosity100",
-    "Viscosity1000",
-    "Viscosity10000",
-    "Viscosity100000",
-    "Viscosity15000000"
+    "Viscosity_100",
+    "Viscosity_1000",
+    "Viscosity_10000",
+    "Viscosity_100000",
+    "Viscosity_15000000"
 ]
-shear_rates = [int(col.replace("Viscosity", "")) for col in target_cols]
+shear_rates = [int(col.replace("Viscosity_", "")) for col in target_cols]
 
 
 class PredictorGUI(QMainWindow):
@@ -96,10 +96,10 @@ class PredictorGUI(QMainWindow):
 
         # categorical inputs
         cat_opts = {
-            'Protein type': ['None', 'poly-hIgG', 'BSA', 'BGG'],
-            'Buffer':       ['Histidine', 'PBS'],
-            'Sugar':        ['None', 'Trehalose', 'Sucrose'],
-            'Surfactant':   ['None', 'tween-20', 'tween-80'],
+            'Protein_type': ['None', 'poly-hIgG', 'BSA', 'BGG'],
+            'Buffer_type':       ['Histidine', 'PBS'],
+            'Sugar_type':        ['None', 'Trehalose', 'Sucrose'],
+            'Surfactant_type':   ['None', 'tween-20', 'tween-80'],
         }
         for field, opts in cat_opts.items():
             combo = QComboBox()
@@ -108,13 +108,22 @@ class PredictorGUI(QMainWindow):
             self.inputs[field] = combo
             form.addRow(f"{field}:", combo)
 
-        # numeric inputs
-        for field in ['MW(kDa)', 'PI_mean', 'PI_range', 'Protein',
-                      'Temperature', 'Sugar(M)', 'Concentration']:
+        numeric_fields = [
+            'MW',
+            'PI_mean',
+            'PI_range',
+            'Protein_concentration',
+            'Temperature',
+            'Sugar_concentration',
+            'Surfactant_concentration',
+            'Buffer_pH',
+        ]
+        for field in numeric_fields:
             line = QLineEdit()
             line.setPlaceholderText("Enter numeric value")
             self.inputs[field] = line
-            form.addRow(f"{field}:", line)
+            # show nice label (replace underscore with space)
+            form.addRow(f"{field.replace('_',' ')}:", line)
 
         # predict button
         predict_btn = QPushButton("Predict")
@@ -174,6 +183,7 @@ class PredictorGUI(QMainWindow):
 
         except Exception as e:
             QMessageBox.critical(self, "Prediction Error", str(e))
+            raise e
 
     def _plot_curve(self, viscosities):
         """Draw viscosity vs. shear-rate curve."""

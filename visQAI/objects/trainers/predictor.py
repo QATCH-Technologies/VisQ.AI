@@ -49,10 +49,6 @@ class ViscosityPredictor:
         else:
             raise TypeError(
                 "`data` must be a DataFrame, dict of lists, or list of dicts.")
-
-        # apply the exact same transforms you used in training
         X_proc = self.preprocessor.transform(df_new)
-
-        # Keras expects a NumPy array
         preds = self.model.predict(X_proc, verbose=0)
         return preds

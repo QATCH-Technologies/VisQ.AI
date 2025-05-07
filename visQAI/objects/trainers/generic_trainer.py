@@ -25,7 +25,7 @@ class GenericTrainer:
         random_state: int = 42,
     ):
         # 1) preprocessor + data
-        self.processor = VisQDataProcessor()
+        self.processor = VisQDataProcessor(use_feature_engineering=True)
         X_df, y_df = self.processor.fit(df)
         self.X = X_df.values
         self.y = y_df.values
@@ -93,7 +93,7 @@ class GenericTrainer:
         """K-Fold CV with the best HPs, then retrain final model on all data."""
         if self.best_hp is None:
             raise RuntimeError("You must call tune() first.")
-        rmses = []
+        errors = []
         cv = KFold(
             n_splits=self.cv_splits,
             shuffle=True,
@@ -120,9 +120,9 @@ class GenericTrainer:
                     patience=5, restore_best_weights=True)],
                 verbose=1,
             )
-            rmse = model.evaluate(X_val, y_val, verbose=0)[1]
-            print(f"Fold {fold} RMSE: {rmse:.4f}")
-            rmses.append(rmse)
+            err = model.evaluate(X_val, y_val, verbose=0)[1]
+            print(f"Fold {fold} Error: {err:.4f}")
+            errors.append(err)
 
         # final retrain
         print("Retraining on full dataset…")
@@ -142,7 +142,7 @@ class GenericTrainer:
                 patience=5, restore_best_weights=True)],
             verbose=1,
         )
-        return rmses
+        return errors
 
     def save(self, model_dir: str):
         """Save final model + preprocessor."""

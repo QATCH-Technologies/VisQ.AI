@@ -1,4 +1,4 @@
-ID,Protein type,MW(kDa),PI_mean,PI_range,Protein,Temperature,Buffer,Sugar,Sugar(M),Surfactant,Concentration,Viscosity100,Viscosity1000,Viscosity10000,Viscosity100000,Viscosity15000000
+ID,Protein_type,MW,PI_mean,PI_range,Protein_concentration,Temperature,Buffer_type,Sugar_type,Sugar_concentration,Surfactant_type,Surfactant_concentration,Viscosity_100,Viscosity_1000,Viscosity_10000,Viscosity_100000,Viscosity_15000000
 F1,poly-hIgG,150,7.6,1,145,25,PBS,Sucrose,1,none,0,12.5,11.5,9.8,8.8,6.92
 F2,none,NaN,none,none,0,25,PBS,Sucrose,1,none,0,3.25,3.25,3.25,3.25,3.25
 F3,poly-hIgG,150,7.6,1,140,25,PBS,none,0,none,0,4,4,4,3.5,2.41

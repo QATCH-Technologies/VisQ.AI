@@ -68,6 +68,11 @@ class GenericHyperModel(kt.HyperModel):
                     sampling=cfg.get("sampling"),
                     default=cfg.get("default"),
                 )
+            elif kind == "Boolean":
+                hp_values[name] = hp.Boolean(
+                    name,
+                    default=cfg.get("default", False)
+                )
             else:
                 raise ValueError(f"Unsupported HP type: {kind}")
 
@@ -75,9 +80,10 @@ class GenericHyperModel(kt.HyperModel):
         model = self.builder(
             self.input_dim, self.output_dim, **hp_values
         )
-        if callable(self.compile_args):
-            compile_kwargs = self.compile_args(hp_values)
-        else:
-            compile_kwargs = self.compile_args
+        compile_kwargs = (
+            self.compile_args(hp_values)
+            if callable(self.compile_args)
+            else self.compile_args
+        )
         model.compile(**compile_kwargs)
         return model
