@@ -5,23 +5,33 @@ import numpy as np
 import pandas as pd
 import joblib
 import tensorflow as tf
+from custom_layers import ReverseCumsum
 
 
 class ViscosityPredictor:
-
     def __init__(self,
                  model_path: str,
-                 preprocessor_path: str, mc_samples: int = 50):
-        # sanity checks
+                 preprocessor_path: str,
+                 mc_samples: int = 50):
         if not os.path.isfile(preprocessor_path):
             raise FileNotFoundError(
                 f"Could not find preprocessor at {preprocessor_path}")
         if not os.path.isfile(model_path):
             raise FileNotFoundError(f"Could not find model at {model_path}")
 
-        # load them correctly
         self.preprocessor = joblib.load(preprocessor_path)
-        self.model = tf.keras.models.load_model(model_path)
+
+        # Tell Keras how to resolve your custom layer
+
+        self.model = tf.keras.models.load_model(
+            model_path,
+            custom_objects={
+                # for safety, map both just-in-case…
+                "ReverseCumsum": ReverseCumsum,
+                "custom_layers>ReverseCumsum": ReverseCumsum,
+            }
+        )
+
         self.mc_samples = mc_samples
 
     def predict(
