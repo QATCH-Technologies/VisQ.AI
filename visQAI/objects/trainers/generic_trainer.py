@@ -9,11 +9,10 @@ from keras import callbacks
 from generic_hypermodel import GenericHyperModel
 from visQ_data_processor import VisQDataProcessor
 from typing import Callable, Dict, Any, Union, Optional
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
 
 class GenericTrainer:
-    """Tuner + CV + save workflow for *any* Keras architecture."""
-
     def __init__(
         self,
         df,

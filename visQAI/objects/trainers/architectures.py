@@ -1,3 +1,4 @@
+from tensorflow.keras import layers, models, optimizers, losses, metrics, backend as K
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,99 +10,125 @@ from keras import layers, models, optimizers, losses, metrics
 # ─── 1) Define your architectures ────────────────────────────────────────────
 
 
+@tf.keras.utils.register_keras_serializable(package="custom_layers")
+class ReverseCumsum(layers.Layer):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def call(self, inputs):
+        y_rev = inputs[:, ::-1]
+        csum_rev = K.cumsum(y_rev, axis=1)
+        return csum_rev[:, ::-1]
+
+    def get_config(self):
+        # no extra args, so just delegate
+        return super().get_config()
+
+
 def invert(x):
     # Keras can now serialize/deserialize this by name
     return tf.subtract(1.0, x)
 
 
-def build_mlp(input_dim: int,
-              output_dim: int,
-              num_layers: int,
-              units: int,
-              learning_rate: float,
-              activation: str = "relu",
-              dropout_rate: float = 0.0,
-              use_batch_norm: bool = True,
-              use_residual: bool = False,
+# def build_mlp(input_dim: int,
+#               output_dim: int,
+#               num_layers: int,
+#               units: int,
+#               learning_rate: float,
+#               activation: str = "relu",
+#               dropout_rate: float = 0.0,
+#               use_batch_norm: bool = True,
+#               use_residual: bool = False,
 
-              ) -> tf.keras.Model:
-    """
-    Builds a more robust MLP with optional batch-norm, dropout, and residual connections.
+#               ) -> tf.keras.Model:
+#     """
+#     Builds a more robust MLP with optional batch-norm, dropout, and residual connections.
 
-    Args:
-      input_dim: Dimension of input feature vector.
-      output_dim: Dimension of output vector.
-      num_layers: Total number of Dense layers in the body.
-      units: Number of units in each Dense layer.
-      activation: Which activation to use in hidden layers.
-      dropout_rate: Dropout rate (0.0 = no dropout).
-      use_batch_norm: Whether to insert BatchNormalization after each Dense.
-      use_residual: Whether to add a residual skip every two layers.
+#     Args:
+#       input_dim: Dimension of input feature vector.
+#       output_dim: Dimension of output vector.
+#       num_layers: Total number of Dense layers in the body.
+#       units: Number of units in each Dense layer.
+#       activation: Which activation to use in hidden layers.
+#       dropout_rate: Dropout rate (0.0 = no dropout).
+#       use_batch_norm: Whether to insert BatchNormalization after each Dense.
+#       use_residual: Whether to add a residual skip every two layers.
 
-    Returns:
-      A compiled tf.keras.Model (without optimizer & loss).
-    """
-    inputs = layers.Input(shape=(input_dim,), name="features")
-    x = inputs
-    prev = None
+#     Returns:
+#       A compiled tf.keras.Model (without optimizer & loss).
+#     """
+#     inputs = layers.Input(shape=(input_dim,), name="features")
+#     x = inputs
+#     prev = None
 
-    for i in range(num_layers):
-        x = layers.Dense(
-            units,
-            activation=None,
-            kernel_initializer="he_normal",
-            name=f"dense_{i}"
-        )(x)
-        if use_batch_norm:
-            x = layers.BatchNormalization(name=f"bn_{i}")(x)
-        x = layers.Activation(activation, name=f"act_{i}")(x)
-        if dropout_rate > 0:
-            x = layers.Dropout(dropout_rate, name=f"dropout_{i}")(x)
-        if use_residual and i % 2 == 1:
-            if prev is not None and prev.shape[-1] == x.shape[-1]:
-                x = layers.Add(name=f"residual_{i}")([prev, x])
-        prev = x if i % 2 == 0 else prev
+#     for i in range(num_layers):
+#         x = layers.Dense(
+#             units,
+#             activation=None,
+#             kernel_initializer="he_normal",
+#             name=f"dense_{i}"
+#         )(x)
+#         if use_batch_norm:
+#             x = layers.BatchNormalization(name=f"bn_{i}")(x)
+#         x = layers.Activation(activation, name=f"act_{i}")(x)
+#         if dropout_rate > 0:
+#             x = layers.Dropout(dropout_rate, name=f"dropout_{i}")(x)
+#         if use_residual and i % 2 == 1:
+#             if prev is not None and prev.shape[-1] == x.shape[-1]:
+#                 x = layers.Add(name=f"residual_{i}")([prev, x])
+#         prev = x if i % 2 == 0 else prev
 
-    outputs = layers.Dense(
-        output_dim,
-        activation="linear",
-        name="outputs"
-    )(x)
+#     outputs = layers.Dense(
+#         output_dim,
+#         activation="linear",
+#         name="outputs"
+#     )(x)
 
-    return models.Model(inputs, outputs, name="mlp_advanced")
-
-
-mlp_hp_space = {
-    "num_layers":    {"type": "Int",    "min": 1,  "max": 10,   "step": 1,      "default": 2},
-    "units":         {"type": "Choice", "values": [16, 32, 64, 128, 256, 512],  "default": 64},
-    "activation":    {"type": "Choice", "values": ["relu", "elu", "tanh"],       "default": "relu"},
-    "dropout_rate":  {"type": "Float",  "min": 0.0, "max": 0.5,   "step": 0.05,   "default": 0.0},
-    "use_batch_norm": {"type": "Boolean",                                           "default": True},
-    "use_residual":  {"type": "Boolean",                                           "default": False},
-    "learning_rate": {"type": "Float",  "min": 1e-5, "max": 1e-2, "sampling": "log", "default": 1e-3},
-}
+#     return models.Model(inputs, outputs, name="mlp_advanced")
 
 
-def mlp_compile(hp):
-    return {
-        "optimizer": optimizers.Adam(learning_rate=hp["learning_rate"]),
-        "loss":      losses.MeanSquaredError(),
-        "metrics":   [metrics.MeanSquaredError(name="mse")],
-    }
+# def mlp_compile(hp):
+#     return {
+#         "optimizer": optimizers.Adam(learning_rate=hp["learning_rate"]),
+#         "loss":      losses.MeanSquaredError(),
+#         "metrics":   [metrics.MeanSquaredError(name="mse")],
+#     }
 
 
 def build_cnn(input_dim: int, output_dim: int,
               filters: int, kernel_size: int, dense_units: int, learning_rate: float):
-    inp = layers.Input(shape=(input_dim,))
-    x = layers.Reshape((input_dim, 1))(inp)
+    inp = layers.Input(shape=(input_dim,), name="features")
+    x = layers.Reshape((input_dim, 1), name="reshape")(inp)
+
+    # two Conv1D blocks
     x = layers.Conv1D(filters, kernel_size,
-                      activation="relu", padding="same")(x)
+                      activation="relu",
+                      padding="same",
+                      name="conv1")(x)
     x = layers.Conv1D(filters, kernel_size,
-                      activation="relu", padding="same")(x)
-    x = layers.Flatten()(x)
-    x = layers.Dense(dense_units, activation="relu")(x)
-    out = layers.Dense(output_dim, activation="linear")(x)
-    return models.Model(inp, out)
+                      activation="relu",
+                      padding="same",
+                      name="conv2")(x)
+
+    x = layers.Flatten(name="flatten")(x)
+    x = layers.Dense(dense_units,
+                     activation="relu",
+                     name="dense_hidden")(x)
+
+    # instead of direct y, predict raw steps
+    raw_steps = layers.Dense(output_dim,
+                             activation=None,
+                             name="raw_steps")(x)
+    pos_steps = layers.Activation("relu",
+                                  name="positive_steps")(raw_steps)
+
+    # enforce monotonicity
+    monotonic_out = ReverseCumsum(name="monotonic_output")(pos_steps)
+
+    model = models.Model(inputs=inp,
+                         outputs=monotonic_out,
+                         name="cnn_monotonic")
+    return model
 
 
 cnn_hp_space = {
@@ -197,11 +224,6 @@ def build_autoencoder(
     dropout_rate: float,
     learning_rate: float
 ) -> tf.keras.Model:
-    """
-    A simple MLP Autoencoder for tabular data:
-      • Encodes inputs to a bottleneck of size `latent_dim`
-      • Decodes back to `output_dim` (typically = input_dim)
-    """
     inputs = layers.Input(shape=(input_dim,), name="features")
 
     # Encoder
@@ -236,11 +258,80 @@ def autoencoder_compile(hp):
     }
 
 
+def build_mlp(input_dim: int,
+              output_dim: int,
+              num_layers: int,
+              units: int,
+              learning_rate: float,
+              activation: str = "relu",
+              dropout_rate: float = 0.0,
+              use_batch_norm: bool = True,
+              use_residual: bool = False,
+              ) -> tf.keras.Model:
+    """
+    Builds a robust MLP whose output vector is guaranteed non-increasing:
+      y_1 >= y_2 >= ... >= y_output_dim
+    """
+    inputs = layers.Input(shape=(input_dim,), name="features")
+    x = inputs
+    prev = None
+
+    # hidden body
+    for i in range(num_layers):
+        x = layers.Dense(units,
+                         activation=None,
+                         kernel_initializer="he_normal",
+                         name=f"dense_{i}")(x)
+        if use_batch_norm:
+            x = layers.BatchNormalization(name=f"bn_{i}")(x)
+        x = layers.Activation(activation, name=f"act_{i}")(x)
+        if dropout_rate > 0:
+            x = layers.Dropout(dropout_rate, name=f"dropout_{i}")(x)
+        if use_residual and i % 2 == 1 and prev is not None:
+            if prev.shape[-1] == x.shape[-1]:
+                x = layers.Add(name=f"residual_{i}")([prev, x])
+        if i % 2 == 0:
+            prev = x
+
+    # predict raw steps
+    raw_steps = layers.Dense(output_dim,
+                             activation=None,
+                             name="raw_steps")(x)
+    # enforce non-negativity
+    positive_steps = layers.Activation("relu",
+                                       name="positive_steps")(raw_steps)
+
+    monotonic_output = ReverseCumsum(name="monotonic_output")(positive_steps)
+
+    model = models.Model(
+        inputs=inputs, outputs=monotonic_output, name="mlp_monotonic")
+    return model
+
+
+mlp_hp_space = {
+    "num_layers":    {"type": "Int",    "min": 1,  "max": 10,   "step": 1,      "default": 2},
+    "units":         {"type": "Choice", "values": [16, 32, 64, 128, 256, 512],  "default": 64},
+    "activation":    {"type": "Choice", "values": ["relu", "elu", "tanh"],       "default": "relu"},
+    "dropout_rate":  {"type": "Float",  "min": 0.0, "max": 0.5,   "step": 0.05,   "default": 0.0},
+    "use_batch_norm": {"type": "Boolean",                                           "default": True},
+    "use_residual":  {"type": "Boolean",                                           "default": False},
+    "learning_rate": {"type": "Float",  "min": 1e-5, "max": 1e-2, "sampling": "log", "default": 1e-3},
+}
+
+
+def mlp_compile(hp):
+    return {
+        "optimizer": optimizers.Adam(learning_rate=hp["learning_rate"]),
+        "loss":      losses.MeanSquaredError(),
+        "metrics":   [metrics.MeanSquaredError(name="mse")],
+    }
+
+
 # ─── architectures dict ───────────────────────────────────────────────────────
 architectures = {
     "mlp": {"builder": build_mlp, "hp": mlp_hp_space, "compile_fn": mlp_compile},
     "cnn": {"builder": build_cnn, "hp": cnn_hp_space, "compile_fn": cnn_compile},
-    "transfomer": {"builder":    build_transformer, "hp": transformer_hp_space, "compile_fn": transformer_compile, },
+    # "transfomer": {"builder":    build_transformer, "hp": transformer_hp_space, "compile_fn": transformer_compile, },
     "autoencoder": {
         "builder":    build_autoencoder,
         "hp":         autoencoder_hp_space,

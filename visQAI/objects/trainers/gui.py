@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import keras
+import numpy as np
 keras.config.enable_unsafe_deserialization()
 
 
@@ -97,7 +98,7 @@ class PredictorGUI(QMainWindow):
         # categorical inputs
         cat_opts = {
             'Protein_type': ['None', 'poly-hIgG', 'BSA', 'BGG'],
-            'Buffer_type':       ['Histidine', 'PBS'],
+            'Buffer_type':       ['Histidine', 'PBS', 'Accetate'],
             'Sugar_type':        ['None', 'Trehalose', 'Sucrose'],
             'Surfactant_type':   ['None', 'tween-20', 'tween-80'],
         }
@@ -169,32 +170,59 @@ class PredictorGUI(QMainWindow):
                     val = widget.currentText()
                     data[name] = None if val == 'None' else val
 
-            # predict
+            # predict + confidence
             df_new = pd.DataFrame([data])
-            y_pred = self.predictor.predict(df_new)[0]
-
-            # show numeric results
-            lines = [f"{col}: {y_pred[i]:.3f}" for i,
-                     col in enumerate(target_cols)]
+            preds, confs = self.predictor.predict(
+                df_new, return_confidence=True)
+            y_pred = preds[0]
+            y_conf = confs[0]
+            print(y_conf)
+            # show numeric results with ± confidence
+            lines = [
+                f"{col}: {y_pred[i]:.3f} ± {y_conf[i]:.3f}"
+                for i, col in enumerate(target_cols)
+            ]
             self.result_label.setText("\n".join(lines))
 
-            # plot
-            self._plot_curve(y_pred)
+            # plot with confidence shading
+            # make sure your _plot_curve can accept a second argument for confidence
+            self._plot_curve(y_pred, y_conf)
 
         except Exception as e:
             QMessageBox.critical(self, "Prediction Error", str(e))
-            raise e
+            raise
 
-    def _plot_curve(self, viscosities):
-        """Draw viscosity vs. shear-rate curve."""
+    def _plot_curve(self, viscosities: np.ndarray, confidences: np.ndarray):
+        """Draw viscosity vs. shear-rate curve with a confidence band."""
         self.figure.clear()
         ax = self.figure.add_subplot(111)
-        ax.plot(shear_rates, viscosities, marker='o', linestyle='-')
+
+        # your known shear‐rate vector (same length as viscosities)
+        sr = shear_rates
+
+        # plot the mean prediction
+        ax.plot(sr, viscosities, marker='o', linestyle='-', label='Prediction')
+
+        # convert confidence ∈ [0,1] into a half‐width band:
+        #   when confidence=1 → delta=0 (no band),
+        #   when confidence=0 → delta=viscosities (full range ±viscosity)
+        delta = (1.0 - confidences) * viscosities
+        lower = viscosities - delta
+        upper = viscosities + delta
+
+        # fill the band (you can also vary alpha by confidences if you like)
+        ax.fill_between(sr, lower, upper,
+                        alpha=0.3,
+                        label='Confidence band')
+
+        # styling
         ax.set_xscale('log')
         ax.set_xlabel("Shear Rate")
         ax.set_ylabel("Viscosity")
         ax.set_title("Predicted Viscosity Curve")
         ax.grid(True, which='both', ls='--', lw=0.5)
+        ax.legend()
+
         self.canvas.draw()
 
 

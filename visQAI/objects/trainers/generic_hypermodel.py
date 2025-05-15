@@ -38,7 +38,8 @@ class GenericHyperModel(kt.HyperModel):
 
         # Sanity-check that your hyperparam names match builder signature:
         sig = inspect.signature(self.builder)
-        allowed = set(sig.parameters) - {"input_dim", "output_dim"}
+        allowed = set(sig.parameters) - \
+            {"input_dim", "output_dim"}
         extra = set(hyperparam_space) - allowed
         if extra:
             raise ValueError(f"Unknown HPs for builder: {extra}")
