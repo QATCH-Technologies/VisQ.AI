@@ -50,34 +50,22 @@ for arch in archs:
         print(
             f"[ERROR] {arch} output shape {preds.shape} ≠ (n, {len(SHEARS)})", file=sys.stderr)
         continue
-
-    # now make one scatter‐plot per shear‐rate
     for idx, shear in enumerate(SHEARS):
         col = TARGET_COLS[idx]
         y_true = df[col].values
         y_pred = preds[:, idx]
-
-        # ——— filter out NaNs ———
         mask = ~np.isnan(y_true) & ~np.isnan(y_pred)
         if not mask.all():
             dropped = np.count_nonzero(~mask)
-            print(f"⚠ Dropped {dropped} NaN entries for shear={shear}")
+            print(f"Dropped {dropped} NaN entries for shear={shear}")
         y_true_f = y_true[mask]
         y_pred_f = y_pred[mask]
-
-        # skip if nothing left
         if y_true_f.size == 0:
-            print(f"⚠ No valid data for shear={shear}, skipping plot.")
+            print(f"No valid data for shear={shear}, skipping plot.")
             continue
-
-        # Compute metrics
         r2 = r2_score(y_true_f, y_pred_f)
         mae = mean_absolute_error(y_true_f, y_pred_f)
-
-        # Setup figure
         fig, ax = plt.subplots(figsize=(6, 4))
-
-        # Scatter points
         ax.scatter(
             y_true_f,
             y_pred_f,
@@ -87,14 +75,10 @@ for arch in archs:
             linewidth=0.5,
             label="Prediction vs Actual"
         )
-
-        # Ideal line
         lo, hi = min(y_true_f.min(), y_pred_f.min()), max(
             y_true_f.max(), y_pred_f.max())
         ax.plot([lo, hi], [lo, hi], linestyle='--',
                 linewidth=1.5, label="Ideal (y = x)")
-
-        # Annotate metrics
         ax.text(
             0.05, 0.95,
             f"$R^2$ = {r2:.2f}\nMAE = {mae:.2f}",
@@ -102,21 +86,15 @@ for arch in archs:
             va="top",
             bbox=dict(boxstyle="round,pad=0.3", alpha=0.2)
         )
-
-        # Labels & title
         ax.set_xlabel("Actual Viscosity")
         ax.set_ylabel("Predicted Viscosity")
         ax.set_title(f"{arch} — viscosity @ {shear} s⁻¹")
-
-        # Grid & legend
         ax.grid(which="both", linestyle=":", linewidth=0.5, alpha=0.7)
         ax.legend(loc="lower right", fontsize="small")
-
-        # Save
         fig.tight_layout()
         out_name = f"{arch}_viscosity_{shear}.png"
         out_path = os.path.join(arch_path, out_name)
         fig.savefig(out_path, dpi=150)
         plt.close(fig)
 
-        print(f"✔ Saved: {out_path}")
+        print(f"Saved: {out_path}")
