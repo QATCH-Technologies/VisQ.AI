@@ -10,74 +10,76 @@ from custom_layers import ReverseCumsum
 # ─── 1) Define your architectures ────────────────────────────────────────────
 
 
-def invert(x):
-    # Keras can now serialize/deserialize this by name
-    return tf.subtract(1.0, x)
+def monotonic_penalty(y_true, y_pred):
+    diff = y_pred[:, :-1] - y_pred[:, 1:]
+    violations = tf.nn.relu(-diff)
+    return tf.reduce_mean(violations)
 
 
-# def build_mlp(input_dim: int,
-#               output_dim: int,
-#               num_layers: int,
-#               units: int,
-#               learning_rate: float,
-#               activation: str = "relu",
-#               dropout_rate: float = 0.0,
-#               use_batch_norm: bool = True,
-#               use_residual: bool = False,
-
-#               ) -> tf.keras.Model:
-#     """
-#     Builds a more robust MLP with optional batch-norm, dropout, and residual connections.
-
-#     Args:
-#       input_dim: Dimension of input feature vector.
-#       output_dim: Dimension of output vector.
-#       num_layers: Total number of Dense layers in the body.
-#       units: Number of units in each Dense layer.
-#       activation: Which activation to use in hidden layers.
-#       dropout_rate: Dropout rate (0.0 = no dropout).
-#       use_batch_norm: Whether to insert BatchNormalization after each Dense.
-#       use_residual: Whether to add a residual skip every two layers.
-
-#     Returns:
-#       A compiled tf.keras.Model (without optimizer & loss).
-#     """
-#     inputs = layers.Input(shape=(input_dim,), name="features")
-#     x = inputs
-#     prev = None
-
-#     for i in range(num_layers):
-#         x = layers.Dense(
-#             units,
-#             activation=None,
-#             kernel_initializer="he_normal",
-#             name=f"dense_{i}"
-#         )(x)
-#         if use_batch_norm:
-#             x = layers.BatchNormalization(name=f"bn_{i}")(x)
-#         x = layers.Activation(activation, name=f"act_{i}")(x)
-#         if dropout_rate > 0:
-#             x = layers.Dropout(dropout_rate, name=f"dropout_{i}")(x)
-#         if use_residual and i % 2 == 1:
-#             if prev is not None and prev.shape[-1] == x.shape[-1]:
-#                 x = layers.Add(name=f"residual_{i}")([prev, x])
-#         prev = x if i % 2 == 0 else prev
-
-#     outputs = layers.Dense(
-#         output_dim,
-#         activation="linear",
-#         name="outputs"
-#     )(x)
-
-#     return models.Model(inputs, outputs, name="mlp_advanced")
+def combined_loss(y_true, y_pred):
+    mse_loss = tf.reduce_mean(tf.square(y_true - y_pred))
+    mono_loss = monotonic_penalty(y_true, y_pred)
+    return mse_loss + 0.1 * mono_loss
 
 
-# def mlp_compile(hp):
-#     return {
-#         "optimizer": optimizers.Adam(learning_rate=hp["learning_rate"]),
-#         "loss":      losses.MeanSquaredError(),
-#         "metrics":   [metrics.MeanSquaredError(name="mse")],
-#     }
+def build_physics_nn(input_dim: int, output_dim: int,
+                     interaction_units: int, dense_units: int,
+                     bottleneck_units: int, learning_rate: float):
+
+    inp = layers.Input(shape=(input_dim,), name="features")
+
+    # Interaction layer (Physics-informed)
+    interaction = layers.Dense(
+        interaction_units, activation="relu", name="interaction_dense")(inp)
+
+    # Concatenate raw input and interaction embeddings
+    x = layers.Concatenate(name="concat_interactions")([inp, interaction])
+
+    # Residual Block 1
+    dense1 = layers.Dense(dense_units, activation="relu", name="dense_1")(x)
+    dense2 = layers.Dense(dense_units, activation="relu",
+                          name="dense_2")(dense1)
+    res1 = layers.Concatenate(name="residual_1")([x, dense2])
+
+    # Residual Block 2
+    dense3 = layers.Dense(dense_units, activation="relu", name="dense_3")(res1)
+    dense4 = layers.Dense(dense_units, activation="relu",
+                          name="dense_4")(dense3)
+    res2 = layers.Concatenate(name="residual_2")([res1, dense4])
+
+    # Bottleneck
+    bottleneck = layers.Dense(
+        bottleneck_units, activation="relu", name="bottleneck")(res2)
+
+    # Predict positive steps (pre-monotonic)
+    raw_steps = layers.Dense(output_dim, activation=None,
+                             name="raw_steps")(bottleneck)
+    pos_steps = layers.Activation("relu", name="positive_steps")(raw_steps)
+
+    # Monotonic decreasing output
+    monotonic_out = ReverseCumsum(name="monotonic_output")(pos_steps)
+
+    model = models.Model(inputs=inp, outputs=monotonic_out,
+                         name="physics_nn_monotonic")
+
+    return model
+
+
+# Hyperparameter tuning space
+physics_nn_hp_space = {
+    "interaction_units": {"type": "Choice", "values": [16, 32, 64, 128], "default": 32},
+    "dense_units":       {"type": "Choice", "values": [32, 64, 128, 256], "default": 128},
+    "bottleneck_units":  {"type": "Choice", "values": [16, 32, 64],       "default": 32},
+    "learning_rate":     {"type": "Float",  "min": 1e-5, "max": 1e-2, "sampling": "log", "default": 1e-3},
+}
+
+
+def physics_nn_compile(hp):
+    return {
+        "optimizer": optimizers.Adam(learning_rate=hp["learning_rate"]),
+        "loss":      combined_loss,
+        "metrics":   [metrics.MeanSquaredError(name="mse")],
+    }
 
 
 def build_cnn(input_dim: int, output_dim: int,
@@ -314,14 +316,15 @@ def mlp_compile(hp):
 
 # ─── architectures dict ───────────────────────────────────────────────────────
 architectures = {
-    "mlp": {"builder": build_mlp, "hp": mlp_hp_space, "compile_fn": mlp_compile},
-    "cnn": {"builder": build_cnn, "hp": cnn_hp_space, "compile_fn": cnn_compile},
-    # "transfomer": {"builder":    build_transformer, "hp": transformer_hp_space, "compile_fn": transformer_compile, },
-    "autoencoder": {
-        "builder":    build_autoencoder,
-        "hp":         autoencoder_hp_space,
-        "compile_fn": autoencoder_compile,
-    },
+    "physics_nn": {"builder": build_physics_nn, "hp": physics_nn_hp_space, "compile_fn": physics_nn_compile},
+    # "mlp": {"builder": build_mlp, "hp": mlp_hp_space, "compile_fn": mlp_compile},
+    # "cnn": {"builder": build_cnn, "hp": cnn_hp_space, "compile_fn": cnn_compile},
+    # # "transfomer": {"builder":    build_transformer, "hp": transformer_hp_space, "compile_fn": transformer_compile, },
+    # "autoencoder": {
+    #     "builder":    build_autoencoder,
+    #     "hp":         autoencoder_hp_space,
+    #     "compile_fn": autoencoder_compile,
+    # },
 }
 
 # ─── 2) Load data once ─────────────────────────────────────────────────────────
@@ -331,7 +334,7 @@ df = pd.read_csv("content/formulation_data_05072025.csv")
 performance = {}
 
 for name, cfg in architectures.items():
-    print(f"\n▶▶▶ Training {name} ◀◀◀")
+    print(f"\n>>> Training {name} <<<")
     out_dir = os.path.join("visQAI", "objects", "architectures", name)
     os.makedirs(out_dir, exist_ok=True)
 

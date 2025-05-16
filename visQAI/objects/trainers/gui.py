@@ -11,7 +11,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import keras
 import numpy as np
-keras.config.enable_unsafe_deserialization()
+# keras.config.enable_unsafe_deserialization()
 
 
 # directory containing one subfolder per architecture (each with model+preprocessor)

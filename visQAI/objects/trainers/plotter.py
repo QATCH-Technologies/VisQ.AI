@@ -28,27 +28,20 @@ for arch in archs:
     arch_path = os.path.join(ARCH_ROOT, arch)
     model_path = os.path.join(arch_path, MODEL_FN)
     prep_path = os.path.join(arch_path, PREP_FN)
-
-    # sanity check
     if not os.path.isfile(model_path) or not os.path.isfile(prep_path):
         print(
             f"[WARN] skipping {arch}: missing {MODEL_FN} or {PREP_FN}", file=sys.stderr)
         continue
-
-    # load predictor
     try:
         predictor = ViscosityPredictor(model_path, prep_path)
     except Exception as e:
         print(f"[ERROR] loading {arch}: {e}", file=sys.stderr)
         continue
-
-    # run through all rows once
-    preds = predictor.predict(FEATURE_DF)   # shape: (n_samples, 5)
-    # ensure it's a numpy array
+    preds = predictor.predict(FEATURE_DF)
     preds = np.asarray(preds)
     if preds.ndim != 2 or preds.shape[1] != len(SHEARS):
         print(
-            f"[ERROR] {arch} output shape {preds.shape} ≠ (n, {len(SHEARS)})", file=sys.stderr)
+            f"[ERROR] {arch} output shape {preds.shape} != (n, {len(SHEARS)})", file=sys.stderr)
         continue
     for idx, shear in enumerate(SHEARS):
         col = TARGET_COLS[idx]
