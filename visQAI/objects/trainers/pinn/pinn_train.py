@@ -31,7 +31,32 @@ X_train, X_val, y_train, y_val = train_test_split(
 )
 
 feature_names = loader.NUMERIC_FEATURES
+"""
+- MonotonicIncreasingConstraint(feature_names, ["Protein_concentration", "Sugar_concentration"]):
+    Both protein and sugar raise solution viscosity as their concentrations increase.
 
+- MonotonicDecreasingConstraint(feature_names, ["Temperature", "Surfactant_concentration"]):
+    Higher temperature reduces viscosity via thermal agitation, and surfactants lower interfacial drag.
+    
+- FlatSlopeConstraint(feature_names, "Buffer_pH"):
+    Outside of charge-based aggregation effects, buffer pH has negligible net impact-enforce zero slope globally.
+
+---- MORE INTERESTING IDEAS ----
+- ShearThinningConstraint():
+    Many fluids shear-hin: viscosity decreases with increasing shear rate.
+
+- ArrheniusConstraint(feature_names, "Temperature"):
+    Viscosity typically follows an Arrhenius law: log(viscosity) inverse proportional 1/T.
+
+- GaussianBellAroundPIConstraint(feature_names, "Buffer_pH", "PI_mean"):
+    Protein solutions exhibit a bell-shaped viscosity peak at the isoelectric point (pH ~ pI).
+
+- EinsteinDiluteLimitConstraint(feature_names, "Protein_concentration", threshold=0.05):
+    In the dilute limit (phi -> 0), relative viscosity → 1 + 2.5·phi (Einstein's relation).
+
+- ExcludedVolumeDivergenceConstraint(feature_names, "Protein_concentration"):
+    At high concentrations, crowding causes a rapid, convex-up rise in viscosity as phi→phi_max.
+"""
 constraints = [
     MonotonicIncreasingConstraint(
         feature_names, ["Protein_concentration", "Sugar_concentration"], weight=1e-2),
