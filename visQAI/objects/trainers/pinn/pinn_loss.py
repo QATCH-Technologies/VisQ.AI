@@ -9,28 +9,27 @@ def composite_loss(
     y_true: tf.Tensor,
     constraints: List[BaseConstraint],
     data_weight: float = 1.0,
+    eps: float = 1e-8
 ) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
-    if constraints is None:
-        constraints = getattr(model, "_physics_constraints", [])
-
-    if x is None:
-        raise ValueError("composite_loss: received x=None")
-    x = tf.debugging.check_numerics(
-        x, message="composite_loss: x contains NaN or Inf")
+    """
+    Returns (total_loss, data_loss, phys_loss) with phys_loss scaled so that
+    data_weight * data_loss ≈ scaled_phys_loss each batch.
+    """
     y_pred = model(x, training=True)
     y_true = tf.cast(y_true, y_pred.dtype)
     data_loss = tf.reduce_mean(tf.square(y_pred - y_true))
-    phys_losses = []
-    for c in constraints:
+
+    phys_terms = []
+    for c in constraints or getattr(model, "_physics_constraints", []):
         idxs = getattr(c, "_indices", None)
         if isinstance(idxs, list) and len(idxs) == 0:
             continue
-        phys_losses.append(c(model, x))
-    if phys_losses:
-        phys_loss = tf.add_n(phys_losses)
-    else:
-        phys_loss = tf.constant(0.0, dtype=y_pred.dtype)
-    total_loss = data_weight * data_loss + phys_loss
+        phys_terms.append(c(model, x))
+    phys_loss = tf.add_n(phys_terms) if phys_terms else tf.constant(
+        0.0, dtype=y_pred.dtype)
+    w_phys = (data_weight * data_loss) / (phys_loss + eps)
+    total_loss = data_weight * data_loss + w_phys * phys_loss
+
     return total_loss, data_loss, phys_loss
 
 
@@ -46,18 +45,13 @@ class CompositeLossWithUncertainty:
                  x:         tf.Tensor,
                  constraints: List[BaseConstraint],
                  ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
-        # 1) data term
         data_loss = tf.reduce_mean(
             tf.square(y_pred - tf.cast(y_true, y_pred.dtype)))
-
-        # 2) physics terms
         phys_losses = []
         for c in constraints:
             phys_losses.append(c(model, x))
         phys_sum = tf.add_n(phys_losses) if phys_losses else tf.constant(
             0.0, dtype=y_pred.dtype)
-
-        # 3) uncertainty weighting
         all_losses = [data_loss] + phys_losses
         total = 0.0
         for i, L in enumerate(all_losses):
