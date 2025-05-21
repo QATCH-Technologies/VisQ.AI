@@ -58,7 +58,7 @@ class Validator:
     ):
         """
         Draws a scatter-plot of true vs. predicted values for one target,
-        with identity line, R²/MAE annotation, grid, and legend.
+        with identity line, ±10% error region, R²/MAE annotation, grid, and legend.
         """
         # compute metrics
         r2 = r2_score(y_true, y_pred)
@@ -77,12 +77,26 @@ class Validator:
             label="Prediction vs Actual"
         )
 
-        # identity line
+        # identity line domain
         vmin = min(y_true.min(), y_pred.min())
         vmax = max(y_true.max(), y_pred.max())
+        x_line = np.linspace(vmin, vmax, 100)
+
+        # ±10% bounds
+        lower = 0.9 * x_line
+        upper = 1.1 * x_line
+        ax.fill_between(
+            x_line,
+            lower,
+            upper,
+            alpha=0.2,
+            label="±10% error region"
+        )
+
+        # identity line
         ax.plot(
-            [vmin, vmax],
-            [vmin, vmax],
+            x_line,
+            x_line,
             linestyle="--",
             linewidth=2,
             label="Ideal (y = x)"
