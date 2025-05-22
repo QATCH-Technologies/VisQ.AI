@@ -65,6 +65,7 @@ class MonotonicIncreasingConstraint(BaseConstraint):
         self.indices_tensor = tf.constant(self._indices, dtype=tf.int32)
 
     def __call__(self, model, x, y_pred=None):
+        x = tf.convert_to_tensor(x)
         if not self._indices:
             return tf.constant(0.0, dtype=x.dtype)
 
@@ -124,6 +125,7 @@ class MonotonicDecreasingConstraint(BaseConstraint):
         self.indices_tensor = tf.constant(self._indices, dtype=tf.int32)
 
     def __call__(self, model, x, y_pred=None):
+        x = tf.convert_to_tensor(x)
         if not self._indices:
             return tf.constant(0.0, dtype=x.dtype)
 
@@ -172,6 +174,7 @@ class FlatSlopeConstraint(BaseConstraint):
         self.idx = feature_names.index(feature)
 
     def __call__(self, model, x, y_pred=None):
+        x = tf.convert_to_tensor(x)
         with tf.GradientTape() as tape:
             tape.watch(x)
             u = model(x, training=True)
@@ -229,6 +232,7 @@ class ShearThinningConstraint(BaseConstraint):
             3. Apply `tf.nn.relu(-diffs)` to isolate only negative diffs (violations).
             4. Square, average over all entries, and multiply by `weight`.
         """
+        x = tf.convert_to_tensor(x)
         u = y_pred if y_pred is not None else model(x, training=True)
         diffs = u[:, :-1] - u[:, 1:]
         violations = tf.nn.relu(-diffs)
@@ -296,6 +300,7 @@ class ArrheniusConstraint(BaseConstraint):
                Var(G) = mean((G - mean(G))^2).
             6. Multiply by `weight` to produce the final penalty.
         """
+        x = tf.convert_to_tensor(x)
         with tf.GradientTape() as tape:
             tape.watch(x)
             u = model(x, training=True)
@@ -379,6 +384,7 @@ class GaussianBellAroundPIConstraint(BaseConstraint):
         x: tf.Tensor,
         y_pred: Optional[tf.Tensor] = None
     ) -> tf.Tensor:
+        x = tf.convert_to_tensor(x)
         with tf.GradientTape() as tape1:
             tape1.watch(x)
             u_all = model(x, training=True)
@@ -447,6 +453,7 @@ class EinsteinDiluteLimitConstraint(BaseConstraint):
         self.thresh = threshold
 
     def __call__(self, model: tf.keras.Model, x: tf.Tensor, y_pred=None) -> tf.Tensor:
+        x = tf.convert_to_tensor(x)
         u_all = model(x, training=True)
         u_avg = tf.reduce_mean(u_all, axis=1)
         phi = x[:, self.idx]
@@ -506,6 +513,7 @@ class ExcludedVolumeDivergenceConstraint(BaseConstraint):
 
     def __call__(self, model, x, y_pred=None):
         # one tape, persistent so we can do two .gradient() calls
+        x = tf.convert_to_tensor(x)
         with tf.GradientTape(persistent=True) as tape:
             tape.watch(x)
             u = y_pred if y_pred is not None else model(x, training=True)

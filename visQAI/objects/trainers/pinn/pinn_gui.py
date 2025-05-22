@@ -29,9 +29,12 @@ class ViscosityPredictorGUI(QtWidgets.QWidget):
         self.feature_columns = X_df.columns.tolist()
         self.target_names = self.loader.TARGET_COLUMNS
 
-        # Load trained model
-        self.model = tf.keras.models.load_model(model_path, compile=False)
-        # Initialize Validator for prediction
+        from pinn_net import Sine
+        self.model = tf.keras.models.load_model(
+            "best_pinn_model.h5",
+            custom_objects={"Sine": Sine},
+            compile=False
+        )
         self.validator = Validator(
             model=self.model,
             preprocessor=self.loader.preprocessor,

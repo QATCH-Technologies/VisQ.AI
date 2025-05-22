@@ -18,15 +18,20 @@ def composite_loss(
     y_pred = model(x, training=True)
     y_true = tf.cast(y_true, y_pred.dtype)
     data_loss = tf.reduce_mean(tf.square(y_pred - y_true))
-
-    phys_terms = []
+    phys_losses: List[tf.Tensor] = []
     for c in constraints or getattr(model, "_physics_constraints", []):
         idxs = getattr(c, "_indices", None)
         if isinstance(idxs, list) and len(idxs) == 0:
             continue
-        phys_terms.append(c(model, x))
-    phys_loss = tf.add_n(phys_terms) if phys_terms else tf.constant(
-        0.0, dtype=y_pred.dtype)
+        r = c(model, x)
+        phys_losses.append(tf.reduce_mean(tf.square(r)))
+
+    phys_loss = (
+        tf.add_n(phys_losses)
+        if phys_losses
+        else tf.constant(0.0, dtype=y_pred.dtype)
+    )
+
     w_phys = (data_weight * data_loss) / (phys_loss + eps)
     total_loss = data_weight * data_loss + w_phys * phys_loss
 

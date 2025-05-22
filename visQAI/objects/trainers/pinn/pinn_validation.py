@@ -170,8 +170,12 @@ if __name__ == "__main__":
     loader.load()
     loader.build_preprocessor()
     X_df, y_df = loader.split(preprocess=False)  # raw features DataFrame
-
-    model = tf.keras.models.load_model("best_pinn_model.h5", compile=False)
+    from pinn_net import Sine
+    model = tf.keras.models.load_model(
+        "best_pinn_model.h5",
+        custom_objects={"Sine": Sine},
+        compile=False
+    )
     # re-compile if you plan to evaluate or retrain
     model.compile(
         optimizer="adam",
