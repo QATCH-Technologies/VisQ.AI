@@ -44,16 +44,18 @@ class ViscosityPredictorGUI(QtWidgets.QWidget):
         # Keep track of which QLineEdits to manage for each category
         self.autofill_cols = {'MW', 'PI_mean', 'PI_range', 'Buffer_pH'}
         self.categorical = {
-            'Protein_type':    ['None', 'BSA', 'poly-hIgG', 'BGG'],
+            'Protein_type':    ['None', 'BSA', 'poly-hIgG', 'BGG', "Bevacizumab", "Adalimumab"],
             'Buffer_type':     ['None', 'PBS', 'acetate', 'Histidine'],
             'Sugar_type':      ['None', 'Sucrose', 'Trehalose'],
             'Surfactant_type': ['None', 'Tween-20', 'Tween-80'],
         }
 
         self.protein_defaults = {
+            'Adalimumab': {'MW': 148,  'PI_mean': 8.7, 'PI_range': 0.3},
             'BSA':       {'MW': 66,  'PI_mean': 4.7, 'PI_range': 0.3},
             'poly-hIgG': {'MW': 150, 'PI_mean': 7.6, 'PI_range': 1.0},
             'BGG':       {'MW': 150, 'PI_mean': 6.6, 'PI_range': 1.0},
+            'Bevacizumab': {'MW': 149, 'PI_mean': 8.3, 'PI_range': 0.3},
             'None':      {'MW': 0,   'PI_mean': 0.0, 'PI_range': 0.0},
         }
         self.buffer_defaults = {

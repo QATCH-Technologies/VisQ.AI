@@ -97,7 +97,7 @@ class PredictorGUI(QMainWindow):
 
         # categorical inputs
         cat_opts = {
-            'Protein_type': ['None', 'poly-hIgG', 'BSA', 'BGG'],
+            'Protein_type': ['None', 'poly-hIgG', 'BSA', 'BGG', 'Bevacizumab', 'Adalimumab'],
             'Buffer_type':       ['Histidine', 'PBS', 'Accetate'],
             'Sugar_type':        ['None', 'Trehalose', 'Sucrose'],
             'Surfactant_type':   ['None', 'tween-20', 'tween-80'],

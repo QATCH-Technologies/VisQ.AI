@@ -87,10 +87,10 @@ class MLPHyperModel(HyperModel):
                                 "Temperature", weight=w_arr),
             GaussianBellAroundPIConstraint(
                 self.feature_names, "Buffer_pH", "PI_mean", weight=w_bell),
-            EinsteinDiluteLimitConstraint(self.feature_names, "Protein_concentration", threshold=w_ein_thresh,
-                                          weight=w_ein_dil),
-            ExcludedVolumeDivergenceConstraint(
-                self.feature_names, "Protein_concentration", weight=w_excl),
+            # EinsteinDiluteLimitConstraint(self.feature_names, "Protein_concentration", threshold=w_ein_thresh,
+            #                               weight=w_ein_dil),
+            # ExcludedVolumeDivergenceConstraint(
+            #     self.feature_names, "Protein_concentration", weight=w_excl),
         ]
 
         # Input

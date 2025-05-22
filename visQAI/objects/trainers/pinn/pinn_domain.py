@@ -13,7 +13,7 @@ class DataLoader:
     NUMERIC_FEATURES = [
         "MW", "PI_mean", "PI_range", "Protein_concentration",
         "Temperature", "Buffer_pH", "Sugar_concentration",
-        "Surfactant_concentration",
+        "Surfactant_concentration", "Buffer_conc", "NaCl",
     ]
     CATEGORICAL_FEATURES = [
         "Protein_type", "Buffer_type", "Sugar_type", "Surfactant_type",
