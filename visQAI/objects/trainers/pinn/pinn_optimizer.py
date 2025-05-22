@@ -50,7 +50,10 @@ class PINNBayes(BayesianOptimization):
                            [getattr(tf.keras.metrics, m)() for m in self.metrics if isinstance(m, str)]}
         for epoch in range(epochs):
             for m in train_metric_objs.values():
-                m.reset_states()
+                m.reset_state()      # singular! there is no reset_states()
+            for m in val_metric_objs.values():
+                m.reset_state()
+
             for x_batch, y_batch in train_ds:
                 with tf.GradientTape() as tape:
                     total_loss, data_loss, phys_loss = self.loss_fn(
@@ -63,7 +66,10 @@ class PINNBayes(BayesianOptimization):
                     zip(grads, model.trainable_variables))
                 train_metric_objs['train_loss'].update_state(total_loss)
             for m in val_metric_objs.values():
-                m.reset_states()
+                if hasattr(m, 'reset_state'):
+                    m.reset_state()
+                elif hasattr(m, 'reset_states'):
+                    m.reset_states()
             for x_batch, y_batch in val_ds:
                 total_loss, *_ = self.loss_fn(
                     model, x_batch, y_batch,

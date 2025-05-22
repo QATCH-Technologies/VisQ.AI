@@ -3,8 +3,9 @@
 from typing import Sequence
 from keras import Model, layers, regularizers, optimizers
 from keras_tuner import HyperModel, HyperParameters
-
+from tensorflow.keras.layers import Layer
 import tensorflow as tf
+from tensorflow.keras.utils import register_keras_serializable
 
 from pinn_constraints import (
     MonotonicIncreasingConstraint,
@@ -16,6 +17,20 @@ from pinn_constraints import (
     EinsteinDiluteLimitConstraint,
     ExcludedVolumeDivergenceConstraint,
 )
+
+
+@register_keras_serializable(package='Custom', name='Sine')
+class Sine(Layer):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def call(self, inputs):
+        return tf.sin(inputs)
+
+    def get_config(self):
+        # No extra args to serialize, but still include base config
+        config = super().get_config()
+        return config
 
 
 class MLPHyperModel(HyperModel):
@@ -87,8 +102,9 @@ class MLPHyperModel(HyperModel):
             prev = x
             x = layers.Dense(
                 units, kernel_regularizer=regularizers.l2(l2_reg))(x)
+
             if activation == "sine":
-                x = tf.sin(x)
+                x = Sine(name=f"sine_{i}")(x)
             else:
                 x = layers.Activation(activation)(x)
             x = layers.Dropout(dropout_rate)(x)
@@ -99,8 +115,7 @@ class MLPHyperModel(HyperModel):
                 x = layers.Add()([x, proj])
 
         # Final output layer: linear, then enforce non-negativity via softplus
-        out = layers.Dense(self.output_dim)(x)
-        out = tf.nn.softplus(out)
+        out = layers.Dense(self.output_dim, activation='softplus')(x)
 
         model = Model(inputs=inp, outputs=out)
         model.compile(
