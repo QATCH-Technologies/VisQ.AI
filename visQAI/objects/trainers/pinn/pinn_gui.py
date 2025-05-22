@@ -273,7 +273,7 @@ class ViscosityPredictorGUI(QtWidgets.QWidget):
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
-    data_csv = os.path.join('content', 'formulation_data_05152025.csv')
+    data_csv = os.path.join('content', 'formulation_data_05222025.csv')
     model_file = 'best_pinn_model.h5'
 
     gui = ViscosityPredictorGUI(csv_path=data_csv, model_path=model_file)

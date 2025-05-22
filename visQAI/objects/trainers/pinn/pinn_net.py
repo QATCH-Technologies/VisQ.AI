@@ -103,19 +103,19 @@ class MLPHyperModel(HyperModel):
             x = layers.Dense(
                 units, kernel_regularizer=regularizers.l2(l2_reg))(x)
 
-            if activation == "sine":
-                x = Sine(name=f"sine_{i}")(x)
-            else:
-                x = layers.Activation(activation)(x)
+            # if activation == "sine":
+            #     x = Sine(name=f"sine_{i}")(x)
+            # else:
+            x = layers.Activation(activation)(x)
             x = layers.Dropout(dropout_rate)(x)
 
-            # # Every 2 layers, project prev and add
-            # if i % 2 == 1:
-            #     proj = layers.Dense(units, use_bias=False)(prev)
-            #     x = layers.Add()([x, proj])
+            # Every 2 layers, project prev and add
+            if i % 2 == 1:
+                proj = layers.Dense(units, use_bias=False)(prev)
+                x = layers.Add()([x, proj])
 
         # Final output layer: linear, then enforce non-negativity via softplus
-        out = layers.Dense(self.output_dim, activation='softplus')(x)
+        out = layers.Dense(self.output_dim, activation='relu')(x)
 
         model = Model(inputs=inp, outputs=out)
         model.compile(

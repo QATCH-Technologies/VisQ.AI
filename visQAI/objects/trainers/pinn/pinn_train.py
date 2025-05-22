@@ -100,7 +100,7 @@ class PINNTrainer:
         self.tuner = PINNBayes(
             loss_fn=composite_loss,
             constraints=getattr(self.hypermodel, '_physics_constraints', []),
-            data_weight=1.0,
+            data_weight=0.5,
             metrics=['MeanAbsoluteError'],
             hypermodel=self.hypermodel,
             objective='val_loss',
@@ -279,6 +279,7 @@ class PINNTrainer:
         self.search_hyperparameters(
             epochs=search_epochs,
             batch_size=search_batch
+
         )
         self.retrain_best_models(
             num_models=num_final_models,
