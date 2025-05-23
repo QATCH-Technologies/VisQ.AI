@@ -292,6 +292,6 @@ class PINNTrainer:
 
 if __name__ == '__main__':
     trainer = PINNTrainer(
-        csv_path=os.path.join('content', 'formulation_data_05222025.csv')
+        csv_path=os.path.join('content', 'formulation_data_05232025.csv')
     )
     trainer.train_full_pipeline()

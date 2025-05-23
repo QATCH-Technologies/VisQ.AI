@@ -41,27 +41,27 @@ class MLPHyperModel(HyperModel):
 
     def build(self, hp: HyperParameters) -> Model:
         # Physics constraint weights
-        w_mon_inc = hp.Float("w_mon_inc", 1e-4, 1e-1,
-                             sampling="log", default=1e-2)
-        w_mon_dec = hp.Float("w_mon_dec", 1e-4, 1e-1,
-                             sampling="log", default=1e-2)
+        # w_mon_inc = hp.Float("w_mon_inc", 1e-4, 1e-1,
+        #                      sampling="log", default=1e-2)
+        # w_mon_dec = hp.Float("w_mon_dec", 1e-4, 1e-1,
+        #                      sampling="log", default=1e-2)
         w_flat = hp.Float("w_flat", 1e-4, 1e-1, sampling="log", default=1e-2)
         w_shear = hp.Float("w_shear_thinning", 1e-4, 1e-1,
                            sampling="log", default=1e-2)
-        w_arr = hp.Float("w_arhenius", 1e-4, 1e-1,
-                         sampling="log", default=1e-2)
+        # w_arr = hp.Float("w_arhenius", 1e-4, 1e-1,
+        #                  sampling="log", default=1e-2)
         w_bell = hp.Float("w_pi_bell", 1e-4, 1e-1,
                           sampling="log", default=1e-2)
-        w_ein_thresh = hp.Float("w_einstein_threshold",
-                                1e-4, 1e-1, sampling="log", default=1e-2)
-        w_ein_dil = hp.Float("w_einstein_dilute_limit",
-                             1e-4, 1e-1, sampling="log", default=1e-2)
-        w_excl = hp.Float("w_exclude_volume_divergence", 1e-4,
-                          1e-1, sampling="log", default=1e-2)
+        # w_ein_thresh = hp.Float("w_einstein_threshold",
+        #                         1e-4, 1e-1, sampling="log", default=1e-2)
+        # w_ein_dil = hp.Float("w_einstein_dilute_limit",
+        #                      1e-4, 1e-1, sampling="log", default=1e-2)
+        # w_excl = hp.Float("w_exclude_volume_divergence", 1e-4,
+        #                   1e-1, sampling="log", default=1e-2)
 
         # Architecture hyperparameters
         num_layers = hp.Int("num_layers", 1, 10)
-        activation = hp.Choice("activation", ["relu", "tanh", "elu", "sine"])
+        activation = hp.Choice("activation", ["relu", "tanh", "elu"])
         l2_reg = hp.Float("l2_reg", 1e-6, 1e-2, sampling="log")
         dropout_rate = hp.Float("dropout_rate", 0.0, 0.5, step=0.1)
         learning_rate = hp.Float("learning_rate", 1e-4, 1e-2, sampling="log")
@@ -73,22 +73,22 @@ class MLPHyperModel(HyperModel):
 
         # Build constraint objects
         constraints = [
-            MonotonicIncreasingConstraint(self.feature_names,
-                                          ["Protein_concentration",
-                                              "Sugar_concentration"],
-                                          weight=w_mon_inc),
-            MonotonicDecreasingConstraint(self.feature_names,
-                                          ["Temperature", "Surfactant_concentration"],
-                                          weight=w_mon_dec),
+            # MonotonicIncreasingConstraint(self.feature_names,
+            #                               ["Protein_concentration",
+            #                                   "Sugar_concentration"],
+            #                               weight=w_mon_inc),
+            # MonotonicDecreasingConstraint(self.feature_names,
+            #                               ["Temperature", "Surfactant_concentration"],
+            #                               weight=w_mon_dec),
             FlatSlopeConstraint(self.feature_names,
                                 "Buffer_pH", weight=w_flat),
             ShearThinningConstraint(weight=w_shear),
-            ArrheniusConstraint(self.feature_names,
-                                "Temperature", weight=w_arr),
+            # ArrheniusConstraint(self.feature_names,
+            #                     "Temperature", weight=w_arr),
             GaussianBellAroundPIConstraint(
                 self.feature_names, "Buffer_pH", "PI_mean", weight=w_bell),
-            ExcludedVolumeDivergenceConstraint(
-                self.feature_names, "Protein_concentration", weight=w_excl),
+            # ExcludedVolumeDivergenceConstraint(
+            #     self.feature_names, "Protein_concentration", weight=w_excl),
             # EinsteinDiluteLimitConstraint(self.feature_names, "Protein_concentration", threshold=w_ein_thresh,
             #                               weight=w_ein_dil),
 
