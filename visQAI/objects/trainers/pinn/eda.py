@@ -18,7 +18,6 @@ def violation_rate_monotonic(x: np.ndarray, y: np.ndarray, increasing: bool = Tr
 def mean_abs_slope(x: np.ndarray, y: np.ndarray) -> float:
     order = np.argsort(x)
     xs, ys = x[order], y[order]
-    # drop zero‐dx pairs
     dx = np.diff(xs)
     dy = np.diff(ys)
     mask = dx != 0
@@ -64,12 +63,11 @@ def excluded_volume_check(phi: np.ndarray, U: np.ndarray):
 
 
 def main(csv_path: str):
-    # --- load ---
     loader = DataLoader(csv_path)
     df = loader.load()
-    X = loader.get_raw_features()       # DataFrame
-    U = loader.get_targets()            # ndarray (N, M)
-    targets = loader.TARGET_COLUMNS     # ["Viscosity_100", …]
+    X = loader.get_raw_features()
+    U = loader.get_targets()
+    targets = loader.TARGET_COLUMNS
 
     print("\n1) Monotonic-Increasing in Protein_concentration & Sugar_concentration")
     for feat in ["Protein_concentration", "Sugar_concentration"]:
@@ -137,5 +135,5 @@ def main(csv_path: str):
 
 
 if __name__ == "__main__":
-    csv_path = os.path.join('content', 'formulation_data_05232025.csv')
+    csv_path = os.path.join('content', 'formulation_data_05272025.csv')
     main(csv_path)

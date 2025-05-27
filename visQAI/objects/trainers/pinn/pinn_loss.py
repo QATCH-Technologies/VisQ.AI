@@ -60,7 +60,7 @@ class CompositeLossWithUncertainty:
         all_losses = [data_loss] + phys_losses
         total = 0.0
         for i, L in enumerate(all_losses):
-            sigma_sq = tf.exp(self.log_sigmas[i])  # σ²
+            sigma_sq = tf.exp(self.log_sigmas[i])
             total += L / (2.0 * sigma_sq) + 0.5 * tf.math.log(sigma_sq)
 
         return total, data_loss, phys_sum

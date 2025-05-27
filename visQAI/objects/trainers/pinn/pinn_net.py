@@ -48,8 +48,8 @@ class MLPHyperModel(HyperModel):
         w_flat = hp.Float("w_flat", 1e-4, 1e-1, sampling="log", default=1e-2)
         w_shear = hp.Float("w_shear_thinning", 1e-4, 1e-1,
                            sampling="log", default=1e-2)
-        # w_arr = hp.Float("w_arhenius", 1e-4, 1e-1,
-        #                  sampling="log", default=1e-2)
+        w_arr = hp.Float("w_arhenius", 1e-4, 1e-1,
+                         sampling="log", default=1e-2)
         w_bell = hp.Float("w_pi_bell", 1e-4, 1e-1,
                           sampling="log", default=1e-2)
         # w_ein_thresh = hp.Float("w_einstein_threshold",
@@ -83,8 +83,8 @@ class MLPHyperModel(HyperModel):
             FlatSlopeConstraint(self.feature_names,
                                 "Buffer_pH", weight=w_flat),
             ShearThinningConstraint(weight=w_shear),
-            # ArrheniusConstraint(self.feature_names,
-            #                     "Temperature", weight=w_arr),
+            ArrheniusConstraint(self.feature_names,
+                                "Temperature", weight=w_arr),
             GaussianBellAroundPIConstraint(
                 self.feature_names, "Buffer_pH", "PI_mean", weight=w_bell),
             # ExcludedVolumeDivergenceConstraint(
