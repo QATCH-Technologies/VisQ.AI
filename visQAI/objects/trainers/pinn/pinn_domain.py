@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 from typing import Tuple, Optional, Union
 from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.preprocessing import StandardScaler, OrdinalEncoder
 from sklearn.pipeline import Pipeline
 
 
@@ -29,18 +29,19 @@ class DataLoader:
         self._preprocessor: Optional[ColumnTransformer] = None
 
     def load(self) -> pd.DataFrame:
-        """Load CSV, drop ID, fill numeric NaNs→0 and categorical NaNs/'none'→'missing'."""
         df = pd.read_csv(self.csv_path)
 
         if self.INDEX_COL in df.columns:
             df = df.drop(columns=[self.INDEX_COL])
 
+        # numeric → fillna(0)
         df[self.NUMERIC_FEATURES] = (
             df[self.NUMERIC_FEATURES]
             .apply(pd.to_numeric, errors="coerce")
             .fillna(0)
         )
 
+        # unify 'none' → NaN → 'missing'
         df[self.CATEGORICAL_FEATURES] = (
             df[self.CATEGORICAL_FEATURES]
             .replace({"none": np.nan, "None": np.nan})
@@ -66,9 +67,14 @@ class DataLoader:
         if self._df is None:
             self.load()
 
-        num_pipeline = Pipeline([("scaler", StandardScaler())])
+        # scale all your numeric features as before
+        num_pipeline = Pipeline([
+            ("scaler", StandardScaler())
+        ])
+
+        # ordinal‐encode each categorical column to a single integer column
         cat_pipeline = Pipeline([
-            ("onehot", OneHotEncoder(handle_unknown="ignore"))
+            ("ordinal", OrdinalEncoder())
         ])
 
         preprocessor = ColumnTransformer(
@@ -78,9 +84,10 @@ class DataLoader:
             ],
             remainder="drop",
         )
-        print(self.get_raw_features())
+
         preprocessor.fit(self.get_raw_features())
         self._preprocessor = preprocessor
+
         return preprocessor
 
     @property

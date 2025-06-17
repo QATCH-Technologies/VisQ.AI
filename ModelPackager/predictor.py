@@ -5,7 +5,7 @@ from typing import Any
 import tensorflow as tf
 
 
-class PredictorWrapper:
+class Predictor:
     """
     Wrapper around a Keras multi-output regression model. Implements:
       - set_model(model)              ⇒ attaches loaded Keras model

@@ -158,33 +158,30 @@ class ExperimentSuggester:
         suggestion: pd.Series,
         info_score: float
     ) -> dict:
-        """
-        Generates the *next* sample values by applying the scaled delta
-        and rounding to the allowed increments, then clamping to valid ranges:
-          - Protein_concentration: integer ≥ 0
-          - Sugar_concentration: 0.0–1.0 in 0.1 steps
-          - Surfactant_concentration: 0.0–0.1 in 0.01 steps
-        """
         update_vec = self.compute_update_vector(
             current, suggestion, info_score)
         next_vals = {}
         for f, params in update_vec.items():
+            # Sanity check
+            if f not in self.mutable_numeric:
+                raise ValueError(f"Unexpected feature in update vector: {f}")
+
             raw = float(current[f]) + params["delta"]
 
             if f == "Protein_concentration":
                 val = int(round(raw))
-                # no negatives
                 val = max(val, 0)
 
             elif f == "Sugar_concentration":
                 val = round(raw / 0.1) * 0.1
-                # clamp to [0,1]
                 val = min(max(val, 0.0), 1.0)
 
             elif f == "Surfactant_concentration":
                 val = round(raw / 0.01) * 0.01
-                # clamp to [0,0.1]
                 val = min(max(val, 0.0), 0.1)
+
+            else:
+                val = raw
 
             next_vals[f] = val
 
