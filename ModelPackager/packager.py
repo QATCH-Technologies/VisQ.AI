@@ -37,11 +37,45 @@ import numpy as np
 import os
 from keras import layers, models
 from keras.callbacks import EarlyStopping
-
+import pandas as pd
 
 # ——————————————————————————————————————————————————————————————————————————————
 # 1) Define a simple config dataclass to hold everything you might want to swap out
 # ——————————————————————————————————————————————————————————————————————————————
+
+
+class CategoricalEncoder:
+    """
+    Find every column ending in '_type' and map its unique values
+    to integers 1..n (missing → 0). Mappings are stored so you can
+    transform future data the same way.
+    """
+
+    def __init__(self):
+        self.mapping: dict[str, dict[str, int]] = {}
+        self.categorical_columns: list[str] = []
+
+    def fit(self, X: pd.DataFrame):
+        # detect all _type columns
+        self.categorical_columns = [
+            c for c in X.columns if c.endswith('_type')]
+        for col in self.categorical_columns:
+            # factorize picks up all unique non-null values
+            codes, uniques = pd.factorize(X[col].astype(str), sort=False)
+            # codes are 0..n-1 for uniques, -1 for any NaN; shift +1 → 1..n, 0 for NaN
+            self.mapping[col] = {val: i+1 for i, val in enumerate(uniques)}
+
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        X = X.copy()
+        for col in self.categorical_columns:
+            # map unseen values to 0
+            X[col] = X[col].astype(str).map(
+                self.mapping[col]).fillna(0).astype(int)
+        return X
+
+    def fit_transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        self.fit(X)
+        return self.transform(X)
 
 
 @dataclass
@@ -52,7 +86,7 @@ class BuilderConfig:
     source_py_files: List[str] = field(
         default_factory=lambda: ["dataprocessor.py", "predictor.py"]
     )
-    train_csv: str = "train_features.csv"
+    train_csv: str = os.path.join("ModelPackager", "train_features.csv")
 
     # Python‐level components for data processing + transformation
     dataprocessor_module: str = "dataprocessor"
@@ -60,13 +94,10 @@ class BuilderConfig:
     transformer_module: str = "transformer"
     transformer_class: str = "TransformerPipeline"
 
-    # Python‐level components for training
     trainer_module: str = "train"
-    # New: expects a class with train() that exports a SavedModel
     trainer_class: str = "Trainer"
     trainer_kwargs: Dict = field(default_factory=dict)
 
-    # DataProcessor kwargs
     dataprocessor_kwargs: Dict = field(default_factory=lambda: {
         "drop_columns": [],
         "feature_columns": None,
@@ -135,23 +166,29 @@ class PackageBuilder:
         3) Copy source_py_files into that package dir.
         4) Touch an empty __init__.py.
         """
+        # derive your project root from the location of this file:
+        project_root = os.path.dirname(os.path.abspath(__file__))
+
+        # 1) Remove any existing bundle
         if os.path.isdir(self.bundle_root):
             shutil.rmtree(self.bundle_root)
 
+        # 2) Recreate package dir
         os.makedirs(self.package_dir, exist_ok=True)
 
-        # Copy each source .py into package_dir
+        # 3) Copy each source file, resolving its path under project_root
         for fname in self.cfg.source_py_files:
-            if not os.path.isfile(fname):
+            src = os.path.join(project_root, fname)
+            if not os.path.isfile(src):
                 raise FileNotFoundError(
-                    f"Expected '{fname}' in current directory."
+                    f"Expected source file '{fname}' at '{src}'."
                 )
-            shutil.copy(fname, self.package_dir)
+            shutil.copy(src, self.package_dir)
 
-        # Create an empty __init__.py (so that setuptools/find_packages picks it up)
+        # 4) Touch __init__.py
         init_path = os.path.join(self.package_dir, "__init__.py")
-        with open(init_path, "w", encoding="utf-8") as f:
-            f.write("")
+        with open(init_path, "w", encoding="utf-8"):
+            pass
 
     def compile_and_remove_py(self):
         """
@@ -174,19 +211,17 @@ class PackageBuilder:
         """
         os.makedirs(self.package_dir, exist_ok=True)
 
-        # STEP A: Initialize & fit DataProcessor
         DP = self.DataProcessorClass(self.cfg.dataprocessor_kwargs)
-        X_df, y_df = DP.process(self.cfg.train_csv, None)
+        X_df, y_df = DP.process_train(self.cfg.train_csv)
 
-        # STEP B: Fit Transformer on X_df
+        cat_enc = CategoricalEncoder()
+        X_df = cat_enc.fit_transform(X_df)
+        print(X_df)
         transformer = self.TransformerClass()
-        X_scaled = transformer.fit_transform(X_df, y_df)
+        X_scaled = transformer.fit_transform(X_df)
 
-        # STEP C: Build & train via Trainer
         input_dim = X_scaled.shape[1]
         output_dim = y_df.shape[1]
-
-        # Instantiate TrainerClass(input_dim, output_dim, **trainer_kwargs)
         trainer = self.TrainerClass(
             input_dim=input_dim,
             output_dim=output_dim,
@@ -319,7 +354,7 @@ def main():
                         help="List of .py source files to include/compile")
 
     # Training CSV path
-    parser.add_argument("--train-csv", default="train_features.csv",
+    parser.add_argument("--train-csv", default="ModelPackager/train_features.csv",
                         help="Path to the CSV used for training")
 
     # DataProcessor class

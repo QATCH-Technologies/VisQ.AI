@@ -2,6 +2,7 @@
 import os
 import numpy as np
 from keras import layers, models
+import tensorflow as tf
 from keras.callbacks import EarlyStopping
 
 
@@ -14,18 +15,19 @@ class Trainer:
         self.patience = patience
         self.model = None
 
-    def _build_model(self):
-        # Build a simple MLP according to layers_config
-        model = models.Sequential()
+    def _build_model(self, dropout_rate=0.1):
+        model = tf.keras.Sequential()
         model.add(layers.InputLayer((self.input_dim,)))
         for units in self.layers_config:
             model.add(layers.Dense(units, activation="relu"))
+            model.add(layers.Dropout(dropout_rate))
         model.add(layers.Dense(self.output_dim))  # final regression output
         model.compile(optimizer="adam", loss="mse")
         return model
 
     def train(self, X: np.ndarray, y: np.ndarray, save_dir: str):
         # 1) Build the model
+        input(X.shape[1])
         self.model = self._build_model()
 
         # 2) Fit with EarlyStopping

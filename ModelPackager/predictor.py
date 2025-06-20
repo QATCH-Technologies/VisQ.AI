@@ -1,7 +1,7 @@
 # predictor_wrapper.py
 
 import numpy as np
-from typing import Any
+from typing import Any, Union, Tuple
 import tensorflow as tf
 
 
@@ -22,18 +22,30 @@ class Predictor:
         """
         self.model = model
 
-    def predict(self, X: Any) -> np.ndarray:
-        """
-        Given X (DataFrame or NumPy array), return the predicted regression outputs
-        as an (n_samples × n_targets) NumPy array.
-        """
+    def predict(
+        self,
+        X: Any,
+        return_uncertainty: bool = False,
+        n_samples: int = 50
+    ) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
         if self.model is None:
             raise ValueError("No model set. Call set_model() first.")
+
         X_arr = np.array(X)
-        preds = self.model.predict(X_arr)
-        # If the model outputs a single target, `preds` might be shape (n_samples,), so ensure 2D
-        preds = np.atleast_2d(preds)
-        return preds
+
+        if not return_uncertainty:
+            preds = self.model.predict(X_arr)
+            preds = np.atleast_2d(preds)
+            return preds
+
+        samples = np.stack([
+            np.atleast_2d(self.model.predict(X_arr))
+            for _ in range(n_samples)
+        ], axis=0)
+
+        mean_preds = samples.mean(axis=0)
+        std_preds = samples.std(axis=0)
+        return mean_preds, std_preds
 
     def update(self, X_new: Any, y_new: Any, model: Any):
         """
