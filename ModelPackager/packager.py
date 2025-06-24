@@ -84,7 +84,8 @@ class BuilderConfig:
     bundle_root: str = "VisQAI_base"
     package_name: str = "package"
     source_py_files: List[str] = field(
-        default_factory=lambda: ["dataprocessor.py", "predictor.py"]
+        default_factory=lambda: ["dataprocessor.py",
+                                 "predictor.py", "transformer.py"]
     )
     train_csv: str = os.path.join("ModelPackager", "train_features.csv")
 
@@ -213,12 +214,11 @@ class PackageBuilder:
 
         DP = self.DataProcessorClass(self.cfg.dataprocessor_kwargs)
         X_df, y_df = DP.process_train(self.cfg.train_csv)
-
         cat_enc = CategoricalEncoder()
         X_df = cat_enc.fit_transform(X_df)
-        print(X_df)
         transformer = self.TransformerClass()
         X_scaled = transformer.fit_transform(X_df)
+        input(X_scaled)
 
         input_dim = X_scaled.shape[1]
         output_dim = y_df.shape[1]
@@ -237,15 +237,16 @@ class PackageBuilder:
         trainer.train(
             X_scaled.values,
             y_df.values,
-            save_dir=saved_model_dir
+            save_dir=saved_model_dir,
         )
 
         # STEP D: Serialize the fitted transformer
         transformer_path = os.path.join(self.package_dir, "transformer.pkl")
         with open(transformer_path, "wb") as f:
-            # We assume TransformerPipeline has an attribute `.scaler.pipeline`
-            cloudpickle.dump(transformer.scaler.pipeline, f)
-
+            cloudpickle.dump({
+                "scaler": transformer.scaler,
+                "encoder": transformer.encoder
+            }, f)
         print("Finished training & dumping:")
         print(f"  - SavedModel directory: {saved_model_dir}")
         print(f"  - transformer.pkl at: {transformer_path}")
@@ -350,7 +351,8 @@ def main():
 
     # Source .py files
     parser.add_argument("--source-files", nargs="+",
-                        default=["dataprocessor.py", "predictor.py"],
+                        default=["dataprocessor.py",
+                                 "predictor.py", "transformer.py"],
                         help="List of .py source files to include/compile")
 
     # Training CSV path

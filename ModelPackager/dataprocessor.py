@@ -95,7 +95,6 @@ class DataProcessor:
                 )
             feats = feats[self.feature_columns]
         X_df = feats.fillna(0)
-
         return X_df, y_df
 
     def process_predict(self, data: Union[str, pd.DataFrame]) -> pd.DataFrame:

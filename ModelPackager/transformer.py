@@ -1,74 +1,78 @@
 import pandas as pd
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-
-
-class ScalerPipeline:
-
-    def __init__(self):
-        self.pipeline = Pipeline([
-            ("scaler", StandardScaler()),
-        ])
-        self.feature_names_: list[str] = []
-
-    def fit(self, X: pd.DataFrame, y=None) -> "ScalerPipeline":
-        self.feature_names_ = X.columns.tolist()
-        self.pipeline.fit(X, y)
-        return self
-
-    def fit_transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
-        self.fit(X, y)
-        arr = self.pipeline.transform(X)
-        return pd.DataFrame(arr, columns=self.feature_names_, index=X.index)
-
-    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
-        arr = self.pipeline.transform(X)
-        return pd.DataFrame(arr, columns=self.feature_names_, index=X.index)
+from sklearn.preprocessing import OneHotEncoder, MinMaxScaler
+import pickle
 
 
 class TransformerPipeline:
-    """
-    Transformer that:
-      - Converts any "none" (case-insensitive) or NaN in non-`_type` columns to 0
-      - Scales all columns NOT ending with '_type'
-      - Leaves '_type' columns exactly as-is
-      - Returns a single DataFrame with ALL columns, in original order
-    """
+    CATEGORICAL_FEATURES = [
+        'Protein_type', 'Buffer_type', 'Salt_type',
+        'Stabilizer_type', 'Surfactant_type',
+    ]
+    NUMERIC_FEATURES = [
+        'MW', 'PI_mean', 'PI_range', 'Protein_conc',
+        'Temperature', 'Buffer_pH', 'Buffer_conc',
+        'Salt_conc', 'Stabilizer_conc', 'Surfactant_conc',
+    ]
 
-    def __init__(self, type_suffix: str = "_type"):
-        self.scaler = ScalerPipeline()
-        self.type_suffix = type_suffix
+    def __init__(self, scaler_path: str = None, encoder_path: str = None):
+        # Load or initialize scaler
+        if scaler_path:
+            with open(scaler_path, 'rb') as f:
+                self.scaler = pickle.load(f)
+        else:
+            self.scaler = MinMaxScaler()
 
-    def _split(self, X: pd.DataFrame):
-        cols = list(X.columns)
-        type_cols = [c for c in cols if c.endswith(self.type_suffix)]
-        num_cols = [c for c in cols if c not in type_cols]
-        return num_cols, type_cols
+        # Load or initialize one-hot encoder
+        if encoder_path:
+            with open(encoder_path, 'rb') as f:
+                self.encoder = pickle.load(f)
+        else:
+            self.encoder = OneHotEncoder(
+                handle_unknown='ignore',
+            )
 
-    def fit_transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
-        X_df = X.copy()
-        num_cols, type_cols = self._split(X_df)
+    def _clean(self, df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
 
-        num_block = (
-            X_df[num_cols]
-            # "none" → 0
-            .replace(to_replace=r'(?i)^none$', value=0, regex=True)
-            .fillna(0)                                               # NaN → 0
-        )
-        scaled_num = self.scaler.fit_transform(num_block)
-        result = scaled_num.join(X_df[type_cols])
-        print(result)
-        return result[X_df.columns]
+        # Replace missing values in all features with 0
+        for col in self.NUMERIC_FEATURES:
+            out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
+
+        for col in self.CATEGORICAL_FEATURES:
+            out[col] = out[col].fillna("Unknown").astype(str)
+
+        return out
+
+    def fit(self, X: pd.DataFrame, y=None):
+        X_clean = self._clean(X)
+
+        self.encoder.fit(X_clean[self.CATEGORICAL_FEATURES])
+        self.scaler.fit(X_clean[self.NUMERIC_FEATURES])
+        return self
 
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
-        X_df = X.copy()
-        num_cols, type_cols = self._split(X_df)
-        num_block = (
-            X_df[num_cols]
-            .replace(to_replace=r'(?i)^none$', value=0, regex=True)
-            .fillna(0)
-        )
-        scaled_num = self.scaler.transform(num_block)
+        X_clean = self._clean(X)
 
-        result = scaled_num.join(X_df[type_cols])
-        return result[X_df.columns]
+        # One-hot encode
+        cat_encoded = self.encoder.transform(
+            X_clean[self.CATEGORICAL_FEATURES])
+        cat_columns = self.encoder.get_feature_names_out(
+            self.CATEGORICAL_FEATURES)
+        cat_df = pd.DataFrame(cat_encoded, columns=cat_columns, index=X.index)
+
+        # Scale numeric
+        num_scaled = self.scaler.transform(X_clean[self.NUMERIC_FEATURES])
+        num_df = pd.DataFrame(
+            num_scaled, columns=self.NUMERIC_FEATURES, index=X.index)
+
+        # Concatenate all together
+        return pd.concat([cat_df, num_df], axis=1)
+
+    def fit_transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
+        return self.fit(X, y).transform(X)
+
+    def save(self, scaler_path: str, encoder_path: str):
+        with open(scaler_path, 'wb') as f:
+            pickle.dump(self.scaler, f)
+        with open(encoder_path, 'wb') as f:
+            pickle.dump(self.encoder, f)
