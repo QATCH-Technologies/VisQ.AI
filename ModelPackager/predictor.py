@@ -5,6 +5,7 @@ from typing import Any, Union, Tuple
 import tensorflow as tf
 from keras.layers import TFSMLayer
 from keras import Model, Input
+from tensorflow.keras import Input, Model, layers
 
 
 class Predictor:
@@ -53,45 +54,94 @@ class Predictor:
 
         return mean_preds, std_preds
 
-    def update(self, X_new, y_new, model_path):
-        # (1) verify signature
-        saved_mod = tf.saved_model.load(model_path)
-        if "serving_default" not in saved_mod.signatures:
+    def update(self, X_new, y_new, model_path, train_full=False):
+        """
+        Update (fine-tune) a SavedModel on new data.
+
+        Args:
+            X_new: array-like of shape (n_samples, n_features_new)
+            y_new: array-like of shape (n_samples, ...)
+            model_path: path to a TF SavedModel on disk
+            train_full: if True, fine-tune the entire SavedModel backbone;
+                        if False, only train the adapter layer mapping new->orig features.
+
+        Returns:
+            A tf.keras.Model instance after fine-tuning.
+        """
+        # (1) Load SavedModel and inspect original input dimension
+        saved = tf.saved_model.load(model_path)
+        if "serving_default" not in saved.signatures:
             raise ValueError(
                 f"No 'serving_default' signature in {model_path!r}")
+        sig = saved.signatures["serving_default"]
+        orig_dim = sig.inputs[0].shape[-1]
 
-        # (2) functional wrapper
-        X_arr = np.array(X_new)
-        y_arr = np.array(y_new)
-        n_features = X_arr.shape[1]
+        # (2) Prepare data
+        X_arr = np.asarray(X_new)
+        y_arr = np.asarray(y_new)
+        new_dim = X_arr.shape[1]
 
-        inp = Input(shape=(n_features,), name="model_input")
-        out_dict = TFSMLayer(model_path, call_endpoint="serving_default")(inp)
+        # (3) Build adapter + wrapped model
+        inp = Input(shape=(new_dim,), name="model_input")
+        x = inp
+        if new_dim != orig_dim:
+            # trainable adapter mapping new_dim -> orig_dim
+            x = layers.Dense(
+                orig_dim,
+                activation=None,
+                name="input_adapter"
+            )(x)
 
-        # unwrap the single tensor
-        if isinstance(out_dict, dict):
-            # assume exactly one output key
-            out = next(iter(out_dict.values()))
-        else:
-            out = out_dict
+        # Attach the SavedModel as a non-Keras layer
+        out_dict = TFSMLayer(
+            model_path,
+            call_endpoint="serving_default"
+        )(x)
+        # unwrap single-output dict
+        out = next(iter(out_dict.values())) if isinstance(
+            out_dict, dict) else out_dict
 
-        keras_model = Model(inputs=inp, outputs=out,
-                            name="wrapped_saved_model")
+        model = Model(inputs=inp, outputs=out, name="wrapped_saved_model")
 
-        # (3) make sure all vars get regularizer attr
-        keras_model(tf.zeros((1, n_features)))
-        for var in keras_model.trainable_variables:
-            if not hasattr(var, 'regularizer'):
-                setattr(var, 'regularizer', None)
+        # (4) Initialize variables and patch optimizer hooks
+        model(tf.zeros([1, new_dim]))
+        for v in model.trainable_variables:
+            # ensure regularizer attribute exists
+            try:
+                if not hasattr(v, 'regularizer'):
+                    setattr(v, 'regularizer', None)
+            except Exception:
+                object.__setattr__(v, 'regularizer', None)
+            # ensure overwrite_with_gradient flag for optimizer
+            try:
+                setattr(v, 'overwrite_with_gradient', True)
+            except Exception:
+                object.__setattr__(v, 'overwrite_with_gradient', True)
 
-        # (4) compile & fit with single‐loss API
-        keras_model.compile(
+        # (5) Freeze backbone if not fine-tuning full model
+        if not train_full:
+            for layer in model.layers:
+                if isinstance(layer, TFSMLayer):
+                    try:
+                        layer.trainable = False
+                    except (AttributeError, ValueError):
+                        object.__setattr__(layer, '_trainable', False)
+
+        # (6) Compile & fit
+        model.compile(
             optimizer=tf.keras.optimizers.Adam(1e-4),
             loss="mse",
             metrics=["mae"]
         )
-        keras_model.fit(X_arr, y_arr, epochs=5, batch_size=16, verbose=1)
-        return keras_model
+        model.fit(
+            X_arr,
+            y_arr,
+            epochs=5,
+            batch_size=16,
+            verbose=1
+        )
+
+        return model
 
 
 if __name__ == "__main__":

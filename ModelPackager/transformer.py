@@ -1,6 +1,7 @@
 import pandas as pd
 from sklearn.preprocessing import OneHotEncoder, MinMaxScaler
 import pickle
+import scipy
 
 
 class TransformerPipeline:
@@ -29,6 +30,7 @@ class TransformerPipeline:
         else:
             self.encoder = OneHotEncoder(
                 handle_unknown='ignore',
+                sparse_output=False
             )
 
     def _clean(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -55,15 +57,24 @@ class TransformerPipeline:
 
         # One-hot encode
         cat_encoded = self.encoder.transform(
-            X_clean[self.CATEGORICAL_FEATURES])
+            X_clean[self.CATEGORICAL_FEATURES]
+        )
+        # if it's sparse, make it dense
+        if scipy.sparse.issparse(cat_encoded):
+            cat_encoded = cat_encoded.toarray()
+
         cat_columns = self.encoder.get_feature_names_out(
-            self.CATEGORICAL_FEATURES)
-        cat_df = pd.DataFrame(cat_encoded, columns=cat_columns, index=X.index)
+            self.CATEGORICAL_FEATURES
+        )
+        cat_df = pd.DataFrame(cat_encoded,
+                              columns=cat_columns,
+                              index=X.index)
 
         # Scale numeric
         num_scaled = self.scaler.transform(X_clean[self.NUMERIC_FEATURES])
-        num_df = pd.DataFrame(
-            num_scaled, columns=self.NUMERIC_FEATURES, index=X.index)
+        num_df = pd.DataFrame(num_scaled,
+                              columns=self.NUMERIC_FEATURES,
+                              index=X.index)
 
         # Concatenate all together
         return pd.concat([cat_df, num_df], axis=1)
