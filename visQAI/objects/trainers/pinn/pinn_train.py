@@ -4,12 +4,12 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 from sklearn.model_selection import StratifiedShuffleSplit
-from keras_tuner import BayesianOptimization
 from pinn_domain import DataLoader
 from pinn_net import MLPHyperModel
 from pinn_loss import composite_loss
 from pinn_optimizer import PINNBayes
 from tensorflow.keras.optimizers.schedules import CosineDecay
+import random
 
 
 class PINNTrainer:
@@ -56,7 +56,7 @@ class PINNTrainer:
         # Global optimizer for priming slots
         self.global_optimizer = tf.keras.optimizers.Adam()
 
-    def load_and_split_data(self) -> None:
+    def load_and_split_data(self, transformer_path: str) -> None:
         """
         Load CSV, preprocess, and split into train/validation.
         """
@@ -64,7 +64,9 @@ class PINNTrainer:
         loader.load()
         loader.build_preprocessor()
         X, y = loader.split(preprocess=True)
-
+        print(X)
+        print(y)
+        loader.save_preprocessor(transformer_path)
         y_mean = np.mean(y, axis=1)
         y_bins = pd.qcut(
             y_mean,
@@ -145,7 +147,7 @@ class PINNTrainer:
         )
 
     @tf.function
-    def train_step(self, model, x_batch, y_batch, constraints):
+    def train_step(self, model, x_batch, y_batch, constraints, optimizer):
         y_batch = tf.cast(y_batch, tf.float32)
         with tf.GradientTape() as tape:
             total_loss, data_loss, phys_loss = composite_loss(
@@ -154,9 +156,7 @@ class PINNTrainer:
                 data_weight=1.0
             )
         grads = tape.gradient(total_loss, model.trainable_variables)
-        self.global_optimizer.apply_gradients(
-            zip(grads, model.trainable_variables)
-        )
+        optimizer.apply_gradients(zip(grads, model.trainable_variables))
         return total_loss, data_loss, phys_loss
 
     def run_trial_with_physics(
@@ -206,10 +206,15 @@ class PINNTrainer:
                 ptr_norm += (batch_size-n_ext_batch)
                 idx = np.concatenate([batch_ext, batch_norm])
                 np.random.shuffle(idx)
-                x_b = tf.convert_to_tensor(self.X_train[idx], tf.float32)
-                y_b = tf.convert_to_tensor(self.y_train[idx], tf.float32)
-                self.train_step(model, x_b, y_b, constraints)
-            # validate
+                x_b = tf.convert_to_tensor(self.X_train[idx], dtype=tf.float32)
+                y_b = tf.convert_to_tensor(self.y_train[idx], dtype=tf.float32)
+                self.train_step(
+                    model=model,
+                    x_batch=x_b,
+                    y_batch=y_b,
+                    constraints=constraints,
+                    optimizer=optimizer
+                )
             val_total, val_data, val_phys = composite_loss(
                 model, self.X_val, self.y_val, constraints=constraints
             )
@@ -238,10 +243,12 @@ class PINNTrainer:
             hp = trial.hyperparameters
             model = self.hypermodel.build(hp)
             # prime
-            zero_grads = [tf.zeros_like(v) for v in model.trainable_variables]
-            self.global_optimizer.apply_gradients(
-                zip(zero_grads, model.trainable_variables)
-            )
+            # zero_grads = [tf.zeros_like(v) for v in model.trainable_variables]
+            # optimizer = type(self.global_optimizer).from_config(
+            #     self.global_optimizer.get_config())
+            # optimizer.apply_gradients(
+            #     zip(zero_grads, model.trainable_variables)
+            # )
             # retrain
             retrained = self.run_trial_with_physics(
                 model,
@@ -249,6 +256,7 @@ class PINNTrainer:
                 epochs=epochs,
                 batch_size=batch_size
             )
+            self.best_models.append(retrained)
             self.best_models.append(retrained)
 
     def save_best_model(self, path: str) -> None:
@@ -268,30 +276,37 @@ class PINNTrainer:
         retrain_batch: int = 16,
         retrain_extreme: float = 0.2,
         num_final_models: int = 3,
-        save_path: str = 'best_pinn_model.h5'
+        save_path: str = 'ensemble_pinn',
+        num_models: int = 5
     ) -> None:
         """
         Execute full workflow: load data, tune, retrain, and save.
         """
-        self.load_and_split_data()
-        self.setup_hypermodel_and_tuner()
-        self.prime_optimizer_slots()
-        self.search_hyperparameters(
-            epochs=search_epochs,
-            batch_size=search_batch
-
-        )
-        self.retrain_best_models(
-            num_models=num_final_models,
-            extreme_fraction=retrain_extreme,
-            epochs=retrain_epochs,
-            batch_size=retrain_batch
-        )
-        self.save_best_model(save_path)
+        for i in range(num_models):
+            self.random_state = random.randint(0, 100)
+            model_path = os.path.join(save_path, f"pinn_{i+1}.h5")
+            transformer_path = os.path.join(
+                save_path, f"transformer_{i+1}.joblib")
+            self.load_and_split_data(transformer_path=transformer_path)
+            self.setup_hypermodel_and_tuner()
+            self.prime_optimizer_slots()
+            self.search_hyperparameters(
+                epochs=search_epochs,
+                batch_size=search_batch
+            )
+            self.retrain_best_models(
+                num_models=num_final_models,
+                extreme_fraction=retrain_extreme,
+                epochs=retrain_epochs,
+                batch_size=retrain_batch
+            )
+            self.save_best_model(model_path)
+            print(
+                f"[STATUS] Saved pinn #{i+1} with random state {self.random_state}")
 
 
 if __name__ == '__main__':
     trainer = PINNTrainer(
-        csv_path=os.path.join('content', 'formulation_data_05272025.csv')
+        csv_path=os.path.join('content', 'train_features.csv')
     )
     trainer.train_full_pipeline()

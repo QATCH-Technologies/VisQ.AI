@@ -18,20 +18,12 @@ TARGET_COLS = [
     "Viscosity_15000000"
 ]
 NUMERIC_FEATURES = [
-    "MW",
-    "PI_mean",
-    "PI_range",
-    "Protein_concentration",
-    "Temperature",
-    "Sugar_concentration",
-    "Surfactant_concentration",
-    "Buffer_pH"
+    "MW", "PI_mean", "PI_range", "Protein_conc",
+    "Temperature", "Buffer_pH", "Stabilizer_conc",
+    "Surfactant_conc", "Buffer_conc", "Salt_conc",
 ]
 CATEGORICAL_FEATURES = [
-    "Protein_type",
-    "Buffer_type",
-    "Sugar_type",
-    "Surfactant_type"
+    "Protein_type", "Buffer_type", "Stabilizer_type", "Surfactant_type", "Salt_type",
 ]
 
 
@@ -93,14 +85,14 @@ class FeatureGenerator(BaseEstimator, TransformerMixin):
             feats[f + "_cubed"] = x ** 3
             feats[f + "_above_med"] = (x > self.medians_[f]).astype(int)
 
-        # 2) concentration interactions as before...
-        p = df_num["Protein_concentration"]
-        s = df_num["Sugar_concentration"]
-        t = df_num["Surfactant_concentration"]
-        feats["prot_plus_sugar"] = p + s
-        feats["prot_times_sugar"] = p * s
+        # 2) conc interactions as before...
+        p = df_num["Protein_conc"]
+        s = df_num["Stabilizer_conc"]
+        t = df_num["Surfactant_conc"]
+        feats["prot_plus_Stabilizer"] = p + s
+        feats["prot_times_Stabilizer"] = p * s
         feats["total_excipient"] = s + t
-        feats["sugar_minus_surfactant"] = s - t
+        feats["Stabilizer_minus_surfactant"] = s - t
 
         # 3) pI-buffer difference
         pi = df_num["PI_mean"]
@@ -109,7 +101,7 @@ class FeatureGenerator(BaseEstimator, TransformerMixin):
 
         # 4) presence flags
         feats["has_protein"] = (df["Protein_type"] != "none").astype(int)
-        feats["has_sugar"] = (df["Sugar_type"] != "none").astype(int)
+        feats["has_Stabilizer"] = (df["Stabilizer_type"] != "none").astype(int)
         feats["has_surfactant"] = (df["Surfactant_type"] != "none").astype(int)
 
         # 5) —— Physics-based features —— #
@@ -133,15 +125,15 @@ class FeatureGenerator(BaseEstimator, TransformerMixin):
         eta_int = K * MW_g_per_mol**a
         feats["intrinsic_viscosity"] = eta_int
         feats["pred_visc_from_intrinsic"] = eta_int * \
-            df_num["Protein_concentration"]
+            df_num["Protein_conc"]
 
-        # d) Concentration power‐laws (viscosity ∝ c^b)
+        # d) conc power‐laws (viscosity ∝ c^b)
         for b in (1.8, 2.0, 2.2):
-            feats[f"prot_conc_pow_{b}"] = df_num["Protein_concentration"] ** b
-            feats[f"sugar_conc_pow_{b}"] = df_num["Sugar_concentration"] ** b
-        p_g_per_L = df_num["Protein_concentration"]      # mg/mL == g/L
+            feats[f"prot_conc_pow_{b}"] = df_num["Protein_conc"] ** b
+            feats[f"Stabilizer_conc_pow_{b}"] = df_num["Stabilizer_conc"] ** b
+        p_g_per_L = df_num["Protein_conc"]      # mg/mL == g/L
         p_mol = p_g_per_L / MW_g_per_mol
-        total_m = p_mol + df_num["Sugar_concentration"]
+        total_m = p_mol + df_num["Stabilizer_conc"]
         T_K = df_num["Temperature"] + 273.15
         feats["osmotic_pressure"] = total_m * self.R * T_K
 
@@ -190,7 +182,8 @@ class VisQDataProcessor:
             transformers=[
                 (
                     "cat",
-                    OneHotEncoder(handle_unknown="ignore"),
+                    OneHotEncoder(handle_unknown="ignore",
+                                  sparse_output=False),
                     CATEGORICAL_FEATURES
                 ),
             ],

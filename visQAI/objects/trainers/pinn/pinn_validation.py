@@ -1,54 +1,100 @@
-# validation.py
 import os
-import tensorflow as tf
-from pinn_domain import DataLoader
+import pandas as pd
 import numpy as np
+import tensorflow as tf
 import matplotlib.pyplot as plt
+from pinn_domain import DataLoader
 from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, List
+
+
+def _extract_model_id(path: str) -> int:
+    """
+    Extract integer ID from filenames like 'pinn_<id>.h5'.
+    """
+    m = __import__('re').search(r'pinn_(\d+)\.h5$', path)
+    if m:
+        return int(m.group(1))
+    else:
+        raise ValueError(f"Invalid model filename: {path}")
 
 
 class Validator:
     def __init__(
         self,
-        model,
-        preprocessor: Optional[object] = None,
-        target_names: Optional[list[str]] = None,
+        models: Union[tf.keras.Model, List[tf.keras.Model]],
+        preprocessors: Optional[List[object]] = None,
+        loader: Optional[DataLoader] = None,
+        target_names: Optional[List[str]] = None,
     ):
-        self.model = model
-        self.preprocessor = preprocessor
+        """
+        Validator that can handle a single model or an ensemble of models.
+
+        Args:
+            models: A model or list of models for prediction.
+            preprocessors: List of sklearn transformers matching each model.
+            loader: DataLoader instance for cleaning & transforming raw DataFrames.
+            target_names: Optional list of target column names.
+        """
+        # ensure list of models
+        self.models = models if isinstance(models, list) else [models]
+        # align preprocessors
+        if preprocessors is None:
+            self.preprocessors = [None] * len(self.models)
+        else:
+            if len(preprocessors) != len(self.models):
+                raise ValueError(
+                    "Length of preprocessors must match number of models.")
+            self.preprocessors = preprocessors
+        self.loader = loader
         self.target_names = target_names
 
-    def _prep(self, X: Union[np.ndarray, "pd.DataFrame"]) -> np.ndarray:
-        if self.preprocessor is not None:
-            return self.preprocessor.transform(X)
-        else:
-            return X if isinstance(X, np.ndarray) else X.values
+    def _prep(
+        self,
+        X: Union[np.ndarray, pd.DataFrame],
+        pre: Optional[object]
+    ) -> np.ndarray:
+        """
+        Preprocess input X using DataLoader + a given transformer.
+        """
+        if self.loader is not None and pre is not None:
+            if isinstance(X, pd.DataFrame):
+                self.loader._df = X.copy()
+            self.loader._preprocessor = pre
+            return self.loader.get_processed_features()
+        return X if isinstance(X, np.ndarray) else X.values
 
-    def predict(self, X: Union[np.ndarray, "pd.DataFrame"]) -> np.ndarray:
+    def predict(
+        self,
+        X: Union[np.ndarray, pd.DataFrame]
+    ) -> np.ndarray:
         """
-        Standard point prediction.
+        Predict and average across ensemble (or single model).
         """
-        X_np = self._prep(X)
-        return self.model.predict(X_np)
+        preds = []
+        for model, pre in zip(self.models, self.preprocessors):
+            Xp = self._prep(X, pre)
+            preds.append(model.predict(Xp))
+        stacked = np.stack(preds, axis=0)
+        return stacked.mean(axis=0)
 
     def predict_with_uncertainty(
         self,
-        X: Union[np.ndarray, "pd.DataFrame"],
+        X: Union[np.ndarray, pd.DataFrame],
         n_iter: int = 50
     ) -> Tuple[np.ndarray, np.ndarray]:
-        X_np = self._prep(X)
-        x_tensor = tf.convert_to_tensor(X_np, dtype=tf.float32)
-
-        preds = []
-        for _ in range(n_iter):
-            p = self.model(x_tensor, training=True)
-            preds.append(p.numpy())
-        preds = np.stack(preds, axis=0)
-
-        mean = preds.mean(axis=0)
-        std = preds.std(axis=0)
-        return mean, std
+        """
+        Monte Carlo dropout across models and iterations.
+        """
+        all_preds = []
+        for model, pre in zip(self.models, self.preprocessors):
+            Xp = self._prep(X, pre)
+            xt = tf.convert_to_tensor(Xp, dtype=tf.float32)
+            mc_preds = [model(xt, training=True).numpy()
+                        for _ in range(n_iter)]
+            all_preds.extend(mc_preds)
+        stacked = np.stack(all_preds, axis=0)
+        return stacked.mean(axis=0), stacked.std(axis=0)
 
     def plot_true_vs_pred(
         self,
@@ -56,139 +102,76 @@ class Validator:
         y_pred: np.ndarray,
         target_name: str,
     ):
-        """
-        Draws a scatter-plot of true vs. predicted values for one target,
-        with identity line, ±10% error region, R²/MAE annotation, grid, and legend.
-        """
-        # compute metrics
         r2 = r2_score(y_true, y_pred)
         mae = mean_absolute_error(y_true, y_pred)
-
-        # create figure
         plt.figure(figsize=(10, 6))
         ax = plt.gca()
-
-        # scatter points
-        ax.scatter(
-            y_true,
-            y_pred,
-            s=50,
-            alpha=0.7,
-            label="Prediction vs Actual"
-        )
-
-        # identity line domain
-        vmin = min(y_true.min(), y_pred.min())
-        vmax = max(y_true.max(), y_pred.max())
-        x_line = np.linspace(vmin, vmax, 100)
-
-        # ±10% bounds
-        lower = 0.9 * x_line
-        upper = 1.1 * x_line
-        ax.fill_between(
-            x_line,
-            lower,
-            upper,
-            alpha=0.2,
-            label="±10% error region"
-        )
-
-        # identity line
-        ax.plot(
-            x_line,
-            x_line,
-            linestyle="--",
-            linewidth=2,
-            label="Ideal (y = x)"
-        )
-
-        # metrics annotation
-        textstr = f"$R^2 = {r2:.2f}$\nMAE = {mae:.2f}"
-        bbox_props = dict(boxstyle="round,pad=0.5",
-                          facecolor="white", alpha=0.8)
-        ax.text(
-            0.05,
-            0.95,
-            textstr,
-            transform=ax.transAxes,
-            fontsize=12,
-            verticalalignment="top",
-            bbox=bbox_props,
-        )
-
-        # labels, title, grid, legend
-        ax.set_xlabel("Actual Viscosity",   fontsize=14)
-        ax.set_ylabel("Predicted Viscosity", fontsize=14)
-        ax.set_title(
-            f"{self.model.name} — {target_name.replace('_', ' ')}", fontsize=16)
-        ax.grid(True, which="both", linestyle="--", linewidth=0.5)
-        ax.legend(loc="lower right", fontsize=12)
-
+        ax.scatter(y_true, y_pred, s=50, alpha=0.7, label="Pred vs Actual")
+        vmin, vmax = float(np.min([y_true.min(), y_pred.min()])), float(
+            np.max([y_true.max(), y_pred.max()]))
+        xs = np.linspace(vmin, vmax, 100)
+        ax.fill_between(xs, 0.9*xs, 1.1*xs, alpha=0.2, label="±10% region")
+        ax.plot(xs, xs, '--', linewidth=2, label="Ideal")
+        ax.text(0.05, 0.95, f"$R^2={r2:.2f}$\nMAE={mae:.2f}", transform=ax.transAxes, va='top', bbox=dict(
+            facecolor='white', alpha=0.8))
+        ax.set_xlabel("Actual", fontsize=14)
+        ax.set_ylabel("Predicted", fontsize=14)
+        ax.set_title(target_name.replace('_', ' '), fontsize=16)
+        ax.grid(True, linestyle='--', linewidth=0.5)
+        ax.legend(loc='lower right')
         plt.tight_layout()
         plt.show()
 
-    def validate(self, X, y):
-        """
-        Runs predictions on (X, y), computes metrics and plots.
-
-        Args:
-            X: DataFrame or NumPy array of inputs.
-            y: DataFrame or NumPy array of true targets.
-
-        Returns:
-            dict mapping each target name → {'mse':..., 'r2':...}
-        """
-        # 1) Prepare arrays
-        y_true = y if isinstance(y, np.ndarray) else y.values
+    def validate(
+        self,
+        X: Union[np.ndarray, pd.DataFrame],
+        y: Union[np.ndarray, pd.DataFrame]
+    ) -> dict:
+        y_true = y.values if hasattr(y, 'values') else y
         y_pred = self.predict(X)
-
-        n_targets = y_true.shape[1]
-        names = (
-            self.target_names
-            if self.target_names and len(self.target_names) == n_targets
-            else [f"Target_{i}" for i in range(n_targets)]
-        )
-
+        n_t = y_true.shape[1]
+        names = self.target_names or [f"Target_{i}" for i in range(n_t)]
         results = {}
-        for i, name in enumerate(names):
-            true_i = y_true[:, i]
-            pred_i = y_pred[:, i]
-
-            mse = mean_squared_error(true_i, pred_i)
-            r2 = r2_score(true_i, pred_i)
-            results[name] = {"mse": mse, "r2": r2}
-
-            # 2) Plot
-            self.plot_true_vs_pred(true_i, pred_i, name)
-
+        for idx, name in enumerate(names):
+            t, p = y_true[:, idx], y_pred[:, idx]
+            results[name] = {"mse": mean_squared_error(
+                t, p), "r2": r2_score(t, p)}
+            self.plot_true_vs_pred(t, p, name)
         return results
 
 
 if __name__ == "__main__":
-    csv_path = os.path.join('content', 'formulation_data_05232025.csv')
+    # load raw data
+    csv_path = os.path.join('content', 'train_features.csv')
     loader = DataLoader(csv_path)
     loader.load()
-    loader.build_preprocessor()
-    X_df, y_df = loader.split(preprocess=False)  # raw features DataFrame
-    from pinn_net import Sine
-    model = tf.keras.models.load_model(
-        "best_pinn_model.h5",
-        custom_objects={"Sine": Sine},
-        compile=False
-    )
-    # re-compile if you plan to evaluate or retrain
-    model.compile(
-        optimizer="adam",
-        loss="mse",
-        metrics=["mae", "mse"],
-    )
 
+    # discover ensemble
+    import glob
+    import re
+    import joblib
+    from tensorflow.keras.models import load_model
+    ENSEMBLE_DIR = 'ensemble_pinn'
+    model_glob = os.path.join(ENSEMBLE_DIR, 'pinn_*.h5')
+    paths = sorted(glob.glob(model_glob), key=_extract_model_id)
+
+    models, preprocessors = [], []
+    for p in paths:
+        mid = _extract_model_id(p)
+        models.append(load_model(p, compile=False))
+        tf_path = os.path.join(ENSEMBLE_DIR, f"transformer_{mid}.joblib")
+        preprocessors.append(joblib.load(tf_path))
+
+    # split raw
+    X_raw, y_df = loader.split(preprocess=False)
+
+    # validate ensemble
     validator = Validator(
-        model=model,
-        preprocessor=loader.preprocessor,
-        target_names=loader.TARGET_COLUMNS,
+        models=models,
+        preprocessors=preprocessors,
+        loader=loader,
+        target_names=loader.TARGET_COLUMNS
     )
-
-    metrics = validator.validate(X_df, y_df)
-    for name, m in metrics.items():
-        print(f"{name}: MSE={m['mse']:.3e}, R2={m['r2']:.3f}")
+    metrics = validator.validate(X_raw, y_df)
+    for k, v in metrics.items():
+        print(f"{k}: MSE={v['mse']:.3e}, R2={v['r2']:.3f}")

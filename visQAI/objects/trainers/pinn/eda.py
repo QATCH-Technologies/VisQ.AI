@@ -70,7 +70,7 @@ def main(csv_path: str):
     targets = loader.TARGET_COLUMNS
 
     print("\n1) Monotonic-Increasing in Protein_concentration & Sugar_concentration")
-    for feat in ["Protein_concentration", "Sugar_concentration"]:
+    for feat in ["Protein_conc", "Stabilizer_conc"]:
         print(f"  • {feat}:")
         for i, col in enumerate(targets):
             rate = violation_rate_monotonic(
@@ -78,7 +78,7 @@ def main(csv_path: str):
             print(f"      {col:15s}: {100*rate:5.2f}% violations")
 
     print("\n2) Monotonic-Decreasing in Temperature & Surfactant_concentration")
-    for feat in ["Temperature", "Surfactant_concentration"]:
+    for feat in ["Temperature", "Surfactant_conc"]:
         print(f"  • {feat}:")
         for i, col in enumerate(targets):
             rate = violation_rate_monotonic(
@@ -119,13 +119,13 @@ def main(csv_path: str):
     plt.plot(mids, ys, "-o")
     plt.axvline(0, ls=":", c="gray")
     plt.title("Mean viscosity vs (pH - pI)")
-    plt.xlabel("pH − pI")
+    plt.xlabel("pH - pI")
     plt.ylabel("mean U")
     plt.show()
 
     print("\n7) Excluded-Volume Divergence (convexity in Protein_concentration)")
     convex_frac, xs, ys = excluded_volume_check(
-        X["Protein_concentration"].values, U)
+        X["Protein_conc"].values, U)
     print(f"      fraction of intervals with d2u/dφ2 > 0: {convex_frac:.3f}")
     plt.plot(xs, ys, "-")
     plt.title("Viscosity vs Protein_concentration")
@@ -135,5 +135,5 @@ def main(csv_path: str):
 
 
 if __name__ == "__main__":
-    csv_path = os.path.join('content', 'formulation_data_05272025.csv')
+    csv_path = os.path.join('content', 'train_features.csv')
     main(csv_path)

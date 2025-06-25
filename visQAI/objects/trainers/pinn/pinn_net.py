@@ -45,13 +45,13 @@ class MLPHyperModel(HyperModel):
         #                      sampling="log", default=1e-2)
         # w_mon_dec = hp.Float("w_mon_dec", 1e-4, 1e-1,
         #                      sampling="log", default=1e-2)
-        w_flat = hp.Float("w_flat", 1e-4, 1e-1, sampling="log", default=1e-2)
+        # w_flat = hp.Float("w_flat", 1e-4, 1e-1, sampling="log", default=1e-2)
         w_shear = hp.Float("w_shear_thinning", 1e-4, 1e-1,
                            sampling="log", default=1e-2)
-        w_arr = hp.Float("w_arhenius", 1e-4, 1e-1,
-                         sampling="log", default=1e-2)
-        w_bell = hp.Float("w_pi_bell", 1e-4, 1e-1,
-                          sampling="log", default=1e-2)
+        # w_arr = hp.Float("w_arhenius", 1e-4, 1e-1,
+        #                  sampling="log", default=1e-2)
+        # w_bell = hp.Float("w_pi_bell", 1e-4, 1e-1,
+        #                   sampling="log", default=1e-2)
         # w_ein_thresh = hp.Float("w_einstein_threshold",
         #                         1e-4, 1e-1, sampling="log", default=1e-2)
         # w_ein_dil = hp.Float("w_einstein_dilute_limit",
@@ -74,19 +74,19 @@ class MLPHyperModel(HyperModel):
         # Build constraint objects
         constraints = [
             # MonotonicIncreasingConstraint(self.feature_names,
-            #                               ["Protein_concentration",
-            #                                   "Sugar_concentration"],
+            #                               ["Protein_conc",
+            #                                   "Stabilizer_conc"],
             #                               weight=w_mon_inc),
             # MonotonicDecreasingConstraint(self.feature_names,
-            #                               ["Temperature", "Surfactant_concentration"],
+            #                               ["Temperature", "Surfactant_conc"],
             #                               weight=w_mon_dec),
-            FlatSlopeConstraint(self.feature_names,
-                                "Buffer_pH", weight=w_flat),
+            # FlatSlopeConstraint(self.feature_names,
+            #                     "Buffer_pH", weight=w_flat),
             ShearThinningConstraint(weight=w_shear),
-            ArrheniusConstraint(self.feature_names,
-                                "Temperature", weight=w_arr),
-            GaussianBellAroundPIConstraint(
-                self.feature_names, "Buffer_pH", "PI_mean", weight=w_bell),
+            # ArrheniusConstraint(self.feature_names,
+            #                     "Temperature", weight=w_arr),
+            # GaussianBellAroundPIConstraint(
+            #     self.feature_names, "Buffer_pH", "PI_mean", weight=w_bell),
             # ExcludedVolumeDivergenceConstraint(
             #     self.feature_names, "Protein_concentration", weight=w_excl),
             # EinsteinDiluteLimitConstraint(self.feature_names, "Protein_concentration", threshold=w_ein_thresh,

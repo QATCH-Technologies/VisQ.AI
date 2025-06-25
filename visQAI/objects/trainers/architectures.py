@@ -22,72 +22,17 @@ def combined_loss(y_true, y_pred):
     return mse_loss + 0.1 * mono_loss
 
 
-def build_physics_nn(input_dim: int, output_dim: int,
-                     interaction_units: int, dense_units: int,
-                     bottleneck_units: int, learning_rate: float):
-
-    inp = layers.Input(shape=(input_dim,), name="features")
-
-    # Interaction layer (Physics-informed)
-    interaction = layers.Dense(
-        interaction_units, activation="relu", name="interaction_dense")(inp)
-
-    # Concatenate raw input and interaction embeddings
-    x = layers.Concatenate(name="concat_interactions")([inp, interaction])
-
-    # Residual Block 1
-    dense1 = layers.Dense(dense_units, activation="relu", name="dense_1")(x)
-    dense2 = layers.Dense(dense_units, activation="relu",
-                          name="dense_2")(dense1)
-    res1 = layers.Concatenate(name="residual_1")([x, dense2])
-
-    # Residual Block 2
-    dense3 = layers.Dense(dense_units, activation="relu", name="dense_3")(res1)
-    dense4 = layers.Dense(dense_units, activation="relu",
-                          name="dense_4")(dense3)
-    res2 = layers.Concatenate(name="residual_2")([res1, dense4])
-
-    # Bottleneck
-    bottleneck = layers.Dense(
-        bottleneck_units, activation="relu", name="bottleneck")(res2)
-
-    # Predict positive steps (pre-monotonic)
-    raw_steps = layers.Dense(output_dim, activation=None,
-                             name="raw_steps")(bottleneck)
-    pos_steps = layers.Activation("relu", name="positive_steps")(raw_steps)
-
-    # Monotonic decreasing output
-    monotonic_out = ReverseCumsum(name="monotonic_output")(pos_steps)
-
-    model = models.Model(inputs=inp, outputs=monotonic_out,
-                         name="physics_nn_monotonic")
-
-    return model
-
-
-# Hyperparameter tuning space
-physics_nn_hp_space = {
-    "interaction_units": {"type": "Choice", "values": [16, 32, 64, 128], "default": 32},
-    "dense_units":       {"type": "Choice", "values": [32, 64, 128, 256], "default": 128},
-    "bottleneck_units":  {"type": "Choice", "values": [16, 32, 64],       "default": 32},
-    "learning_rate":     {"type": "Float",  "min": 1e-5, "max": 1e-2, "sampling": "log", "default": 1e-3},
-}
-
-
-def physics_nn_compile(hp):
-    return {
-        "optimizer": optimizers.Adam(learning_rate=hp["learning_rate"]),
-        "loss":      combined_loss,
-        "metrics":   [metrics.MeanSquaredError(name="mse")],
-    }
-
-
-def build_cnn(input_dim: int, output_dim: int,
-              filters: int, kernel_size: int, dense_units: int, learning_rate: float):
+def build_cnn(input_dim: int,
+              output_dim: int,
+              filters: int,
+              kernel_size: int,
+              dense_units: int,
+              learning_rate: float,
+              dropout_rate: float):
     inp = layers.Input(shape=(input_dim,), name="features")
     x = layers.Reshape((input_dim, 1), name="reshape")(inp)
 
-    # two Conv1D blocks
+    # two Conv1D blocks (no dropout here)
     x = layers.Conv1D(filters, kernel_size,
                       activation="relu",
                       padding="same",
@@ -102,7 +47,10 @@ def build_cnn(input_dim: int, output_dim: int,
                      activation="relu",
                      name="dense_hidden")(x)
 
-    # instead of direct y, predict raw steps
+    # light dropout only on the dense representation
+    x = layers.Dropout(dropout_rate, name="dropout_dense")(x)
+
+    # raw‐step outputs
     raw_steps = layers.Dense(output_dim,
                              activation=None,
                              name="raw_steps")(x)
@@ -112,132 +60,22 @@ def build_cnn(input_dim: int, output_dim: int,
     # enforce monotonicity
     monotonic_out = ReverseCumsum(name="monotonic_output")(pos_steps)
 
-    model = models.Model(inputs=inp,
-                         outputs=monotonic_out,
-                         name="cnn_monotonic")
-    return model
+    return models.Model(inputs=inp,
+                        outputs=monotonic_out,
+                        name="cnn_monotonic_light_dropout")
 
 
+# expand your hyperparameter space to include dropout_rate
 cnn_hp_space = {
     "filters":       {"type": "Choice", "values": [16, 32, 64, 128],        "default": 32},
     "kernel_size":   {"type": "Int",    "min": 1, "max": 3, "step": 1,      "default": 2},
     "dense_units":   {"type": "Choice", "values": [16, 32, 64, 128],        "default": 64},
-    "learning_rate": {"type": "Float",  "min": 1e-4, "max": 1e-2, "sampling": "log", "default": 1e-3},
+    "dropout_rate":  {"type": "Float",  "min": 0.001, "max": 0.1, "sampling": "linear", "default": 0.5},
+    "learning_rate": {"type": "Float",  "min": 1e-4, "max": 1e-2, "sampling": "log",   "default": 1e-3},
 }
 
 
 def cnn_compile(hp):
-    return {
-        "optimizer": optimizers.Adam(learning_rate=hp["learning_rate"]),
-        "loss":      losses.MeanSquaredError(),
-        "metrics":   [metrics.MeanSquaredError(name="mse")],
-    }
-
-
-def build_transformer(
-    input_dim: int,
-    output_dim: int,
-    emb_dim: int,
-    num_heads: int,
-    ff_dim: int,
-    num_layers: int,
-    dropout_rate: float,
-    learning_rate: float
-) -> tf.keras.Model:
-    """
-    A simple Transformer encoder for tabular regression:
-      • Projects each feature into an emb_dim‐dim token
-      • Applies num_layers of (Attention → Add+Norm → FFN → Add+Norm)
-      • Pools and linearly projects to output_dim
-    """
-    inputs = layers.Input(shape=(input_dim,), name="features")
-    # expand into sequence of length=input_dim, tokens of size 1
-    x = layers.Reshape((input_dim, 1))(inputs)
-    # project to embedding dimension
-    x = layers.Dense(emb_dim, name="embed")(x)
-
-    # Transformer encoder blocks
-    for i in range(num_layers):
-        # Multi-head self-attention
-        attn_output = layers.MultiHeadAttention(
-            num_heads=num_heads,
-            key_dim=emb_dim // num_heads,
-            dropout=dropout_rate,
-            name=f"mha_{i}"
-        )(x, x)
-        x = layers.Add(name=f"res_attn_{i}")([x, attn_output])
-        x = layers.LayerNormalization(name=f"norm1_{i}")(x)
-
-        # Feed-forward network
-        ffn = layers.Dense(ff_dim, activation="relu", name=f"ffn1_{i}")(x)
-        ffn = layers.Dropout(dropout_rate, name=f"drop_ffn_{i}")(ffn)
-        ffn = layers.Dense(emb_dim, name=f"ffn2_{i}")(ffn)
-        x = layers.Add(name=f"res_ffn_{i}")([x, ffn])
-        x = layers.LayerNormalization(name=f"norm2_{i}")(x)
-
-    # global pool & output
-    x = layers.GlobalAveragePooling1D(name="pool")(x)
-    outputs = layers.Dense(output_dim, activation="linear", name="output")(x)
-
-    model = models.Model(inputs, outputs, name="transformer_regressor")
-    return model
-
-
-# ─── Transformer Hyperparameter Space ─────────────────────────────────────────
-transformer_hp_space = {
-    "emb_dim":       {"type": "Choice", "values": [32, 64, 128],           "default": 64},
-    "num_heads":     {"type": "Choice", "values": [2, 4, 8],               "default": 4},
-    "ff_dim":        {"type": "Choice", "values": [64, 128, 256],          "default": 128},
-    "num_layers":    {"type": "Int",    "min": 1, "max": 4, "step": 1,     "default": 2},
-    "dropout_rate":  {"type": "Float",  "min": 0.0, "max": 0.5, "step": 0.1, "default": 0.1},
-    "learning_rate": {"type": "Float",  "min": 1e-5, "max": 1e-2, "sampling": "log", "default": 1e-3},
-}
-
-# ─── Transformer Compile Function ─────────────────────────────────────────────
-
-
-def transformer_compile(hp):
-    return {
-        "optimizer": optimizers.Adam(learning_rate=hp["learning_rate"]),
-        "loss":      losses.MeanSquaredError(),
-        "metrics":   [metrics.MeanSquaredError(name="mse")],
-    }
-
-
-def build_autoencoder(
-    input_dim: int,
-    output_dim: int,
-    latent_dim: int,
-    dropout_rate: float,
-    learning_rate: float
-) -> tf.keras.Model:
-    inputs = layers.Input(shape=(input_dim,), name="features")
-
-    # Encoder
-    x = layers.Dense(latent_dim * 2, activation="relu",
-                     name="enc_dense1")(inputs)
-    x = layers.Dropout(dropout_rate, name="enc_dropout")(x)
-    latent = layers.Dense(latent_dim, activation="relu", name="latent")(x)
-
-    # Decoder
-    x = layers.Dense(latent_dim * 2, activation="relu",
-                     name="dec_dense1")(latent)
-    x = layers.Dropout(dropout_rate, name="dec_dropout")(x)
-    outputs = layers.Dense(
-        output_dim, activation="linear", name="reconstruction")(x)
-
-    return models.Model(inputs, outputs, name="autoencoder")
-
-
-# ─── Autoencoder Hyperparameter Space ─────────────────────────────────────────
-autoencoder_hp_space = {
-    "latent_dim":    {"type": "Choice", "values": [8, 16, 32, 64],           "default": 32},
-    "dropout_rate":  {"type": "Float",  "min": 0.0,  "max": 0.5, "step": 0.1, "default": 0.1},
-    "learning_rate": {"type": "Float",  "min": 1e-5, "max": 1e-2, "sampling": "log", "default": 1e-3},
-}
-
-
-def autoencoder_compile(hp):
     return {
         "optimizer": optimizers.Adam(learning_rate=hp["learning_rate"]),
         "loss":      losses.MeanSquaredError(),
@@ -299,7 +137,7 @@ mlp_hp_space = {
     "num_layers":    {"type": "Int",    "min": 1,  "max": 10,   "step": 1,      "default": 2},
     "units":         {"type": "Choice", "values": [16, 32, 64, 128, 256, 512],  "default": 64},
     "activation":    {"type": "Choice", "values": ["relu", "elu", "tanh"],       "default": "relu"},
-    "dropout_rate":  {"type": "Float",  "min": 0.0, "max": 0.5,   "step": 0.05,   "default": 0.0},
+    "dropout_rate":  {"type": "Float",  "min": 0, "max": 0.6,   "step": 0.05,   "default": 0.0},
     "use_batch_norm": {"type": "Boolean",                                           "default": True},
     "use_residual":  {"type": "Boolean",                                           "default": False},
     "learning_rate": {"type": "Float",  "min": 1e-5, "max": 1e-2, "sampling": "log", "default": 1e-3},
@@ -316,57 +154,53 @@ def mlp_compile(hp):
 
 # ─── architectures dict ───────────────────────────────────────────────────────
 architectures = {
-    "physics_nn": {"builder": build_physics_nn, "hp": physics_nn_hp_space, "compile_fn": physics_nn_compile},
-    # "mlp": {"builder": build_mlp, "hp": mlp_hp_space, "compile_fn": mlp_compile},
-    # "cnn": {"builder": build_cnn, "hp": cnn_hp_space, "compile_fn": cnn_compile},
-    # # "transfomer": {"builder":    build_transformer, "hp": transformer_hp_space, "compile_fn": transformer_compile, },
-    # "autoencoder": {
-    #     "builder":    build_autoencoder,
-    #     "hp":         autoencoder_hp_space,
-    #     "compile_fn": autoencoder_compile,
-    # },
+    "mlp": {"builder": build_mlp, "hp": mlp_hp_space, "compile_fn": mlp_compile},
+    "cnn": {"builder": build_cnn, "hp": cnn_hp_space, "compile_fn": cnn_compile},
 }
 
 # ─── 2) Load data once ─────────────────────────────────────────────────────────
-df = pd.read_csv("content/formulation_data_05072025.csv")
+df = pd.read_csv("content/train_features.csv")
 
 # ─── 3) Prepare to collect performance ─────────────────────────────────────────
 performance = {}
 
 for name, cfg in architectures.items():
-    print(f"\n>>> Training {name} <<<")
-    out_dir = os.path.join("visQAI", "objects", "architectures", name)
-    os.makedirs(out_dir, exist_ok=True)
+    for member in range(5):
+        import random
+        state = random.randint(1, 100)
+        print(f"\n>>> Training {name} with state {state} <<<")
+        out_dir = os.path.join("visQAI", "objects",
+                               "architectures", f"{name}", f"member_{member}")
+        os.makedirs(out_dir, exist_ok=True)
 
-    trainer = GenericTrainer(
-        df,
-        builder=cfg["builder"],
-        hyperparam_space=cfg["hp"],
-        compile_args=cfg["compile_fn"],
-        cv_splits=4,
-        random_state=42,
-    )
+        trainer = GenericTrainer(
+            df,
+            builder=cfg["builder"],
+            hyperparam_space=cfg["hp"],
+            compile_args=cfg["compile_fn"],
+            cv_splits=4,
+            random_state=state,
+        )
+        # a) Hyperparameter search
+        trainer.tune(
+            max_trials=50,
+            executions_per_trial=1,
+            epochs=30,
+            batch_size=16,
+            validation_split=0.2,
+            directory=out_dir,
+            project_name=f"{name}_tuner",
+            objective_name="val_mse",
+        )
 
-    # a) Hyperparameter search
-    trainer.tune(
-        max_trials=50,
-        executions_per_trial=1,
-        epochs=30,
-        batch_size=16,
-        validation_split=0.2,
-        directory=out_dir,
-        project_name=f"{name}_tuner",
-        objective_name="val_mse",
-    )
+        # b) Cross-validate & collect
+        mses = trainer.cross_validate(epochs=50, batch_size=16)
+        print(f"[{name}] CV MSEs:", [f"{e:.4f}" for e in mses])
+        performance[name] = mses
 
-    # b) Cross-validate & collect
-    mses = trainer.cross_validate(epochs=50, batch_size=16)
-    print(f"[{name}] CV MSEs:", [f"{e:.4f}" for e in mses])
-    performance[name] = mses
-
-    # c) Save artifacts
-    trainer.save(out_dir)
-    print(f"[{name}] done; saved to {out_dir}")
+        # c) Save artifacts
+        trainer.save(out_dir)
+        print(f"[{name}] done; saved to {out_dir}")
 
 # ─── 4) Build comparison report ────────────────────────────────────────────────
 

@@ -9,7 +9,7 @@ from predictor import ViscosityPredictor   # ← adjust to your real import
 
 # ─── CONFIG ────────────────────────────────────────────────────────────────────
 ARCH_ROOT = "visQAI/objects/architectures"
-CSV_PATH = "content/formulation_data_05072025.csv"
+CSV_PATH = "content/train_features.csv"
 MODEL_FN = "model.keras"
 PREP_FN = "preprocessor.pkl"
 

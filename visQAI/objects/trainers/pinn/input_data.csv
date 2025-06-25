@@ -1,0 +1,2 @@
+ID,Protein_type,MW,PI_mean,PI_range,Protein_conc,Temperature,Buffer_type,Buffer_pH,Buffer_conc,Salt_type,Salt_conc,Stabilizer_type,Stabilizer_conc,Surfactant_type,Surfactant_conc,
+F238,Pembrolizumab,149,7.57,0.3,300,25,PBS,7.4,10,NaCl,140,Sucrose,0.1,tween-80,
