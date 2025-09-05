@@ -40,10 +40,19 @@ DB_COLS_1 = ",".join(
      'subscriber_id'])
 
 
-class SubStatus(Enum):
-    EXPIRED = "expired"
-    TRIAL = "trial"
+class LicenseStatus(Enum):
+    """Constants for license status types.
+
+    Attributes:
+        ADMIN (str): Administrator license with unlimited access.
+        ACTIVE (str): Active paid license.
+        TRIAL (str): Trial license with expiration.
+        INACTIVE (str): Inactive or suspended license.
+    """
+    ADMIN = "admin"
     ACTIVE = "active"
+    TRIAL = "trial"
+    INACTIVE = "inactive"
 
 
 class DBManager:
@@ -227,13 +236,13 @@ class DBManager:
                 # Detect expired subscribers, update 'status' to 'expired'
                 status_update_required = False
                 if expiration < datetime.now():  # expired
-                    if status != SubStatus.EXPIRED.value:
+                    if status != LicenseStatus.INACTIVE.value:
                         status_update_required = True
-                        status = SubStatus.EXPIRED.value
+                        status = LicenseStatus.INACTIVE.value
                 else:  # set 'active' (these are subscribers, so they cannot be 'trial')
-                    if status != SubStatus.ACTIVE.value:
+                    if status != LicenseStatus.ACTIVE.value:
                         status_update_required = True
-                        status = SubStatus.ACTIVE.value
+                        status = LicenseStatus.ACTIVE.value
                 if status_update_required:
                     cursor.execute(
                         "UPDATE {} SET status=%s WHERE id=%s".format(DB_TABLE_0), (status, id,))
@@ -247,14 +256,14 @@ class DBManager:
             # print(f"2/2 - Fetched {len(data)} rows...")
             for row in data:
                 key = row['license_key']
-                status = SubStatus.TRIAL.value
+                status = LicenseStatus.TRIAL.value
                 creation_date = row['creation_date']
                 term_days = 90
                 expiration = creation_date + timedelta(days=term_days)
                 # Detect expired trials and mark 'expired'
                 if expiration < datetime.now():  # expired
-                    if status != SubStatus.EXPIRED.value:
-                        status = SubStatus.EXPIRED.value
+                    if status != LicenseStatus.INACTIVE.value:
+                        status = LicenseStatus.INACTIVE.value
                 # print(f"Updating key {key} to expiration date {expiration}")
                 cursor.execute(
                     "UPDATE {} SET status=%s, expiration=%s, term_days=%s WHERE license_key=%s".format(DB_TABLE_1), (status, expiration, term_days, key,))
