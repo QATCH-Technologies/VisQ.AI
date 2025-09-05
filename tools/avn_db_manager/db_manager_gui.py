@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 import json
 import zipfile
 import base64
+from enum import Enum
+
 
 DB_TABLE_0 = "subscribers"
 DB_COLS_0 = ",".join(
@@ -26,7 +28,7 @@ DB_COLS_1 = ",".join(
      'status',
      'creation_date',
      'expiration',
-     'trial_days',
+     'term_days',
      'auto_generated',
      'computer_name',
      'os_version',
@@ -38,13 +40,19 @@ DB_COLS_1 = ",".join(
      'subscriber_id'])
 
 
+class SubStatus(Enum):
+    EXPIRED = "expired"
+    TRIAL = "trial"
+    ACTIVE = "active"
+
+
 class DBManager:
     def __init__(self):
-        self.conn = pymysql.connect(**DBManager.load_avn_key_store())
+        self.conn = pymysql.connect(**DBManager._load_avn_key_store())
         self.init_tables()
 
     @staticmethod
-    def load_avn_key_store():
+    def _load_avn_key_store():
         DB_CONFIG = {}
         with zipfile.ZipFile("tools/avn_db_manager/avn_key_store.zip", 'r') as zip_key:
             pem_file = zip_key.read("db_config.pem").splitlines()
@@ -82,7 +90,7 @@ class DBManager:
                     status              TEXT NOT NULL,
                     creation_date       DATETIME DEFAULT CURRENT_TIMESTAMP,
                     expiration          DATETIME,
-                    trial_days          SMALLINT DEFAULT 90,
+                    term_days          SMALLINT DEFAULT 90,
                     auto_generated      TINYINT(1) DEFAULT 1,
                     computer_name       TEXT NOT NULL,
                     os_version          TEXT NOT NULL,
@@ -155,13 +163,13 @@ class DBManager:
                 "DELETE FROM {} WHERE id=%s".format(DB_TABLE_0), (id,))
         self.conn.commit()
 
-    def add_license(self, license_key, status, creation_date, expiration, trial_days, auto_generated, computer_name, os_version, bios_serial, motherboard_serial, cpu_id, disk_serial, system_uuid, subscriber_id):
+    def add_license(self, license_key, status, creation_date, expiration, term_days, auto_generated, computer_name, os_version, bios_serial, motherboard_serial, cpu_id, disk_serial, system_uuid, subscriber_id):
         with self.conn.cursor() as cursor:
             cursor.execute("INSERT INTO {} ({}) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)".format(DB_TABLE_1, DB_COLS_1), (license_key, status, creation_date, expiration,
-                           trial_days, auto_generated, computer_name, os_version, bios_serial, motherboard_serial, cpu_id, disk_serial, system_uuid, subscriber_id,))
+                           term_days, auto_generated, computer_name, os_version, bios_serial, motherboard_serial, cpu_id, disk_serial, system_uuid, subscriber_id,))
         self.conn.commit()
 
-    def edit_license(self, old_id, license_key, status, creation_date, expiration, trial_days, auto_generated, computer_name, os_version, bios_serial, motherboard_serial, cpu_id, disk_serial, system_uuid, subscriber_id):
+    def edit_license(self, old_id, license_key, status, creation_date, expiration, term_days, auto_generated, computer_name, os_version, bios_serial, motherboard_serial, cpu_id, disk_serial, system_uuid, subscriber_id):
         with self.conn.cursor() as cursor:
             cursor.execute(
                 "UPDATE {} SET license_key=%s WHERE license_key=%s".format(DB_TABLE_1), (license_key, old_id,))
@@ -172,7 +180,7 @@ class DBManager:
             cursor.execute(
                 "UPDATE {} SET expiration=%s WHERE license_key=%s".format(DB_TABLE_1), (expiration, license_key,))
             cursor.execute(
-                "UPDATE {} SET trial_days=%s WHERE license_key=%s".format(DB_TABLE_1), (trial_days, license_key,))
+                "UPDATE {} SET term_days=%s WHERE license_key=%s".format(DB_TABLE_1), (term_days, license_key,))
             cursor.execute(
                 "UPDATE {} SET auto_generated=%s WHERE license_key=%s".format(DB_TABLE_1), (auto_generated, license_key,))
             cursor.execute(
@@ -202,10 +210,10 @@ class DBManager:
     def sync_subscriber(self, id):
         with self.conn.cursor() as cursor:
             # Set subscription information for active licenses
-            if id:
+            if id:  # sync single subscriber
                 cursor.execute(
                     "SELECT id, status, expiration, term_days FROM {} WHERE id = %s".format(DB_TABLE_0), (id,))
-            else:
+            else:  # sync all subscriber info
                 cursor.execute(
                     "SELECT id, status, expiration, term_days FROM {}".format(DB_TABLE_0))
             data = cursor.fetchall()
@@ -215,8 +223,22 @@ class DBManager:
                 status = row['status']
                 expiration = row['expiration']
                 term_days = row['term_days']
+
+                # Detect expired subscribers, update 'status' to 'expired'
+                status_update_required = False
+                if expiration < datetime.now():  # expired
+                    if status != SubStatus.EXPIRED.value:
+                        status_update_required = True
+                        status = SubStatus.EXPIRED.value
+                else:  # set 'active' (these are subscribers, so they cannot be 'trial')
+                    if status != SubStatus.ACTIVE.value:
+                        status_update_required = True
+                        status = SubStatus.ACTIVE.value
+                if status_update_required:
+                    cursor.execute(
+                        "UPDATE {} SET status=%s WHERE id=%s".format(DB_TABLE_0), (status, id,))
                 cursor.execute(
-                    "UPDATE {} SET status=%s, expiration=%s, trial_days=%s WHERE subscriber_id=%s".format(DB_TABLE_1), (status, expiration, term_days, id,))
+                    "UPDATE {} SET status=%s, expiration=%s, term_days=%s WHERE subscriber_id=%s".format(DB_TABLE_1), (status, expiration, term_days, id,))
 
             # Revert to trial (or expired) for unsubscibed licenses
             cursor.execute(
@@ -225,13 +247,17 @@ class DBManager:
             # print(f"2/2 - Fetched {len(data)} rows...")
             for row in data:
                 key = row['license_key']
-                status = "trial"
+                status = SubStatus.TRIAL.value
                 creation_date = row['creation_date']
-                trial_days = 90
-                expiration = creation_date + timedelta(days=trial_days)
+                term_days = 90
+                expiration = creation_date + timedelta(days=term_days)
+                # Detect expired trials and mark 'expired'
+                if expiration < datetime.now():  # expired
+                    if status != SubStatus.EXPIRED.value:
+                        status = SubStatus.EXPIRED.value
                 # print(f"Updating key {key} to expiration date {expiration}")
                 cursor.execute(
-                    "UPDATE {} SET status=%s, expiration=%s, trial_days=%s WHERE license_key=%s".format(DB_TABLE_1), (status, expiration, trial_days, key,))
+                    "UPDATE {} SET status=%s, expiration=%s, term_days=%s WHERE license_key=%s".format(DB_TABLE_1), (status, expiration, term_days, key,))
         self.conn.commit()
 
     def close(self):
@@ -270,7 +296,7 @@ class EntryDialog(QDialog):
         self.creation_date = datetime.now().isoformat()
         for idx, input in enumerate(self.inputs):
             field = self.fields[idx]
-            if field in ['status', 'expiration', 'term_days', 'trial_days', 'subscriber_id']:
+            if field in ['status', 'expiration', 'term_days', 'term_days', 'subscriber_id']:
                 if self.values.get(field) != input.text():
                     if resync == False and QMessageBox.question(self, "Re-Sync Subscription Status", "Would you like to re-sync the license status with the subscriber database?"):
                         resync = True
@@ -282,10 +308,10 @@ class EntryDialog(QDialog):
                 if input.text().upper() in ["-1", "NONE", "NULL", ""]:
                     vals.append(self.creation_date)
                     continue
-            if field in ['trial_days', 'term_days']:
+            if field in ['term_days', 'term_days']:
                 if input.text().upper() in ["-1", "NONE", "NULL", ""]:
                     input.setText("90")
-                # Calculate expiration date as "creation_date + trial_days"
+                # Calculate expiration date as "creation_date + term_days"
                 vals[-1] = (datetime.fromisoformat(str(self.creation_date)) +
                             timedelta(days=float(input.text()))).isoformat()
             vals.append(input.text())
