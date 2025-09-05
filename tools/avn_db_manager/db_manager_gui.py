@@ -492,7 +492,7 @@ class MainWindow(QWidget):
         id_val = self.table0.item(selected, 0).text()
         sub_name = self.table0.item(selected, 1).text()
         try:
-            if QMessageBox.question(self, "Confirm Deletion", "Are you sure you want to delete the subscriber \"%s\"?\nWARNING: This operation cannot be undone.", (sub_name,)):
+            if QMessageBox.question(self, "Confirm Deletion", "Are you sure you want to delete the subscriber \"{}\"?\nWARNING: This operation cannot be undone.".format(sub_name)):
                 self.db.delete_subscriber(id_val)
                 self.load_data()
             else:
@@ -507,7 +507,7 @@ class MainWindow(QWidget):
             return
         id_val = self.table1.item(selected, 0).text()
         try:
-            if QMessageBox.question(self, "Confirm Deletion", "Are you sure you want to delete the license key \"%s\"?\nWARNING: This operation cannot be undone.", (id_val,)):
+            if QMessageBox.question(self, "Confirm Deletion", "Are you sure you want to delete the license key \"{}\"?\nWARNING: This operation cannot be undone.".format(id_val)):
                 self.db.delete_license(id_val)
                 self.load_data()
             else:
