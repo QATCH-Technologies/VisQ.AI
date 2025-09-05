@@ -235,14 +235,16 @@ class DBManager:
 
                 # Detect expired subscribers, update 'status' to 'expired'
                 status_update_required = False
-                if expiration < datetime.now():  # expired
-                    if status != LicenseStatus.INACTIVE.value:
-                        status_update_required = True
-                        status = LicenseStatus.INACTIVE.value
-                else:  # set 'active' (these are subscribers, so they cannot be 'trial')
-                    if status != LicenseStatus.ACTIVE.value:
-                        status_update_required = True
-                        status = LicenseStatus.ACTIVE.value
+                if status != LicenseStatus.ADMIN.value:
+                    if expiration < datetime.now():  # expired
+                        if status != LicenseStatus.INACTIVE.value:
+                            status_update_required = True
+                            status = LicenseStatus.INACTIVE.value
+                    else:  # set 'active' (these are subscribers, so they cannot be 'trial')
+                        if status != LicenseStatus.ACTIVE.value:
+                            status_update_required = True
+                            status = LicenseStatus.ACTIVE.value
+                # else: pass  # admin user (leave status as 'admin')
                 if status_update_required:
                     cursor.execute(
                         "UPDATE {} SET status=%s WHERE id=%s".format(DB_TABLE_0), (status, id,))
