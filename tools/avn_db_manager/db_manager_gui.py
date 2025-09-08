@@ -74,6 +74,7 @@ class DBManager:
         return DB_CONFIG
 
     def init_tables(self):
+        self.conn.ping(reconnect=True)
         with self.conn.cursor() as cursor:
             # cursor.execute("DROP TABLE IF EXISTS {}".format(DB_TABLE_0))
             # cursor.execute("DROP TABLE IF EXISTS {}".format(DB_TABLE_1))
@@ -114,10 +115,11 @@ class DBManager:
                 );
                 """
             )
-        self.conn.commit()
+        self.close()
 
     def fetch_subscribers(self):
         try:
+            self.conn.ping(reconnect=True)
             with self.conn.cursor() as cursor:
                 cursor.execute("SELECT * FROM {}".format(DB_TABLE_0))
                 return cursor.fetchall()
@@ -127,9 +129,12 @@ class DBManager:
                 # Handle as needed (e.g., create table, show message)
             else:
                 raise
+        finally:
+            self.close()
 
     def fetch_licenses(self):
         try:
+            self.conn.ping(reconnect=True)
             with self.conn.cursor() as cursor:
                 cursor.execute("SELECT * FROM {}".format(DB_TABLE_1))
                 return cursor.fetchall()
@@ -139,14 +144,18 @@ class DBManager:
                 # Handle as needed (e.g., create table, show message)
             else:
                 raise
+        finally:
+            self.close()
 
     def add_subscriber(self, id, subscriber_name, contact, status, creation_date, renewed_date, expiration, term_days):
+        self.conn.ping(reconnect=True)
         with self.conn.cursor() as cursor:
             cursor.execute("INSERT INTO {} ({}) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)".format(
                 DB_TABLE_0, DB_COLS_0), (id, subscriber_name, contact, status, creation_date, renewed_date, expiration, term_days,))
-        self.conn.commit()
+        self.close()
 
     def edit_subscriber(self, old_id, new_id, subscriber_name, contact, status, creation_date, renewed_date, expiration, term_days):
+        self.conn.ping(reconnect=True)
         with self.conn.cursor() as cursor:
             cursor.execute(
                 "UPDATE {} SET id=%s WHERE id=%s".format(DB_TABLE_0), (new_id, old_id,))
@@ -164,21 +173,24 @@ class DBManager:
                 "UPDATE {} SET expiration=%s WHERE id=%s".format(DB_TABLE_0), (expiration, new_id,))
             cursor.execute(
                 "UPDATE {} SET term_days=%s WHERE id=%s".format(DB_TABLE_0), (term_days, new_id,))
-        self.conn.commit()
+        self.close()
 
     def delete_subscriber(self, id):
+        self.conn.ping(reconnect=True)
         with self.conn.cursor() as cursor:
             cursor.execute(
                 "DELETE FROM {} WHERE id=%s".format(DB_TABLE_0), (id,))
-        self.conn.commit()
+        self.close()
 
     def add_license(self, license_key, status, creation_date, expiration, term_days, auto_generated, computer_name, os_version, bios_serial, motherboard_serial, cpu_id, disk_serial, system_uuid, subscriber_id):
+        self.conn.ping(reconnect=True)
         with self.conn.cursor() as cursor:
             cursor.execute("INSERT INTO {} ({}) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)".format(DB_TABLE_1, DB_COLS_1), (license_key, status, creation_date, expiration,
                            term_days, auto_generated, computer_name, os_version, bios_serial, motherboard_serial, cpu_id, disk_serial, system_uuid, subscriber_id,))
-        self.conn.commit()
+        self.close()
 
     def edit_license(self, old_id, license_key, status, creation_date, expiration, term_days, auto_generated, computer_name, os_version, bios_serial, motherboard_serial, cpu_id, disk_serial, system_uuid, subscriber_id):
+        self.conn.ping(reconnect=True)
         with self.conn.cursor() as cursor:
             cursor.execute(
                 "UPDATE {} SET license_key=%s WHERE license_key=%s".format(DB_TABLE_1), (license_key, old_id,))
@@ -208,15 +220,17 @@ class DBManager:
                 "UPDATE {} SET system_uuid=%s WHERE license_key=%s".format(DB_TABLE_1), (system_uuid, license_key,))
             cursor.execute(
                 "UPDATE {} SET subscriber_id=%s WHERE license_key=%s".format(DB_TABLE_1), (subscriber_id, license_key,))
-        self.conn.commit()
+        self.close()
 
     def delete_license(self, id):
+        self.conn.ping(reconnect=True)
         with self.conn.cursor() as cursor:
             cursor.execute(
                 "DELETE FROM {} WHERE license_key=%s".format(DB_TABLE_1), (id,))
-        self.conn.commit()
+        self.close()
 
     def sync_subscriber(self, id):
+        self.conn.ping(reconnect=True)
         with self.conn.cursor() as cursor:
             # Set subscription information for active licenses
             if id:  # sync single subscriber
@@ -269,10 +283,18 @@ class DBManager:
                 # print(f"Updating key {key} to expiration date {expiration}")
                 cursor.execute(
                     "UPDATE {} SET status=%s, expiration=%s, term_days=%s WHERE license_key=%s".format(DB_TABLE_1), (status, expiration, term_days, key,))
-        self.conn.commit()
+        self.close()
 
     def close(self):
-        self.conn.close()
+        try:
+            if self.conn.open:
+                self.conn.commit()
+                self.conn.close()
+        except:
+            pass
+
+    def __del__(self):
+        self.close()
 
 
 class EntryDialog(QDialog):
