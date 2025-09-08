@@ -3,12 +3,17 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget, QTableWidgetItem,
     QLineEdit, QLabel, QMessageBox, QDialog, QFormLayout, QTabWidget
 )
+from PyQt5.QtGui import QIcon
+from PyQt5.QtCore import Qt
 import pymysql
 from datetime import datetime, timedelta
 import json
 import zipfile
 import base64
 from enum import Enum
+
+VERSION = 1.2
+RELEASED = "2025-09-08"
 
 
 DB_TABLE_0 = "subscribers"
@@ -301,6 +306,7 @@ class EntryDialog(QDialog):
     def __init__(self, title, fields: list, values: dict = None):
         super().__init__()
         self.setWindowTitle(title)
+        # self.setWindowIcon()  # TODO
         layout = QFormLayout()
         self.inputs: list[QLineEdit] = []
         self.fields = fields
@@ -356,14 +362,36 @@ class EntryDialog(QDialog):
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Cloud DB Manager")
+        self.setWindowTitle(
+            "Subscribers & Licenses Database Manager for QATCH nanovisQ\u2122 VisQ.AI\u2122")
+        # self.setWindowIcon()  # TODO
         self.db = DBManager()
         self.layout = QVBoxLayout()
         self.tabs = QTabWidget()
         self.table0 = QTableWidget()
         self.table1 = QTableWidget()
+        self.about = QWidget()
+        about_layout = QVBoxLayout(self.about)
+        software_title = QLabel(f"<b>{self.windowTitle()}</b>")
+        software_title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        software_version = QLabel(f"Version {VERSION} (Released {RELEASED})")
+        software_version.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        icons8_credit = QLabel(
+            "Icons by <a href='https://icons8.com/'>Icons8</a>")
+        icons8_credit.setOpenExternalLinks(True)  # Automatically opens links
+        icons8_credit.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        copyright_notice = QLabel(
+            "\u00a9 2025 QATCH Technologies. All rights reserved.")
+        copyright_notice.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        # TODO: Add DB app icon here, centered
+        about_layout.addWidget(software_title)
+        about_layout.addWidget(software_version)
+        about_layout.addStretch()
+        about_layout.addWidget(icons8_credit)
+        about_layout.addWidget(copyright_notice)
         self.tabs.addTab(self.table0, "Subscribers")
         self.tabs.addTab(self.table1, "Licenses")
+        self.tabs.addTab(self.about, "About")
         self.layout.addWidget(self.tabs)
         btn_layout = QHBoxLayout()
         self.add_btn = QPushButton("Add Entry")
