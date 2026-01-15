@@ -1,13 +1,3 @@
-"""
-packager.py - Enhanced secure packaging for VisQAI models
-
-Updates:
-- Supports modular 'src' package structure
-- Recursive directory signing and archiving
-- Preserves package hierarchy in the zip file
-- Handles metadata for the new architecture
-"""
-
 import base64
 import json
 import os
@@ -84,14 +74,14 @@ class ModuleSigner:
 
 class SecurePredictorPackager:
     """
-    Package VisQAI models with the modular `src` library.
+    Package VisQAI models with specific `src` modules.
     """
 
     def __init__(
         self,
         output_dir: str = r"models\production",
-        library_dir: str = "src",
-        inference_path: str = "inference.py",
+        source_dir: str = "ml/src",
+        source_files: List[str] = None,
         requirements_path: str = "requirements.txt",
         readme_path: str = "README.md",
         private_key_path: Optional[str] = None,
@@ -100,8 +90,19 @@ class SecurePredictorPackager:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.library_dir = Path(library_dir)
-        self.inference_path = Path(inference_path)
+        self.source_dir = Path(source_dir)
+        # Default source files if none provided
+        self.source_files = source_files or [
+            "config.py",
+            "data.py",
+            "inference.py",
+            "layers.py",
+            "loss.py",
+            "management.py",
+            "models.py",
+            "utils.py",
+        ]
+
         self.requirements_path = Path(requirements_path)
         self.readme_path = Path(readme_path)
         self.enable_signing = enable_signing
@@ -111,13 +112,9 @@ class SecurePredictorPackager:
         else:
             self.signer = None
 
-        # Validate existence
-        if not self.library_dir.exists() or not self.library_dir.is_dir():
-            raise FileNotFoundError(f"Library directory not found: {self.library_dir}")
-        if not self.inference_path.exists():
-            raise FileNotFoundError(
-                f"Inference script not found: {self.inference_path}"
-            )
+        # Validate existence of source directory
+        if not self.source_dir.exists() or not self.source_dir.is_dir():
+            raise FileNotFoundError(f"Source directory not found: {self.source_dir}")
 
     def package(
         self,
@@ -161,7 +158,7 @@ class SecurePredictorPackager:
         contents_list = []
 
         print(f"Creating {'ensemble' if is_ensemble else 'single'} model package...")
-        print(f"Source Library: {self.library_dir}")
+        print(f"Source Directory: {self.source_dir}")
 
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
 
@@ -178,34 +175,26 @@ class SecurePredictorPackager:
                     signatures[model_filename] = self.signer.sign_file(Path(model_path))
             print(f"  Added {len(model_paths)} model checkpoint(s)")
 
-            # 2. Add Modular Library (Recursively)
-            # We map local 'src/' to 'src/src/' in the zip
-            for file_path in self.library_dir.rglob("*"):
-                if (
-                    file_path.is_file()
-                    and file_path.suffix != ".pyc"
-                    and "__pycache__" not in file_path.parts
-                ):
-                    # Calculate relative path for zip structure
-                    rel_path = file_path.relative_to(self.library_dir.parent)
-                    target_path = Path("src") / rel_path
+            # 2. Add Source Modules (Specific List)
+            for filename in self.source_files:
+                file_path = self.source_dir / filename
 
-                    zipf.write(file_path, target_path)
-                    contents_list.append(str(target_path))
+                if not file_path.exists():
+                    print(f"  WARNING: Source file not found, skipping: {filename}")
+                    continue
 
-                    if self.enable_signing:
-                        signatures[str(target_path)] = self.signer.sign_file(file_path)
-            print(f"  Added library module: src/{self.library_dir.name}")
+                # Target path in zip: src/<filename>
+                target_path = Path("src") / filename
 
-            # 3. Add Inference Script
-            target_inf_path = "src/inference.py"
-            zipf.write(self.inference_path, target_inf_path)
-            contents_list.append(target_inf_path)
-            if self.enable_signing:
-                signatures[target_inf_path] = self.signer.sign_file(self.inference_path)
-            print(f"  Added inference script: {target_inf_path}")
+                zipf.write(file_path, target_path)
+                contents_list.append(str(target_path))
 
-            # 4. Add Extras (Requirements, Readme)
+                if self.enable_signing:
+                    signatures[str(target_path)] = self.signer.sign_file(file_path)
+
+            print(f"  Added {len(self.source_files)} library modules to src/")
+
+            # 3. Add Extras (Requirements, Readme)
             extras = [self.requirements_path, self.readme_path]
             for extra in extras:
                 if extra.exists():
@@ -215,7 +204,7 @@ class SecurePredictorPackager:
                         signatures[extra.name] = self.signer.sign_file(extra)
                     print(f"  Added: {extra.name}")
 
-            # 5. Metadata
+            # 4. Metadata
             metadata = self._create_metadata(
                 model_paths=model_paths,
                 is_ensemble=is_ensemble,
@@ -234,7 +223,7 @@ class SecurePredictorPackager:
                 )
             print(f"  Added: model/metadata.json")
 
-            # 6. Security Files
+            # 5. Security Files
             if self.enable_signing:
                 self._add_security_files(zipf, signatures)
                 print(f"  Added: security signatures")
@@ -274,7 +263,7 @@ class SecurePredictorPackager:
             "notes": notes or "",
             "total_model_size_mb": round(total_size / (1024 * 1024), 2),
             "cryptographically_signed": self.enable_signing,
-            "architecture": "Modular VisQAI (src)",
+            "architecture": "VisQAI Standard",
             "package_contents": contents,
         }
         return metadata
@@ -290,29 +279,71 @@ class SecurePredictorPackager:
         zipf.writestr("security/signatures.json", signatures_json)
 
 
+def get_latest_checkpoints(experiments_dir: str = "models/experiments") -> List[str]:
+    """
+    Finds .pt files in the most recently modified directory within experiments_dir.
+    """
+    exp_path = Path(experiments_dir)
+    if not exp_path.exists():
+        raise FileNotFoundError(f"Experiments directory not found: {experiments_dir}")
+
+    # Get all subdirectories
+    subdirs = [d for d in exp_path.iterdir() if d.is_dir()]
+    if not subdirs:
+        raise FileNotFoundError(f"No experiment directories found in {experiments_dir}")
+
+    # Sort by modification time (or name if timestamps are in name)
+    # Using modification time ensures we get the actual latest run
+    latest_dir = max(subdirs, key=os.path.getmtime)
+    print(f"Located latest experiment: {latest_dir.name}")
+
+    # Find .pt files
+    checkpoints = list(latest_dir.glob("*.pt"))
+    if not checkpoints:
+        raise FileNotFoundError(f"No .pt files found in {latest_dir}")
+
+    # Return as list of strings
+    return [str(cp) for cp in checkpoints]
+
+
 def main():
-    """Example usage."""
-    # Ensure dummy files exist for the example to run if this file is executed directly
-    if not os.path.exists("src"):
-        print(
-            "Error: 'src' directory missing. Please ensure directory structure exists."
+    """Execution script."""
+
+    # Define the specific modules to package
+    source_modules = [
+        "config.py",
+        "data.py",
+        "inference.py",
+        "layers.py",
+        "loss.py",
+        "management.py",
+        "models.py",
+        "utils.py",
+    ]
+
+    try:
+        # 1. Locate Checkpoints
+        print("Locating latest checkpoints...")
+        checkpoints = get_latest_checkpoints("models/experiments")
+
+        # 2. Initialize Packager
+        packager = SecurePredictorPackager(
+            output_dir=r"models\production",
+            source_dir="ml/src",
+            source_files=source_modules,
+            enable_signing=True,
         )
-        return
 
-    packager = SecurePredictorPackager(
-        output_dir=r"models\production",
-        library_dir="src",
-        inference_path="inference.py",
-        enable_signing=True,
-    )
+        # 3. Create Package
+        packager.package(
+            model_paths=checkpoints,
+            package_name=None,  # Will auto-generate name
+            notes="Auto-packaged from latest experiment",
+            version="1.1",
+        )
 
-    # Example: Packaging an ensemble (Update paths to real checkpoints)
-    # ensemble_checkpoints = ["checkpoints/ensemble_model_0.pt", "checkpoints/ensemble_model_1.pt"]
-
-    # For demo, we just print instructions
-    print("Packager Initialized.")
-    print("To package models, ensure checkpoints exist and run:")
-    print("packager.package(model_paths=['path/to/ckpt.pt'], package_name='MyPackage')")
+    except Exception as e:
+        print(f"\n[ERROR] Packaging failed: {e}")
 
 
 if __name__ == "__main__":
