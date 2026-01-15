@@ -4,7 +4,7 @@
 
 ---
 
-## 🧠 Design Rationale
+## Design Rationale
 
 The design of this system addresses three critical challenges in biopharmaceutical viscosity modeling:
 
@@ -17,7 +17,7 @@ The design of this system addresses three critical challenges in biopharmaceutic
 
 ---
 
-## 🏗 System Architecture
+## System Architecture
 
 The system is now refactored into a modular package `src`. Below is the data flow and architectural breakdown.
 
@@ -53,7 +53,7 @@ We do not train on MSE alone. The loss function includes penalty terms to enforc
 
 ---
 
-## 📂 Directory Structure
+## Directory Structure
 
 ```text
 src/

@@ -1,5 +1,5 @@
 """
-Model management module for the Viscosity library.
+Model management module for VisQ.AI.
 
 This module handles the lifecycle management of Viscosity models, including:
     - Checkpointing (saving and loading models, processors, and hyperparameters).
