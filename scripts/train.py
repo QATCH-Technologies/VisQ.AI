@@ -348,7 +348,7 @@ if __name__ == "__main__":
     EVAL_PATH = r"data/raw/formulation_data_01052026.csv"
 
     # Tuning Settings
-    N_TRIALS = 50
+    N_TRIALS = 15
     N_FOLDS = 5
     N_MODELS = 5  # Size of final ensemble
 

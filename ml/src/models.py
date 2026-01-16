@@ -31,6 +31,7 @@ from torch.nn import Embedding
 
 try:
     from .config import (
+        CONC_THRESHOLDS,
         CONC_TYPE_PAIRS,
         EXCIPIENT_PRIORS,
         EXCIPIENT_TYPE_MAPPING,
@@ -38,10 +39,12 @@ try:
     from .layers import (
         EmbeddingDropout,
         LearnablePhysicsPrior,
+        LearnableSoftThresholdPrior,
         ResidualBlock,
     )
 except ImportError:
     from config import (
+        CONC_THRESHOLDS,
         CONC_TYPE_PAIRS,
         EXCIPIENT_PRIORS,
         EXCIPIENT_TYPE_MAPPING,
@@ -49,6 +52,7 @@ except ImportError:
     from layers import (
         EmbeddingDropout,
         LearnablePhysicsPrior,
+        LearnableSoftThresholdPrior,
         ResidualBlock,
     )
 
@@ -165,15 +169,35 @@ class Model(nn.Module):
             ):
                 conc_col_name = [k for k, v in CONC_TYPE_PAIRS.items() if v == col][0]
 
-                # Only attach physics layer if we have split indices (Low/High) for it
+                # We now assume split_indices points to the RAW concentration column
                 if conc_col_name in self.split_indices:
                     n_classes = len(self.cat_maps["Protein_class_type"])
                     n_regimes = len(self.cat_maps["Regime"])
                     n_excipients = len(self.cat_maps[col])
 
-                    phys_layer = LearnablePhysicsPrior(
-                        n_classes, n_regimes, n_excipients
+                    # --- NEW: Build Threshold Tensor ---
+                    # default to 1.0 to avoid division by zero if missing
+                    init_thresh = torch.ones(n_excipients)
+                    vocab = self.cat_maps[col]
+
+                    for idx, name in enumerate(vocab):
+                        # Simple fuzzy matching to find threshold in config
+                        # e.g. "sucrose" in "sucrose_experimental" -> 200.0
+                        name_lower = name.lower()
+                        for key, val in CONC_THRESHOLDS.items():
+                            if key in name_lower:
+                                init_thresh[idx] = float(val)
+                                break
+                    # -----------------------------------
+
+                    # Instantiate the NEW layer class (Update class name if needed)
+                    phys_layer = LearnableSoftThresholdPrior(
+                        n_classes,
+                        n_regimes,
+                        n_excipients,
+                        initial_thresholds=init_thresh,  # <--- Pass it here
                     )
+
                     self._init_static_priors(phys_layer, col)
                     self.physics_layers.append(phys_layer)
                     self.physics_col_indices.append(i)
@@ -352,7 +376,6 @@ class Model(nn.Module):
             total_correction = 0.0
 
             for i, phys_layer in enumerate(self.physics_layers):
-                # We check isinstance to safely handle Identity layers without type errors
                 if not isinstance(phys_layer, nn.Identity):
                     e_idx = x_cat[:, i]
                     col_name = self.cat_feature_names[i]
@@ -360,22 +383,28 @@ class Model(nn.Module):
                         k for k, v in CONC_TYPE_PAIRS.items() if v == col_name
                     ][0]
 
-                    # Get Low/High indices for this concentration
-                    idx_low, idx_high = self.split_indices[conc_name]
+                    # Get indices for the raw concentration
+                    # NOTE: Ensure split_indices now points to the single raw column!
+                    idx_start, idx_end = self.split_indices[conc_name]
 
-                    val_low = x_num[:, idx_low : idx_low + 1]
-                    val_high = x_num[:, idx_high : idx_high + 1]
+                    # --- NEW: Fetch single raw value ---
+                    val_raw = x_num[:, idx_start:idx_end]
+                    # -----------------------------------
 
-                    # Ignore "none" categories in physics calculation
+                    # Ignore "none" categories
                     none_idx = self.none_indices.get(col_name, -1)
                     if none_idx != -1:
                         mask = (e_idx != none_idx).float().unsqueeze(1)
                     else:
                         mask = torch.ones_like(e_idx).float().unsqueeze(1)
 
-                    correction, layer_details = phys_layer(
-                        p_idx, r_idx, e_idx, val_low, val_high
-                    )
+                    # --- NEW: Updated Call Signature ---
+                    # We pass 'val_raw' instead of 'val_low, val_high'
+                    correction, layer_details = phys_layer(p_idx, r_idx, e_idx, val_raw)
+
+                    # Ensure correction is [Batch, 1]
+                    if correction.dim() == 1:
+                        correction = correction.unsqueeze(1)
 
                     total_correction = total_correction + (correction * mask)
 
@@ -383,7 +412,6 @@ class Model(nn.Module):
                         physics_details[col_name] = {
                             k: v * mask.squeeze() for k, v in layer_details.items()
                         }
-
             pred = pred + total_correction
 
         # Regime Gate

@@ -13,7 +13,6 @@ Version:
     1.0
 """
 
-from ast import Import
 from typing import cast
 
 import torch
@@ -23,6 +22,77 @@ try:
     from .config import TARGETS
 except ImportError:
     from config import TARGETS
+
+
+class LearnableSoftThresholdPrior(nn.Module):
+    def __init__(self, n_classes, n_regimes, n_excipients, initial_thresholds=None):
+        super().__init__()
+        # 1. Store Static Scores
+        self.register_buffer(
+            "static_scores", torch.zeros(n_classes, n_regimes, n_excipients)
+        )
+
+        # 2. Learnable Modifiers
+        self.delta = nn.Parameter(torch.zeros(n_classes, n_regimes, n_excipients))
+
+        # 3. Learnable Thresholds (FIXED)
+        if initial_thresholds is None:
+            # Create a default tensor if none provided
+            t_data = torch.ones(n_excipients)
+        elif isinstance(initial_thresholds, torch.Tensor):
+            # If it's already a tensor, use the recommended copy method
+            t_data = initial_thresholds.clone().detach()
+        else:
+            # If it's a list/array, convert it
+            t_data = torch.tensor(initial_thresholds)
+
+        # Ensure float32 and make it a parameter
+        self.thresholds = nn.Parameter(t_data.to(dtype=torch.float32))
+
+        # 4. Learnable Weights
+        self.w_below = nn.Parameter(
+            torch.ones(n_classes, n_regimes, n_excipients) * 0.1
+        )
+        self.w_above = nn.Parameter(
+            torch.ones(n_classes, n_regimes, n_excipients) * 0.5
+        )
+
+    def forward(self, p_idx, r_idx, e_idx, raw_concentration):
+        # 1. Fetch Parameters and FIX SHAPES
+        # All fetched params are [Batch], we need [Batch, 1] to match raw_concentration
+
+        scores_tensor = cast(torch.Tensor, self.static_scores)
+        base_score = scores_tensor[p_idx, r_idx, e_idx].unsqueeze(1)  # <--- Fix
+
+        d = torch.clamp(self.delta[p_idx, r_idx, e_idx], -2.0, 2.0).unsqueeze(
+            1
+        )  # <--- Fix
+
+        thresh = self.thresholds[e_idx].unsqueeze(1)  # <--- Fix
+
+        w_b = self.w_below[p_idx, r_idx, e_idx].unsqueeze(1)  # <--- Fix
+        w_a = self.w_above[p_idx, r_idx, e_idx].unsqueeze(1)  # <--- Fix
+
+        # 2. Soft Gating Logic (Now strictly [Batch, 1] everywhere)
+        # Add epsilon to avoid division by zero
+        conc_ratio = raw_concentration / (thresh + 1e-6)
+
+        # Sigmoid gate (0.0 = Low, 1.0 = High)
+        gate = torch.sigmoid(10 * (conc_ratio - 1.0))
+
+        # Calculate effects
+        effect_below = torch.tanh(conc_ratio) * w_b
+        effect_above = torch.log1p(conc_ratio) * w_a
+
+        # Blend
+        conc_term = ((1 - gate) * effect_below) + (gate * effect_above)
+
+        # Combine with base score
+        result = (base_score + d) * conc_term
+
+        # Result is already [Batch, 1], no extra unsqueeze needed here if we rely on return
+        # But to match your interface expectations:
+        return result, {"gate": gate, "conc_term": conc_term}
 
 
 class LearnablePhysicsPrior(nn.Module):
