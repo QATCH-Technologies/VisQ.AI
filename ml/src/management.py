@@ -24,10 +24,17 @@ import torch.nn as nn
 from sklearn.preprocessing import StandardScaler
 from torch.nn import Embedding, Linear
 
-from .config import TARGETS
-from .data import DataProcessor
-from .layers import ResidualAdapter
-from .models import Model
+try:
+    from .config import TARGETS
+    from .data import DataProcessor
+    from .layers import ResidualAdapter
+    from .models import Model
+except ImportError:
+    from config import TARGETS
+    from layers import ResidualAdapter
+
+    from data import DataProcessor
+    from models import Model
 
 
 def expand_processor_and_model(

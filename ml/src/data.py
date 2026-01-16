@@ -25,12 +25,20 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
-from .config import (
-    BASE_CATEGORICAL,
-    BASE_NUMERIC,
-    CONC_THRESHOLDS,
-    CONC_TYPE_PAIRS,
-)
+try:
+    from .config import (
+        BASE_CATEGORICAL,
+        BASE_NUMERIC,
+        CONC_THRESHOLDS,
+        CONC_TYPE_PAIRS,
+    )
+except ImportError:
+    from config import (
+        BASE_CATEGORICAL,
+        BASE_NUMERIC,
+        CONC_THRESHOLDS,
+        CONC_TYPE_PAIRS,
+    )
 
 
 class DataProcessor:

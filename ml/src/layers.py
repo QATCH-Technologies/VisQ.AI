@@ -13,12 +13,16 @@ Version:
     1.0
 """
 
+from ast import Import
 from typing import cast
 
 import torch
 import torch.nn as nn
 
-from .config import TARGETS
+try:
+    from .config import TARGETS
+except ImportError:
+    from config import TARGETS
 
 
 class LearnablePhysicsPrior(nn.Module):

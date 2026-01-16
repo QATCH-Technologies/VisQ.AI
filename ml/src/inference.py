@@ -28,19 +28,35 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from .config import TARGETS
-from .layers import LearnablePhysicsPrior, ResidualAdapter
-from .management import (
-    expand_processor_and_model,
-    load_model_checkpoint,
-    save_model_checkpoint,
-)
-from .models import EnsembleModel, Model
-from .utils import (
-    inverse_log_transform,
-    log_transform_targets,
-    to_tensors,
-)
+try:
+    from .config import TARGETS
+    from .layers import LearnablePhysicsPrior, ResidualAdapter
+    from .management import (
+        expand_processor_and_model,
+        load_model_checkpoint,
+        save_model_checkpoint,
+    )
+    from .models import EnsembleModel, Model
+    from .utils import (
+        inverse_log_transform,
+        log_transform_targets,
+        to_tensors,
+    )
+except ImportError:
+    from config import TARGETS
+    from layers import LearnablePhysicsPrior, ResidualAdapter
+    from management import (
+        expand_processor_and_model,
+        load_model_checkpoint,
+        save_model_checkpoint,
+    )
+    from utils import (
+        inverse_log_transform,
+        log_transform_targets,
+        to_tensors,
+    )
+
+    from models import EnsembleModel, Model
 
 
 class ViscosityPredictor:

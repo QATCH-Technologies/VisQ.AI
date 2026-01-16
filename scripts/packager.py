@@ -172,6 +172,7 @@ class SecurePredictorPackager:
                 zipf.write(model_path, model_filename)
                 contents_list.append(model_filename)
                 if self.enable_signing:
+                    # Model checkpoints use hardcoded forward slashes, so they were already fine
                     signatures[model_filename] = self.signer.sign_file(Path(model_path))
             print(f"  Added {len(model_paths)} model checkpoint(s)")
 
@@ -183,14 +184,15 @@ class SecurePredictorPackager:
                     print(f"  WARNING: Source file not found, skipping: {filename}")
                     continue
 
-                # Target path in zip: src/<filename>
-                target_path = Path("src") / filename
+                # Force POSIX paths (forward slashes) for ZIP internal structure and signature keys
+                target_path_str = (Path("src") / filename).as_posix()
 
-                zipf.write(file_path, target_path)
-                contents_list.append(str(target_path))
+                zipf.write(file_path, target_path_str)
+                contents_list.append(target_path_str)
 
                 if self.enable_signing:
-                    signatures[str(target_path)] = self.signer.sign_file(file_path)
+                    # Key matches what secure_loader expects (src/file.py)
+                    signatures[target_path_str] = self.signer.sign_file(file_path)
 
             print(f"  Added {len(self.source_files)} library modules to src/")
 

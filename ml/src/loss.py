@@ -24,8 +24,12 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 import torch
 import torch.nn as nn
 
-if TYPE_CHECKING:
-    from .data import DataProcessor
+try:
+    if TYPE_CHECKING:
+        from .data import DataProcessor
+except ImportError:
+    if TYPE_CHECKING:
+        from data import DataProcessor
 
 HCI_THRESHOLD = 1.3
 

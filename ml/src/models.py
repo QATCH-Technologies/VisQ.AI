@@ -29,16 +29,28 @@ import torch.nn as nn
 from torch import Tensor
 from torch.nn import Embedding
 
-from .config import (
-    CONC_TYPE_PAIRS,
-    EXCIPIENT_PRIORS,
-    EXCIPIENT_TYPE_MAPPING,
-)
-from .layers import (
-    EmbeddingDropout,
-    LearnablePhysicsPrior,
-    ResidualBlock,
-)
+try:
+    from .config import (
+        CONC_TYPE_PAIRS,
+        EXCIPIENT_PRIORS,
+        EXCIPIENT_TYPE_MAPPING,
+    )
+    from .layers import (
+        EmbeddingDropout,
+        LearnablePhysicsPrior,
+        ResidualBlock,
+    )
+except ImportError:
+    from config import (
+        CONC_TYPE_PAIRS,
+        EXCIPIENT_PRIORS,
+        EXCIPIENT_TYPE_MAPPING,
+    )
+    from layers import (
+        EmbeddingDropout,
+        LearnablePhysicsPrior,
+        ResidualBlock,
+    )
 
 
 class Model(nn.Module):
