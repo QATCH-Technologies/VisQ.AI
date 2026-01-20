@@ -236,7 +236,11 @@ def train_final_ensemble(
     X_num_t, X_cat_t, y_t, w_t = to_tensors(X_num, X_cat, y_log, weights)
 
     trained_models = []
-
+    if best_params["weight_decay"] < 1e-4:
+        print(
+            f"  [Auto-Correction] Boosting weight_decay from {best_params['weight_decay']} to 1e-4 for stability."
+        )
+        best_params["weight_decay"] = 1e-4
     for i in range(n_models):
         print(f"\nTraining Model {i+1}/{n_models}")
         print("-" * 50)
@@ -361,7 +365,7 @@ if __name__ == "__main__":
     DATA_PATH = r"data/processed/formulation_data_augmented.csv"
 
     # Configuration
-    N_TRIALS = 25
+    N_TRIALS = 40
     N_FOLDS = 5
     N_MODELS = 5
     DO_TUNING = True

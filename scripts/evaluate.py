@@ -12,7 +12,7 @@ def evaluate_model(model_path, data_path):
     df = pd.read_csv(data_path)
 
     print(f"Loading model from {model_path}...")
-    vp = ViscosityPredictor(model_path)
+    vp = ViscosityPredictor(model_path, is_ensemble=True)
 
     # 2. Identify Target Columns
     # Filter columns that start with 'Viscosity_'
@@ -66,7 +66,7 @@ def evaluate_model(model_path, data_path):
 
 if __name__ == "__main__":
     # Adjust paths as needed
-    MODEL_PATH = "models/experiments/20260120_102246/model_4.pt"
+    MODEL_PATH = r"models\experiments\20260120_152300"
     DATA_PATH = "data/raw/formulation_data_12292025.csv"
 
     evaluate_model(MODEL_PATH, DATA_PATH)

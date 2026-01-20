@@ -240,7 +240,7 @@ class PhysicsInformedLoss(nn.Module):
         # Input Gradient Constraints
         input_loss = 0.0
 
-        if self.lambda_input > 0 and inputs_num.requires_grad:
+        if self.lambda_input > 0.001 and inputs_num.requires_grad:
             grads = torch.autograd.grad(
                 outputs=pred.sum(),
                 inputs=inputs_num,
