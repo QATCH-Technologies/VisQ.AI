@@ -18,6 +18,7 @@ Version:
     1.0
 """
 
+import enum
 import glob
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union, cast
@@ -572,3 +573,11 @@ class ViscosityPredictor:
                 "Model and Processor and params must be initialized before saving a checkpoint."
             )
         save_model_checkpoint(self.model, self.processor, self.best_params, filepath)
+
+
+if __name__ == "__main__":
+    vp = ViscosityPredictor("models/experiments/20260120_102246/model_0.pt")
+    df = pd.read_csv("exper.csv")
+    output = vp.predict(df)
+    for i, row in enumerate(output):
+        print(i, row)
