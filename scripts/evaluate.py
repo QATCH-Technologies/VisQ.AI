@@ -1,183 +1,72 @@
-import glob
-import os
-import re
-from typing import Dict, List, Optional, Tuple
-
 import numpy as np
 import pandas as pd
-import torch
 from sklearn.metrics import mean_absolute_percentage_error, r2_score
 
-# --- MODULAR IMPORTS ---
-# Ensure your environment can see 'src'
-from src.config import BASE_CATEGORICAL, BASE_NUMERIC, TARGETS
-from src.data import DataProcessor
-from src.management import load_model_checkpoint
-from src.models import EnsembleModel
-from src.utils import clean, inverse_log_transform
-
-# --- CONFIGURATION ---
-# Update this to the specific experiment timestamp folder you want to evaluate
-EXPERIMENT_DIR = r"models/experiments/20260120_090347"
-DATA_PATH = r"data/processed/formulation_data_augmented.csv"
+# Import your class - adjust import path as necessary
+from src.inference import ViscosityPredictor
 
 
-def extract_shear_rate(column_name: str) -> float:
-    """
-    Extracts the numeric shear rate from the target column name.
-    Example: 'Viscosity_0.1' -> 0.1
-    """
-    match = re.search(r"(\d+\.?\d*)$", column_name)
-    if match:
-        return float(match.group(1))
-    return -1.0
+def evaluate_model(model_path, data_path):
+    # 1. Load Data and Model
+    print(f"Loading data from {data_path}...")
+    df = pd.read_csv(data_path)
 
+    print(f"Loading model from {model_path}...")
+    vp = ViscosityPredictor(model_path)
 
-def check_model_health(model: torch.nn.Module) -> bool:
-    """
-    Checks if a model's weights are valid (no NaNs or Infs).
-    Returns True if healthy, False if corrupted.
-    """
-    for param in model.parameters():
-        if not torch.isfinite(param).all():
-            return False
-    return True
+    # 2. Identify Target Columns
+    # Filter columns that start with 'Viscosity_'
+    target_cols = [c for c in df.columns if c.startswith("Viscosity_")]
 
+    # Validation: Ensure we found exactly 5 target columns
+    if len(target_cols) != 5:
+        print(
+            f"Warning: Found {len(target_cols)} target columns, but model outputs 5 values."
+        )
+        print(f"Columns found: {target_cols}")
+        # You might want to sort them to ensure alignment with model output indices
+        target_cols.sort()
+        print(f"Using sorted columns: {target_cols}")
 
-def load_ensemble(
-    experiment_dir: str, device: str
-) -> Tuple[EnsembleModel, DataProcessor]:
-    """
-    Loads all valid model checkpoints from the directory using the management module.
-    """
-    model_files = sorted(glob.glob(os.path.join(experiment_dir, "model_*.pt")))
-    if not model_files:
-        raise FileNotFoundError(f"No model_*.pt files found in {experiment_dir}")
+    # 3. Generate Predictions
+    print("Generating predictions...")
+    preds = vp.predict(df)  # Assumes preds is (N_samples, 5)
 
-    models = []
-    processor = None
-    print(f"Found {len(model_files)} checkpoints in {experiment_dir}...")
+    # 4. Extract Ground Truth
+    ground_truth = df[target_cols].values
 
-    for path in model_files:
-        filename = os.path.basename(path)
-        try:
-            # --- REQUIREMENT 1: Use management module to load ---
-            # This handles the reconstruction of the processor, scaler, and architecture
-            model, loaded_proc, _ = load_model_checkpoint(path, device=device)
+    # 5. Calculate Metrics per Shear Rate
+    results = []
 
-            # Health check to ensure we don't use dead models
-            if check_model_health(model):
-                model.eval()
-                models.append(model)
+    print("\n--- Evaluation Results ---")
+    for i, col_name in enumerate(target_cols):
+        # Extract single column for this shear rate
+        y_true = ground_truth[:, i]
+        y_pred = preds[:, i]
 
-                # Keep the processor from the first valid model
-                # (All models in an ensemble share the same processor logic)
-                if processor is None:
-                    processor = loaded_proc
-            else:
-                print(f"  [WARN] Skipping {filename}: Model weights contain NaNs.")
+        # Calculate R2
+        r2 = r2_score(y_true, y_pred)
 
-        except Exception as e:
-            print(f"  [ERR] Failed to load {filename}: {e}")
+        # Calculate MAPE
+        # Note: distinct handling if y_true contains zeros to avoid infinity
+        mape = mean_absolute_percentage_error(y_true, y_pred)
 
-    if not models:
-        raise RuntimeError("No valid models could be loaded.")
+        results.append({"Shear Rate / Column": col_name, "R2": r2, "MAPE": mape})
 
-    print(f"Successfully loaded {len(models)} valid models.")
+        print(f"{col_name}: R2 = {r2:.4f}, MAPE = {mape:.4f}")
 
-    # We return an EnsembleModel wrapper (assuming it's available in src.models)
-    return EnsembleModel(models), processor
+    # 6. Overall Aggregates (Optional)
+    avg_r2 = np.mean([r["R2"] for r in results])
+    avg_mape = np.mean([r["MAPE"] for r in results])
+
+    print("-" * 30)
+    print(f"Average R2: {avg_r2:.4f}")
+    print(f"Average MAPE: {avg_mape:.4f}")
 
 
 if __name__ == "__main__":
-    # 1. Setup
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
+    # Adjust paths as needed
+    MODEL_PATH = "models/experiments/20260120_102246/model_4.pt"
+    DATA_PATH = "data/raw/formulation_data_12292025.csv"
 
-    # 2. Load Data
-    print(f"Loading evaluation data: {DATA_PATH}")
-    df = pd.read_csv(DATA_PATH)
-
-    # Use clean from utils.py to ensure consistency with training
-    df_clean = clean(df, BASE_NUMERIC, BASE_CATEGORICAL, TARGETS)
-
-    # 3. Load Model & Processor
-    ensemble, processor = load_ensemble(EXPERIMENT_DIR, device=device)
-
-    # 4. Prepare Features
-    # Transform using the loaded processor (ensures scaling matches training)
-    X_num, X_cat = processor.transform(df_clean)
-
-    X_num_t = torch.tensor(X_num, dtype=torch.float32).to(device)
-    X_cat_t = torch.tensor(X_cat, dtype=torch.long).to(device)
-
-    # 5. Inference
-    print("Running inference...")
-    ensemble.to(device)
-
-    with torch.no_grad():
-        # Model returns predictions in Log10 space
-        preds_log = ensemble(X_num_t, X_cat_t).cpu().numpy()
-
-        # --- REQUIREMENT 2: Inverse Transform using utils module ---
-        # Converts Log10 values back to real physical units (e.g., cP or Pa·s)
-        preds_real = inverse_log_transform(preds_log)
-
-    # 6. Evaluation
-    y_true = df_clean[TARGETS].values
-
-    print("\n" + "=" * 80)
-    print("PERFORMANCE METRICS BY SHEAR RATE")
-    print("=" * 80)
-
-    metrics = []
-
-    for i, target_name in enumerate(TARGETS):
-        y_t = y_true[:, i]
-        y_p = preds_real[:, i]
-
-        # Safety check for NaNs in output (in case of runtime instability)
-        if np.isnan(y_p).any():
-            r2 = np.nan
-            mape = np.nan
-        else:
-            r2 = r2_score(y_t, y_p)
-            mape = mean_absolute_percentage_error(y_t, y_p)
-
-        shear_val = extract_shear_rate(target_name)
-
-        metrics.append(
-            {
-                "Target Column": target_name,
-                "Shear Rate": shear_val if shear_val != -1.0 else np.inf,
-                "R2": r2,
-                "MAPE": mape,
-            }
-        )
-
-    # Sort by Shear Rate for readable output
-    df_metrics = pd.DataFrame(metrics).sort_values("Shear Rate")
-
-    # Display
-    cols = ["Target Column", "Shear Rate", "R2", "MAPE"]
-    # Replace infinite shear rate with "N/A" for display if regex failed
-    display_df = df_metrics.copy()
-    display_df["Shear Rate"] = display_df["Shear Rate"].replace(np.inf, "N/A")
-
-    print(
-        display_df[cols].to_string(
-            index=False, float_format=lambda x: "{:.4f}".format(x)
-        )
-    )
-
-    # Averages
-    avg_r2 = df_metrics["R2"].mean()
-    avg_mape = df_metrics["MAPE"].mean()
-    print("-" * 80)
-    print(f"AVERAGE        |            | {avg_r2:.4f} | {avg_mape:.2%}")
-    print("-" * 80)
-
-    # Save Results
-    save_path = os.path.join(EXPERIMENT_DIR, "evaluation_metrics.csv")
-    df_metrics.to_csv(save_path, index=False)
-    print(f"\nDetailed metrics saved to: {save_path}")
+    evaluate_model(MODEL_PATH, DATA_PATH)
