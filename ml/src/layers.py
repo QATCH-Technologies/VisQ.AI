@@ -142,7 +142,6 @@ class LearnablePhysicsPrior(nn.Module):
             "conc_term": conc_term,
             "result": result,
         }
-
         return result.unsqueeze(1), details
 
 

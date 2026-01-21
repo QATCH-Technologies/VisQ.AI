@@ -339,9 +339,12 @@ def main():
         # 3. Create Package
         packager.package(
             model_paths=checkpoints,
-            package_name=None,  # Will auto-generate name
-            notes="Auto-packaged from latest experiment",
-            version="1.1",
+            package_name="VisQAI-base",  # Will auto-generate name
+            notes="Added corrected model reload adapter state dict.",
+            version="1.1.2",
+            author="QATCH Technologies",
+            client="QATCH (Internal Dev.)",
+            is_ensemble=True,
         )
 
     except Exception as e:

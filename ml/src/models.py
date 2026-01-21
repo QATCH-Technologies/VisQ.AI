@@ -382,14 +382,8 @@ class Model(nn.Module):
                     conc_name = [
                         k for k, v in CONC_TYPE_PAIRS.items() if v == col_name
                     ][0]
-
-                    # Get indices for the raw concentration
-                    # NOTE: Ensure split_indices now points to the single raw column!
                     idx_start, idx_end = self.split_indices[conc_name]
-
-                    # --- NEW: Fetch single raw value ---
                     val_raw = x_num[:, idx_start:idx_end]
-                    # -----------------------------------
 
                     # Ignore "none" categories
                     none_idx = self.none_indices.get(col_name, -1)
@@ -397,9 +391,6 @@ class Model(nn.Module):
                         mask = (e_idx != none_idx).float().unsqueeze(1)
                     else:
                         mask = torch.ones_like(e_idx).float().unsqueeze(1)
-
-                    # --- NEW: Updated Call Signature ---
-                    # We pass 'val_raw' instead of 'val_low, val_high'
                     correction, layer_details = phys_layer(p_idx, r_idx, e_idx, val_raw)
 
                     # Ensure correction is [Batch, 1]

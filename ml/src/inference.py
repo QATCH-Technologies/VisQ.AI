@@ -18,7 +18,6 @@ Version:
     1.0
 """
 
-import enum
 import glob
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union, cast
@@ -33,6 +32,7 @@ try:
     from .config import TARGETS
     from .layers import LearnablePhysicsPrior, ResidualAdapter
     from .management import (
+        attach_adapter,
         expand_processor_and_model,
         load_model_checkpoint,
         save_model_checkpoint,
@@ -47,6 +47,7 @@ except ImportError:
     from config import TARGETS
     from layers import LearnablePhysicsPrior, ResidualAdapter
     from management import (
+        attach_adapter,
         expand_processor_and_model,
         load_model_checkpoint,
         save_model_checkpoint,
@@ -140,21 +141,24 @@ class ViscosityPredictor:
             self.hydrate()
 
     def _load_single_model(self, checkpoint_path: str):
-        """Loads a single model checkpoint and refreshes physics priors.
-
-        Args:
-            checkpoint_path (str): Path to the checkpoint file.
-        """
+        """Loads a single model checkpoint and refreshes physics priors."""
         self.checkpoint_path = checkpoint_path
         self.model, self.processor, self.best_params = load_model_checkpoint(
             checkpoint_path, device=self.device
         )
         self.n_models = 1
+
         if hasattr(self.model, "physics_layers"):
             for i, layer in enumerate(self.model.physics_layers):
                 if isinstance(layer, LearnablePhysicsPrior):
                     col_name = self.model.cat_feature_names[i]
                     self.model._init_static_priors(layer, col_name)
+
+        if (
+            hasattr(self.model, "adapter_state_dict")
+            and self.model.adapter_state_dict is not None
+        ):
+            self.adapter = attach_adapter(self.model, self.model.adapter_state_dict)
 
     def _load_ensemble(self, checkpoint_paths: Union[str, List[str]]):
         """Loads multiple models for ensemble inference.
@@ -180,12 +184,24 @@ class ViscosityPredictor:
 
         if not checkpoint_list:
             raise ValueError("No checkpoint files provided for ensemble")
+
         self.model, self.processor, self.best_params = load_model_checkpoint(
             checkpoint_list[0], device=self.device
         )
+
+        if (
+            hasattr(self.model, "adapter_state_dict")
+            and self.model.adapter_state_dict is not None
+        ):
+            attach_adapter(self.model, self.model.adapter_state_dict)
+
         models: List[nn.Module] = [self.model]
+
         for ckpt in checkpoint_list[1:]:
             m, _, _ = load_model_checkpoint(ckpt, device=self.device)
+            if hasattr(m, "adapter_state_dict") and m.adapter_state_dict is not None:
+                attach_adapter(m, m.adapter_state_dict)
+
             models.append(m)
 
         self.model = EnsembleModel(models)
@@ -226,7 +242,7 @@ class ViscosityPredictor:
                 self._smart_expand_category(feature, cat, similar_category=sim_cat)
                 expanded_any = True
 
-        if not expanded_any:
+        if expanded_any:
             self._train_gated_adapter(df_new, y_new, n_epochs=epochs, lr=lr)
 
     def _smart_expand_category(
@@ -572,7 +588,9 @@ class ViscosityPredictor:
             raise RuntimeError(
                 "Model and Processor and params must be initialized before saving a checkpoint."
             )
-        save_model_checkpoint(self.model, self.processor, self.best_params, filepath)
+        save_model_checkpoint(
+            self.model, self.processor, self.best_params, filepath, adapter=self.adapter
+        )
 
 
 if __name__ == "__main__":

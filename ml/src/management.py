@@ -310,6 +310,7 @@ def load_model_checkpoint(
 
     # Attach adapter state dict to model for downstream use
     if "adapter_state_dict" in checkpoint:
+        print("FOUND ADAPTER, RELOADING...")
         model.adapter_state_dict = checkpoint["adapter_state_dict"]
     else:
         model.adapter_state_dict = None  # type: ignore
