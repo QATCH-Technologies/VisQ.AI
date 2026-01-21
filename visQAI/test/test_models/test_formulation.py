@@ -21,13 +21,20 @@ Version:
     1.5
 """
 
-from src.models.formulation import (
-    ViscosityProfile, Component, Formulation
-)
-from src.models.ingredient import Buffer, Protein, Stabilizer, Surfactant, Salt, Excipient, ProteinClass
-import pandas as pd
 import unittest
+
 import numpy as np
+import pandas as pd
+from visq_core.models.formulation import Component, Formulation, ViscosityProfile
+from visq_core.models.ingredient import (
+    Buffer,
+    Excipient,
+    Protein,
+    ProteinClass,
+    Salt,
+    Stabilizer,
+    Surfactant,
+)
 
 
 class TestViscosityProfile(unittest.TestCase):
@@ -135,12 +142,15 @@ class TestViscosityProfile(unittest.TestCase):
         vp = ViscosityProfile([2, 1], [20, 10], "cP")
         vp.is_measured = True
         d = vp.to_dict()
-        self.assertEqual(d, {
-            "shear_rates": [1.0, 2.0],
-            "viscosities": [10.0, 20.0],
-            "units": "cP",
-            "is_measured": True
-        })
+        self.assertEqual(
+            d,
+            {
+                "shear_rates": [1.0, 2.0],
+                "viscosities": [10.0, 20.0],
+                "units": "cP",
+                "is_measured": True,
+            },
+        )
         r = repr(vp)
         self.assertIn("ViscosityProfile", r)
         # eq ignores is_measured
@@ -203,15 +213,15 @@ class TestFormulation(unittest.TestCase):
     def setUp(self):
         """Create a Formulation and sample Ingredient and ViscosityProfile instances."""
         self.form = Formulation()
-        self.prot = Protein(1, "BSA", 100, 10, 1,
-                            class_type=ProteinClass.OTHER)
+        self.prot = Protein(1, "BSA", 100, 10, 1, class_type=ProteinClass.OTHER)
         self.buf = Buffer(2, "PBS", 7.4)
         self.stab = Stabilizer(3, "None")
         self.surf = Surfactant(4, "None")
         self.salt = Salt(5, "NaCl")
         self.excip = Excipient(6, "Mannitol")
         self.vp = ViscosityProfile(
-            [100, 1000, 10000, 100000, 15000000], [5, 4, 3, 2, 1], "u")
+            [100, 1000, 10000, 100000, 15000000], [5, 4, 3, 2, 1], "u"
+        )
 
     def test_init_and_id_property(self):
         """
@@ -237,7 +247,14 @@ class TestFormulation(unittest.TestCase):
 
         - protein, buffer, stabilizer, surfactant, salt, and excipient should be None initially.
         """
-        for name in ("protein", "buffer", "stabilizer", "surfactant", "salt", "excipient"):
+        for name in (
+            "protein",
+            "buffer",
+            "stabilizer",
+            "surfactant",
+            "salt",
+            "excipient",
+        ):
             self.assertIsNone(getattr(self.form, name))
 
     def test_setting_components(self):
@@ -261,12 +278,13 @@ class TestFormulation(unittest.TestCase):
 
         # confirm all six slots filled
         for comp in (
-                self.form.protein,
-                self.form.buffer,
-                self.form.stabilizer,
-                self.form.surfactant,
-                self.form.salt,
-                self.form.excipient):
+            self.form.protein,
+            self.form.buffer,
+            self.form.stabilizer,
+            self.form.surfactant,
+            self.form.salt,
+            self.form.excipient,
+        ):
             self.assertIsNotNone(comp)
 
     def test_excipient_component_details(self):
@@ -332,7 +350,14 @@ class TestFormulation(unittest.TestCase):
         # id should be None
         self.assertIsNone(d["id"])
         # each component should produce a dict with 'concentration' key
-        for key in ("protein", "buffer", "stabilizer", "surfactant", "salt", "excipient"):
+        for key in (
+            "protein",
+            "buffer",
+            "stabilizer",
+            "surfactant",
+            "salt",
+            "excipient",
+        ):
             self.assertIsInstance(d[key], dict)
             self.assertIn("concentration", d[key])
         self.assertEqual(d["temperature"], 20.0)

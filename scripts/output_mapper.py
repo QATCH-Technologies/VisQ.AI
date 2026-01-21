@@ -8,7 +8,7 @@ from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.metrics import silhouette_score
-from src.inference import ViscosityPredictor
+from visq_core.inference import ViscosityPredictor
 
 # --- Configuration ---
 SHEAR_RATES = [

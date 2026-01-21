@@ -16,25 +16,25 @@ import torch
 import torch.optim as optim
 from optuna.trial import Trial
 from sklearn.model_selection import KFold
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 # --- MODULAR IMPORTS ---
-from src.config import (
+from visq_core.config import (
     BASE_CATEGORICAL,
     BASE_NUMERIC,
     TARGETS,
 )
-from src.data import DataProcessor
-from src.loss import PhysicsInformedLoss, get_physics_masks
-from src.management import save_model_checkpoint
-from src.models import EnsembleModel, Model
-from src.utils import (
+from visq_core.data import DataProcessor
+from visq_core.loss import PhysicsInformedLoss, get_physics_masks
+from visq_core.management import save_model_checkpoint
+from visq_core.models import EnsembleModel, Model
+from visq_core.utils import (
     calculate_sample_weights,
     clean,
     log_transform_targets,
     to_tensors,
     validate_data,
 )
-from torch.optim.lr_scheduler import CosineAnnealingLR
 
 
 def check_model_health(model: torch.nn.Module) -> bool:

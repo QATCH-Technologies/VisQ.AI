@@ -15,11 +15,11 @@ Version:
     1.0
 """
 
-
-import unittest
 import tempfile
+import unittest
 from pathlib import Path
-from src.controller.asset_controller import AssetController, AssetError
+
+from visq_core.controller.asset_controller import AssetController, AssetError
 
 
 class TestAssetController(unittest.TestCase):
@@ -127,8 +127,7 @@ class TestAssetController(unittest.TestCase):
         and returns the correct Path.
         """
         content = b"hello world"
-        dest = self.ac.store_bytes(
-            "greeting", content, ".bin", overwrite=False)
+        dest = self.ac.store_bytes("greeting", content, ".bin", overwrite=False)
         expected = self.assets_dir / "greeting.bin"
 
         self.assertEqual(dest, expected)

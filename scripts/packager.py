@@ -331,7 +331,7 @@ def main():
         # 2. Initialize Packager
         packager = SecurePredictorPackager(
             output_dir=r"models\production",
-            source_dir="ml/src",
+            source_dir=r"ml\visq_ml",
             source_files=source_modules,
             enable_signing=True,
         )
@@ -340,11 +340,12 @@ def main():
         packager.package(
             model_paths=checkpoints,
             package_name="VisQAI-base",  # Will auto-generate name
-            notes="Added corrected model reload adapter state dict.",
-            version="1.1.2",
+            notes="Added corrected model reload adapter state dict. (No ensemble)",
+            version="1.1.3",
+            model_created_date="2026-01-20",
             author="QATCH Technologies",
             client="QATCH (Internal Dev.)",
-            is_ensemble=True,
+            is_ensemble=False,
         )
 
     except Exception as e:

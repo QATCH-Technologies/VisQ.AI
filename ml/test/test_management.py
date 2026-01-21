@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import torch
 import torch.nn as nn
-from src.management import (
+from visq_ml.management import (
     attach_adapter,
     expand_processor_and_model,
     load_model_checkpoint,

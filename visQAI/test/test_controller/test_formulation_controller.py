@@ -17,13 +17,22 @@ Date:
 Version:
     1.3
 """
+
 import unittest
 from pathlib import Path
+
 import pandas as pd
-from src.db.db import Database
-from src.controller.formulation_controller import FormulationController
-from src.models.ingredient import Protein, Buffer, Salt, Surfactant, Stabilizer, Excipient
-from src.models.formulation import Formulation, ViscosityProfile
+from visq_core.controller.formulation_controller import FormulationController
+from visq_core.db.db import Database
+from visq_core.models.formulation import Formulation, ViscosityProfile
+from visq_core.models.ingredient import (
+    Buffer,
+    Excipient,
+    Protein,
+    Salt,
+    Stabilizer,
+    Surfactant,
+)
 
 
 class TestFormulationControllerIntegration(unittest.TestCase):
@@ -64,7 +73,11 @@ class TestFormulationControllerIntegration(unittest.TestCase):
                 stabilizer, excipient, temperature, and viscosity profile.
         """
         p = Protein(
-            enc_id=-1, name=f"prot{suffix}", molecular_weight=50.0, pI_mean=7.0, pI_range=0.5
+            enc_id=-1,
+            name=f"prot{suffix}",
+            molecular_weight=50.0,
+            pI_mean=7.0,
+            pI_range=0.5,
         )
         b = Buffer(enc_id=-1, name=f"buf{suffix}", pH=7.4)
         s = Salt(enc_id=-1, name=f"salt{suffix}")
@@ -92,7 +105,8 @@ class TestFormulationControllerIntegration(unittest.TestCase):
         returned = self.ctrl.add_formulation(f)
         self.assertIs(returned, f)
         self.assertIsNotNone(
-            f.id, "Formulation.id should be set by Database.add_formulation")
+            f.id, "Formulation.id should be set by Database.add_formulation"
+        )
         all_forms = self.ctrl.get_all_formulations()
         self.assertEqual(len(all_forms), 1)
         self.assertEqual(all_forms[0], f)
@@ -228,21 +242,21 @@ class TestFormulationControllerIntegration(unittest.TestCase):
         self.assertEqual(row["Excipient_type"], 8001)
         self.assertAlmostEqual(row["Excipient_conc"], 5.0)
 
-        self.assertAlmostEqual(row["Viscosity_1000"],
-                               df.at[0, "Viscosity_1000"])
+        self.assertAlmostEqual(row["Viscosity_1000"], df.at[0, "Viscosity_1000"])
+        self.assertAlmostEqual(row["Viscosity_10000"], df.at[0, "Viscosity_10000"])
+        self.assertAlmostEqual(row["Viscosity_100000"], df.at[0, "Viscosity_100000"])
         self.assertAlmostEqual(
-            row["Viscosity_10000"], df.at[0, "Viscosity_10000"])
-        self.assertAlmostEqual(
-            row["Viscosity_100000"], df.at[0, "Viscosity_100000"])
-        self.assertAlmostEqual(
-            row["Viscosity_15000000"], df.at[0, "Viscosity_15000000"])
+            row["Viscosity_15000000"], df.at[0, "Viscosity_15000000"]
+        )
 
     def test_add_all_from_dataframe_missing_columns(self):
         """Test that importing a DataFrame missing required columns raises a ValueError."""
-        df = pd.DataFrame({
-            "Protein_type": ["Lysozyme"],
-            "MW": [14300.0],
-        })
+        df = pd.DataFrame(
+            {
+                "Protein_type": ["Lysozyme"],
+                "MW": [14300.0],
+            }
+        )
         with self.assertRaises(ValueError) as context:
             self.ctrl.add_all_from_dataframe(df)
         msg = str(context.exception)
@@ -253,23 +267,37 @@ class TestFormulationControllerIntegration(unittest.TestCase):
         out_df = self.ctrl.get_all_as_dataframe(encoded=False)
         expected_columns = [
             "ID",
-            "Protein_type", "MW", "PI_mean", "PI_range", "Protein_conc", "Protein_class_type", "kP",
+            "Protein_type",
+            "MW",
+            "PI_mean",
+            "PI_range",
+            "Protein_conc",
+            "Protein_class_type",
+            "kP",
             "Temperature",
-            "Buffer_type", "Buffer_pH", "Buffer_conc",
-            "Salt_type", "Salt_conc",
-            "Stabilizer_type", "Stabilizer_conc",
-            "Surfactant_type", "Surfactant_conc",
-            "Excipient_type", "Excipient_conc",
-            "Viscosity_100", "Viscosity_1000", "Viscosity_10000",
-            "Viscosity_100000", "Viscosity_15000000"
+            "Buffer_type",
+            "Buffer_pH",
+            "Buffer_conc",
+            "Salt_type",
+            "Salt_conc",
+            "Stabilizer_type",
+            "Stabilizer_conc",
+            "Surfactant_type",
+            "Surfactant_conc",
+            "Excipient_type",
+            "Excipient_conc",
+            "Viscosity_100",
+            "Viscosity_1000",
+            "Viscosity_10000",
+            "Viscosity_100000",
+            "Viscosity_15000000",
         ]
         self.assertListEqual(list(out_df.columns), expected_columns)
         self.assertEqual(len(out_df), 0)
 
     def test_add_multiple_rows(self):
         """Test that duplicate rows in the DataFrame import only create one unique formulation entry."""
-        df = pd.concat([self._make_complete_dataframe()]
-                       * 2, ignore_index=True)
+        df = pd.concat([self._make_complete_dataframe()] * 2, ignore_index=True)
         added = self.ctrl.add_all_from_dataframe(df)
         self.assertEqual(len(added), 2)
 

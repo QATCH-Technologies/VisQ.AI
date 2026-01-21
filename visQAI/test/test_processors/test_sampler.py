@@ -1,21 +1,29 @@
 import os
 import unittest
-import numpy as np
 
-from src.processors.sampler import Sampler
-from src.db.db import Database
-from src.utils.constraints import Constraints
-from src.models.formulation import Formulation, ViscosityProfile
-from src.managers.asset_manager import AssetError
-from src.models.ingredient import Protein, Buffer, Salt, Stabilizer, Surfactant, Excipient
-from src.controller.ingredient_controller import IngredientController
+import numpy as np
+from visq_core.controller.ingredient_controller import IngredientController
+from visq_core.db.db import Database
+from visq_core.managers.asset_manager import AssetError
+from visq_core.models.formulation import Formulation, ViscosityProfile
+from visq_core.models.ingredient import (
+    Buffer,
+    Excipient,
+    Protein,
+    Salt,
+    Stabilizer,
+    Surfactant,
+)
+from visq_core.processors.sampler import Sampler
+from visq_core.utils.constraints import Constraints
 
 
 class TestSampler(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.protein = Protein(enc_id=-1,
-                              name="ProtA", molecular_weight=100, pI_mean=10, pI_range=1)
+        cls.protein = Protein(
+            enc_id=-1, name="ProtA", molecular_weight=100, pI_mean=10, pI_range=1
+        )
         cls.buffer = Buffer(enc_id=-1, name="BuffA", pH=10)
         cls.stabilizer = Stabilizer(enc_id=-1, name="StabA")
         cls.salt = Salt(enc_id=-1, name="SaltA")
@@ -32,20 +40,19 @@ class TestSampler(unittest.TestCase):
 
     def setUp(self):
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.abspath(
-            os.path.join(base_dir, os.pardir, os.pardir))
+        project_root = os.path.abspath(os.path.join(base_dir, os.pardir, os.pardir))
         self.assets_dir = os.path.join(project_root, "assets")
         if not os.path.isdir(self.assets_dir):
             self.skipTest(f"Assets directory not found at {self.assets_dir}")
 
-        zip_files = [f for f in os.listdir(
-            self.assets_dir) if f.endswith(".zip")]
+        zip_files = [f for f in os.listdir(self.assets_dir) if f.endswith(".zip")]
         if not zip_files:
             self.skipTest(f"No .zip asset files found in {self.assets_dir}")
         self.asset_name = os.path.splitext(zip_files[0])[0]
 
-        self.db = Database(path=os.path.join(
-            "test", "assets", "app.db"), parse_file_key=True)
+        self.db = Database(
+            path=os.path.join("test", "assets", "app.db"), parse_file_key=True
+        )
         self.ing_ctrl = IngredientController(self.db)
         self.ing_ctrl.delete_all_ingredients()
 
@@ -56,7 +63,7 @@ class TestSampler(unittest.TestCase):
             asset_name=self.asset_name,
             database=self.db,
             constraints=self.constraints,
-            seed=42
+            seed=42,
         )
 
     def test_invalid_asset_raises_asset_error(self):
@@ -73,10 +80,7 @@ class TestSampler(unittest.TestCase):
         viscosity = {"8": 1.0, "12": 3.0}
         uncertainty = np.array([0.2, 0.4, np.nan])
         score = self.sampler._acquisition_ucb(
-            viscosity,
-            uncertainty,
-            kappa=1.0,
-            reference_shear_rate=10.0
+            viscosity, uncertainty, kappa=1.0, reference_shear_rate=10.0
         )
         mu = 1.0 + (3.0 - 1.0) * (10.0 - 8.0) / (12.0 - 8.0)
         sigma = np.nanmean(uncertainty)
@@ -87,8 +91,7 @@ class TestSampler(unittest.TestCase):
         sample = self.sampler._generate_random_samples(1)[0]
         self.sampler.add_sample(sample)
         self.assertIs(self.sampler._last_formulation, sample)
-        self.assertIsInstance(
-            self.sampler._current_viscosity, ViscosityProfile)
+        self.assertIsInstance(self.sampler._current_viscosity, ViscosityProfile)
         self.assertIsInstance(self.sampler._current_uncertainty, np.ndarray)
         self.assertGreater(self.sampler._current_uncertainty.size, 0)
 
@@ -110,7 +113,7 @@ class TestSampler(unittest.TestCase):
             asset_name=self.asset_name,
             database=self.db,
             constraints=constrained,
-            seed=123
+            seed=123,
         )
 
         samples = sampler_c._generate_random_samples(30)
@@ -118,16 +121,12 @@ class TestSampler(unittest.TestCase):
 
         for s in samples:
             conc = s.protein.concentration
-            self.assertGreaterEqual(conc, 50.0,
-                                    f"Protein_conc {conc} < 50.0")
-            self.assertLessEqual(conc, 60.0,
-                                 f"Protein_conc {conc} > 60.0")
+            self.assertGreaterEqual(conc, 50.0, f"Protein_conc {conc} < 50.0")
+            self.assertLessEqual(conc, 60.0, f"Protein_conc {conc} > 60.0")
 
             temp = s.temperature
-            self.assertGreaterEqual(temp, 25.0,
-                                    f"Temperature {temp} < 25.0")
-            self.assertLessEqual(temp, 26.0,
-                                 f"Temperature {temp} > 26.0")
+            self.assertGreaterEqual(temp, 25.0, f"Temperature {temp} < 25.0")
+            self.assertLessEqual(temp, 26.0, f"Temperature {temp} > 26.0")
 
 
 if __name__ == "__main__":

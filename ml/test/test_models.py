@@ -7,7 +7,7 @@ import torch.nn as nn
 
 # --- MOCK CONFIGURATION & LAYERS ---
 # We mock these BEFORE importing models.py to control the environment.
-from src.models import EnsembleModel, Model
+from visq_ml.models import EnsembleModel, Model
 
 # 1. Mock Config
 mock_config = MagicMock()

@@ -3,7 +3,7 @@ import pandas as pd
 from sklearn.metrics import mean_absolute_percentage_error, r2_score
 
 # Import your class - adjust import path as necessary
-from src.inference import ViscosityPredictor
+from visq_core.inference import ViscosityPredictor
 
 
 def evaluate_model(model_path, data_path):

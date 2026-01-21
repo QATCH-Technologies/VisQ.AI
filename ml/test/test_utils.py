@@ -9,7 +9,7 @@ import torch
 
 sys.path.append(os.getcwd())
 
-from src.utils import (
+from visq_ml.utils import (
     HIGH_VIS_MULTIPLIER,
     HIGH_VIS_THRESHOLD,
     calculate_sample_weights,

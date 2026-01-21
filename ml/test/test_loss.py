@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import MagicMock
 
 import torch
-from src.loss import PhysicsInformedLoss, get_physics_masks
+from visq_ml.loss import PhysicsInformedLoss, get_physics_masks
 
 sys.path.append(os.getcwd())
 

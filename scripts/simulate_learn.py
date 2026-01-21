@@ -3,7 +3,7 @@ from io import StringIO
 
 import numpy as np
 import pandas as pd
-from src.inference import ViscosityPredictor
+from visq_core.inference import ViscosityPredictor
 
 
 def run_adaptive_cycle():

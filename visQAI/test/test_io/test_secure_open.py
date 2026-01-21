@@ -18,14 +18,15 @@ Version:
     1.0
 """
 
-import unittest
 import os
-import tempfile
 import shutil
+import tempfile
+import unittest
+
 import pyzipper
 
 # Import the SecureOpen class and its static methods
-from src.io.file_storage import SecureOpen
+from visq_core.io.file_storage import SecureOpen
 
 
 class TestSecureOpen(unittest.TestCase):
@@ -84,8 +85,7 @@ class TestSecureOpen(unittest.TestCase):
             f.write(b"col1,col2\n1,2\n")
 
         zip_path = os.path.join(archive_dir, "archive_dir.zip")
-        self.assertTrue(os.path.isfile(zip_path),
-                        "ZIP archive was not created")
+        self.assertTrue(os.path.isfile(zip_path), "ZIP archive was not created")
 
         # Verify contents using pyzipper
         with pyzipper.AESZipFile(zip_path, "r") as zf:
@@ -100,7 +100,7 @@ class TestSecureOpen(unittest.TestCase):
             self.assertEqual(
                 actual_crc,
                 expected_crc,
-                "CRC file content does not match calculated CRC"
+                "CRC file content does not match calculated CRC",
             )
 
         # Read back the CSV record via SecureOpen in insecure mode
@@ -129,8 +129,7 @@ class TestSecureOpen(unittest.TestCase):
             f.write(b"header\nvalue\n")
 
         zip_path = os.path.join(archive_dir, "archive2.zip")
-        self.assertTrue(os.path.isfile(zip_path),
-                        "ZIP archive was not created")
+        self.assertTrue(os.path.isfile(zip_path), "ZIP archive was not created")
 
         # Verify CRC file was generated correctly
         with pyzipper.AESZipFile(zip_path, "r") as zf:
@@ -141,9 +140,7 @@ class TestSecureOpen(unittest.TestCase):
             with zf.open("data.crc", "r") as crc_fh:
                 actual_crc = crc_fh.read().decode()
             self.assertEqual(
-                actual_crc,
-                expected_crc,
-                "CRC in .crc file does not match expected"
+                actual_crc, expected_crc, "CRC in .crc file does not match expected"
             )
 
     def test_read_record_missing_crc_raises(self):
@@ -157,7 +154,9 @@ class TestSecureOpen(unittest.TestCase):
         archive_dir = os.path.join(self.temp_dir, "archive3")
         os.makedirs(archive_dir, exist_ok=True)
         zip_path = os.path.join(archive_dir, "archive3.zip")
-        with pyzipper.AESZipFile(zip_path, "w", compression=pyzipper.ZIP_DEFLATED) as zf:
+        with pyzipper.AESZipFile(
+            zip_path, "w", compression=pyzipper.ZIP_DEFLATED
+        ) as zf:
             zf.writestr("sample.csv", b"abc,123\n")
 
         record_path = os.path.join(archive_dir, "sample.csv")
@@ -176,7 +175,9 @@ class TestSecureOpen(unittest.TestCase):
         archive_dir = os.path.join(self.temp_dir, "archive4")
         os.makedirs(archive_dir, exist_ok=True)
         zip_path = os.path.join(archive_dir, "archive4.zip")
-        with pyzipper.AESZipFile(zip_path, "w", compression=pyzipper.ZIP_DEFLATED) as zf:
+        with pyzipper.AESZipFile(
+            zip_path, "w", compression=pyzipper.ZIP_DEFLATED
+        ) as zf:
             zf.writestr("sample2.csv", b"def,456\n")
 
         record_path = os.path.join(archive_dir, "sample2.csv")
@@ -206,7 +207,9 @@ class TestSecureOpen(unittest.TestCase):
 
         # Create a ZIP with a record
         zip_path = os.path.join(archive_dir, "archive5.zip")
-        with pyzipper.AESZipFile(zip_path, "w", compression=pyzipper.ZIP_DEFLATED) as zf:
+        with pyzipper.AESZipFile(
+            zip_path, "w", compression=pyzipper.ZIP_DEFLATED
+        ) as zf:
             zf.writestr("exists.csv", b"test\n")
 
         record_exists_path = os.path.join(archive_dir, "exists.csv")
@@ -222,7 +225,9 @@ class TestSecureOpen(unittest.TestCase):
         archive_dir = os.path.join(self.temp_dir, "archive6")
         os.makedirs(archive_dir, exist_ok=True)
         zip_path = os.path.join(archive_dir, "archive6.zip")
-        with pyzipper.AESZipFile(zip_path, "w", compression=pyzipper.ZIP_DEFLATED) as zf:
+        with pyzipper.AESZipFile(
+            zip_path, "w", compression=pyzipper.ZIP_DEFLATED
+        ) as zf:
             zf.writestr("file1.txt", b"1")
             zf.writestr("file2.txt", b"2")
 
