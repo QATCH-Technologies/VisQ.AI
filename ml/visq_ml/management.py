@@ -29,11 +29,18 @@ try:
     from .data import DataProcessor
     from .layers import ResidualAdapter
     from .models import Model
-except ImportError:
-    from visq_ml.config import TARGETS
-    from visq_ml.data import DataProcessor
-    from visq_ml.layers import ResidualAdapter
-    from visq_ml.models import Model
+except (ImportError, ModuleNotFoundError):
+    try:
+        from config import TARGETS
+        from layers import ResidualAdapter
+
+        from data import DataProcessor
+        from models import Model
+    except (ImportError, ModuleNotFoundError):
+        from visq_ml.config import TARGETS
+        from visq_ml.data import DataProcessor
+        from visq_ml.layers import ResidualAdapter
+        from visq_ml.models import Model
 
 
 def expand_processor_and_model(

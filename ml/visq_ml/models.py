@@ -32,23 +32,34 @@ try:
     )
     from .layers import (
         EmbeddingDropout,
-        LearnablePhysicsPrior,
         LearnableSoftThresholdPrior,
         ResidualBlock,
     )
-except ImportError:
-    from visq_ml.config import (
-        CONC_THRESHOLDS,
-        CONC_TYPE_PAIRS,
-        EXCIPIENT_PRIORS,
-        EXCIPIENT_TYPE_MAPPING,
-    )
-    from visq_ml.layers import (
-        EmbeddingDropout,
-        LearnablePhysicsPrior,
-        LearnableSoftThresholdPrior,
-        ResidualBlock,
-    )
+except (ImportError, ModuleNotFoundError):
+    try:
+        from config import (
+            CONC_THRESHOLDS,
+            CONC_TYPE_PAIRS,
+            EXCIPIENT_PRIORS,
+            EXCIPIENT_TYPE_MAPPING,
+        )
+        from layers import (
+            EmbeddingDropout,
+            LearnableSoftThresholdPrior,
+            ResidualBlock,
+        )
+    except (ImportError, ModuleNotFoundError):
+        from visq_ml.config import (
+            CONC_THRESHOLDS,
+            CONC_TYPE_PAIRS,
+            EXCIPIENT_PRIORS,
+            EXCIPIENT_TYPE_MAPPING,
+        )
+        from visq_ml.layers import (
+            EmbeddingDropout,
+            LearnableSoftThresholdPrior,
+            ResidualBlock,
+        )
 
 
 class Model(nn.Module):
@@ -178,7 +189,9 @@ class Model(nn.Module):
         # Output Heads (Multi-task support)
         self.heads = nn.ModuleList([nn.Linear(prev, 1) for _ in range(out_dim)])
 
-    def _init_static_priors(self, layer: LearnablePhysicsPrior, col_name: str) -> None:
+    def _init_static_priors(
+        self, layer: LearnableSoftThresholdPrior, col_name: str
+    ) -> None:
         p_classes = self.cat_maps["Protein_class_type"]
         regimes = self.cat_maps["Regime"]
         excipients = self.cat_maps[col_name]

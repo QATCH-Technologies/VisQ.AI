@@ -32,13 +32,23 @@ try:
         CONC_THRESHOLDS,
         CONC_TYPE_PAIRS,
     )
-except ImportError:
-    from visq_ml.config import (
-        BASE_CATEGORICAL,
-        BASE_NUMERIC,
-        CONC_THRESHOLDS,
-        CONC_TYPE_PAIRS,
-    )
+except (ImportError, ModuleNotFoundError):
+    try:
+        # Fallback for Predictor dynamic loading (sys.modules['config'])
+        from config import (
+            BASE_CATEGORICAL,
+            BASE_NUMERIC,
+            CONC_THRESHOLDS,
+            CONC_TYPE_PAIRS,
+        )
+    except (ImportError, ModuleNotFoundError):
+        # Fallback for installed package
+        from visq_ml.config import (
+            BASE_CATEGORICAL,
+            BASE_NUMERIC,
+            CONC_THRESHOLDS,
+            CONC_TYPE_PAIRS,
+        )
 
 
 class DataProcessor:
@@ -537,3 +547,60 @@ class DataProcessor:
         # Load split metadata
         self.split_indices = state.get("split_indices", {})
         self.generated_feature_names = state.get("generated_feature_names", [])
+
+
+class AnalogSelector:
+    """Helper to find the best physicochemical match for a new protein."""
+
+    def __init__(self, reference_df: pd.DataFrame):
+        # Create unique library of known proteins
+        self.library = reference_df.drop_duplicates(subset=["Protein_type"]).copy()
+
+        # Weights for distance calculation (Adjust based on importance)
+        self.weights = {
+            "PI_mean": 2.0,  # Charge is dominant
+            "kP": 1.5,  # Interaction proxy
+            "MW": 1.0,  # Size proxy
+            "diff_coeff": 1.0,
+        }
+
+    def find_best_analog(self, new_protein_row: pd.Series, known_classes: list) -> str:
+        target_class = new_protein_row.get("Protein_class_type", "Unknown")
+
+        # Tier 1: Class Filter
+        if target_class in self.library["Protein_class_type"].values:
+            candidates = self.library[
+                self.library["Protein_class_type"] == target_class
+            ].copy()
+        else:
+            # Fallback for completely new classes
+            fallback_map = {
+                "Bispecific": ["mAb", "Monoclonal Antibody"],
+                "Fusion_Protein": ["Complex_Protein", "Other"],
+            }
+            fallback_classes = fallback_map.get(target_class, [])
+            candidates = self.library[
+                self.library["Protein_class_type"].isin(fallback_classes)
+            ].copy()
+            if candidates.empty:
+                candidates = self.library.copy()
+
+        # Tier 2: Weighted Euclidean Distance
+        candidates["score"] = 0.0
+        valid_cols = 0
+
+        for col, weight in self.weights.items():
+            if col in new_protein_row and col in candidates.columns:
+                target_val = float(new_protein_row[col])
+                col_values = candidates[col].astype(float)
+                col_std = col_values.std() + 1e-6
+
+                diff = ((col_values - target_val) / col_std) ** 2
+                candidates["score"] += diff * weight
+                valid_cols += 1
+
+        if valid_cols == 0:
+            return candidates.iloc[0]["Protein_type"]
+
+        best_match = candidates.nsmallest(1, "score").iloc[0]
+        return best_match["Protein_type"]

@@ -27,9 +27,13 @@ import torch.nn as nn
 try:
     if TYPE_CHECKING:
         from .data import DataProcessor
-except ImportError:
-    if TYPE_CHECKING:
-        from visq_ml.data import DataProcessor
+except (ImportError, ModuleNotFoundError):
+    try:
+        if TYPE_CHECKING:
+            from data import DataProcessor
+    except (ImportError, ModuleNotFoundError):
+        if TYPE_CHECKING:
+            from visq_ml.data import DataProcessor
 
 HCI_THRESHOLD = 1.3
 

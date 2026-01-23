@@ -19,6 +19,7 @@ Version:
 """
 
 import glob
+from ast import Module
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union, cast
 
@@ -27,10 +28,12 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from visq_ml.layers import LearnableSoftThresholdPrior
 
 try:
     from .config import TARGETS
-    from .layers import LearnablePhysicsPrior, ResidualAdapter
+    from .data import AnalogSelector
+    from .layers import ResidualAdapter
     from .management import (
         attach_adapter,
         expand_processor_and_model,
@@ -43,21 +46,40 @@ try:
         log_transform_targets,
         to_tensors,
     )
-except ImportError:
-    from visq_ml.config import TARGETS
-    from visq_ml.layers import LearnablePhysicsPrior, ResidualAdapter
-    from visq_ml.management import (
-        attach_adapter,
-        expand_processor_and_model,
-        load_model_checkpoint,
-        save_model_checkpoint,
-    )
-    from visq_ml.models import EnsembleModel, Model
-    from visq_ml.utils import (
-        inverse_log_transform,
-        log_transform_targets,
-        to_tensors,
-    )
+except (ImportError, ModuleNotFoundError):
+    try:
+        from config import TARGETS
+        from layers import ResidualAdapter
+        from management import (
+            attach_adapter,
+            expand_processor_and_model,
+            load_model_checkpoint,
+            save_model_checkpoint,
+        )
+        from utils import (
+            inverse_log_transform,
+            log_transform_targets,
+            to_tensors,
+        )
+
+        from data import AnalogSelector
+        from models import EnsembleModel, Model
+    except (ImportError, ModuleNotFoundError):
+        from visq_ml.config import TARGETS
+        from visq_ml.data import AnalogSelector
+        from visq_ml.layers import ResidualAdapter
+        from visq_ml.management import (
+            attach_adapter,
+            expand_processor_and_model,
+            load_model_checkpoint,
+            save_model_checkpoint,
+        )
+        from visq_ml.models import EnsembleModel, Model
+        from visq_ml.utils import (
+            inverse_log_transform,
+            log_transform_targets,
+            to_tensors,
+        )
 
 
 class ViscosityPredictor:
@@ -149,7 +171,7 @@ class ViscosityPredictor:
 
         if hasattr(self.model, "physics_layers"):
             for i, layer in enumerate(self.model.physics_layers):
-                if isinstance(layer, LearnablePhysicsPrior):
+                if isinstance(layer, LearnableSoftThresholdPrior):
                     col_name = self.model.cat_feature_names[i]
                     self.model._init_static_priors(layer, col_name)
 
@@ -213,21 +235,17 @@ class ViscosityPredictor:
         epochs: int = 500,
         lr: float = 5e-3,
         analog_protein: Optional[str] = None,
+        reference_df: Optional[pd.DataFrame] = None,
     ):
-        """Adapts the model to new data using transfer learning.
-
-        This process involves:
-        1.  Detecting and expanding categorical vocabulary (e.g., new proteins).
-        2.  Initializing new embeddings (optionally using an analog).
-        3.  Training a Gated Residual Adapter to correct predictions for the new domain.
+        """Adapts the model to new data using transfer learning and auto-analog selection.
 
         Args:
             df_new (pd.DataFrame): The new input features.
             y_new (np.ndarray): The corresponding target values.
-            epochs (int, optional): Number of training epochs for the adapter. Defaults to 500.
-            lr (float, optional): Learning rate for the adapter. Defaults to 5e-3.
-            analog_protein (Optional[str], optional): If a new protein is detected,
-                initialize its embedding based on this existing protein's embedding.
+            epochs (int): Number of training epochs for the adapter.
+            lr (float): Learning rate for the adapter.
+            analog_protein (str, optional): Manual override for the analog protein.
+            reference_df (pd.DataFrame, optional): Training data registry for auto-selecting analogs.
         """
         try:
             self._ensure_hydrated()
@@ -236,9 +254,41 @@ class ViscosityPredictor:
 
             new_cats = self.processor.detect_new_categories(df_new)
             expanded_any = False
+
+            # Initialize selector only if needed and data is available
+            selector = None
+            if reference_df is not None:
+                selector = AnalogSelector(reference_df)
+
             for feature, categories in new_cats.items():
                 for cat in categories:
-                    sim_cat = analog_protein if feature == "Protein_type" else None
+                    sim_cat = None
+
+                    # --- Logic for finding an analog ---
+                    if feature == "Protein_type":
+                        # 1. Use manual override if provided
+                        if analog_protein:
+                            sim_cat = analog_protein
+
+                        # 2. Else, try auto-selection if we have a reference DF
+                        elif selector is not None:
+                            # We need the row of data to check MW, pI, etc.
+                            # Grab the first occurrence of this new protein in the new data
+                            relevant_row = df_new[df_new[feature] == cat].iloc[0]
+
+                            # Get known classes from the processor maps
+                            known_classes = self.processor.cat_maps.get(
+                                "Protein_class_type", []
+                            )
+
+                            sim_cat = selector.find_best_analog(
+                                relevant_row, known_classes
+                            )
+                            print(
+                                f"[Auto-Analog] Selected '{sim_cat}' for new protein '{cat}'"
+                            )
+
+                    # Apply the expansion (sim_cat will be None for non-proteins or if no analog found)
                     self._smart_expand_category(feature, cat, similar_category=sim_cat)
                     expanded_any = True
 
@@ -246,12 +296,10 @@ class ViscosityPredictor:
                 self._train_gated_adapter(df_new, y_new, n_epochs=epochs, lr=lr)
 
         except Exception:
-            # This dumps the full stack trace to the terminal (standard error)
             import traceback
 
             traceback.print_exc()
             raise
-            # Optional: Add 'raise' here if you want the program to crash after printing
 
     def _smart_expand_category(
         self,
@@ -259,17 +307,7 @@ class ViscosityPredictor:
         new_category: str,
         similar_category: Optional[str] = None,
     ):
-        """Expands embedding layers to accommodate a new category.
-
-        Initializes the new embedding vector. If `similar_category` is provided,
-        initializes with that vector + noise. Otherwise, uses the mean of all
-        existing embeddings.
-
-        Args:
-            feature_name (str): The name of the categorical feature (e.g., "Protein_type").
-            new_category (str): The new label to add.
-            similar_category (Optional[str], optional): An existing label to copy weights from.
-        """
+        """Expands embedding layers AND Physics Priors to accommodate a new category."""
         if self.processor is None or self.model is None:
             raise RuntimeError(
                 "Model and Processor must be initialized before expansion."
@@ -295,30 +333,32 @@ class ViscosityPredictor:
         new_vocab_size = old_emb.num_embeddings + 1
         new_emb_layer = nn.Embedding(new_vocab_size, old_emb.embedding_dim)
 
+        # Calculate source index for copying (if available)
+        source_idx = -1
+        if (
+            similar_category
+            and similar_category in self.processor.cat_maps[feature_name]
+        ):
+            try:
+                source_idx = self.processor.cat_maps[feature_name].index(
+                    similar_category
+                )
+            except ValueError:
+                pass
+
         with torch.no_grad():
             new_emb_layer.weight[:-1] = old_emb.weight
-            if (
-                similar_category
-                and similar_category in self.processor.cat_maps[feature_name]
-            ):
-                try:
-                    sim_idx = self.processor.cat_maps[feature_name].index(
-                        similar_category
-                    )
-                    noise = torch.randn(old_emb.embedding_dim) * 0.01
-                    new_emb_layer.weight[-1] = (old_emb.weight[sim_idx] * 1.5) + noise
-                except ValueError:
-                    new_emb_layer.weight[-1] = old_emb.weight.mean(dim=0)
+            if source_idx >= 0:
+                noise = torch.randn(old_emb.embedding_dim) * 0.01
+                new_emb_layer.weight[-1] = (old_emb.weight[source_idx] * 1.5) + noise
             else:
                 new_emb_layer.weight[-1] = old_emb.weight.mean(dim=0)
 
         self.model.embeddings[idx] = new_emb_layer.to(self.device)
         self.model.cat_maps[feature_name].append(new_category)
 
-        # --- 2. Expand Physics Layers (The Fix) ---
-        # Physics tensors are [Protein, Regime, Excipient].
-        # If we add a Protein (dim 0) or Regime (dim 1), ALL physics layers must grow.
-        # If we add an Excipient (dim 2), only the SPECIFIC layer for that column grows.
+        # --- 2. Expand Physics Layers (Corrected) ---
+        # Physics tensors are [Protein(0), Regime(1), Excipient(2)].
 
         is_p_class = feature_name == "Protein_class_type"
         is_regime = feature_name == "Regime"
@@ -328,14 +368,15 @@ class ViscosityPredictor:
             # Iterate through all layers; if it's a physics layer, expand it
             for layer in self.model.physics_layers:
                 if hasattr(layer, "expand_indices"):
-                    layer.expand_indices(expand_dim, 1)
+                    # Pass source_idx (will be -1 for Class if not explicitly provided, triggering Mean init)
+                    layer.expand_indices(expand_dim, 1, source_idx=source_idx)
 
         elif idx < len(self.model.physics_layers):
-            # Check if this specific column has a physics layer attached
+            # Check if this specific column has a physics layer attached (Excipient/Surfactant)
             layer = self.model.physics_layers[idx]
             if hasattr(layer, "expand_indices"):
                 # Excipient expansion is dimension 2
-                layer.expand_indices(2, 1)
+                layer.expand_indices(2, 1, source_idx=source_idx)
 
     def _train_gated_adapter(
         self, df_new: pd.DataFrame, y_new: np.ndarray, n_epochs: int, lr: float
