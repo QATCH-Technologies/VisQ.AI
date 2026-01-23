@@ -28,12 +28,11 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from visq_ml.layers import LearnableSoftThresholdPrior
 
 try:
     from .config import TARGETS
     from .data import AnalogSelector
-    from .layers import ResidualAdapter
+    from .layers import LearnableSoftThresholdPrior, ResidualAdapter
     from .management import (
         attach_adapter,
         expand_processor_and_model,
@@ -49,7 +48,7 @@ try:
 except (ImportError, ModuleNotFoundError):
     try:
         from config import TARGETS
-        from layers import ResidualAdapter
+        from layers import LearnableSoftThresholdPrior, ResidualAdapter
         from management import (
             attach_adapter,
             expand_processor_and_model,
@@ -67,7 +66,7 @@ except (ImportError, ModuleNotFoundError):
     except (ImportError, ModuleNotFoundError):
         from visq_ml.config import TARGETS
         from visq_ml.data import AnalogSelector
-        from visq_ml.layers import ResidualAdapter
+        from visq_ml.layers import LearnableSoftThresholdPrior, ResidualAdapter
         from visq_ml.management import (
             attach_adapter,
             expand_processor_and_model,
@@ -263,32 +262,40 @@ class ViscosityPredictor:
             for feature, categories in new_cats.items():
                 for cat in categories:
                     sim_cat = None
-
-                    # --- Logic for finding an analog ---
                     if feature == "Protein_type":
-                        # 1. Use manual override if provided
                         if analog_protein:
                             sim_cat = analog_protein
-
-                        # 2. Else, try auto-selection if we have a reference DF
                         elif selector is not None:
-                            # We need the row of data to check MW, pI, etc.
-                            # Grab the first occurrence of this new protein in the new data
-                            relevant_row = df_new[df_new[feature] == cat].iloc[0]
+                            if pd.isna(cat):
+                                mask = df_new[feature].isna()
+                            else:
+                                mask = (
+                                    df_new[feature].astype(str).str.lower()
+                                    == str(cat).lower()
+                                )
 
-                            # Get known classes from the processor maps
-                            known_classes = self.processor.cat_maps.get(
-                                "Protein_class_type", []
-                            )
+                            subset = df_new[mask]
 
-                            sim_cat = selector.find_best_analog(
-                                relevant_row, known_classes
-                            )
-                            print(
-                                f"[Auto-Analog] Selected '{sim_cat}' for new protein '{cat}'"
-                            )
+                            if not subset.empty:
+                                relevant_row = subset.iloc[0]
 
-                    # Apply the expansion (sim_cat will be None for non-proteins or if no analog found)
+                                known_classes = self.processor.cat_maps.get(
+                                    "Protein_class_type", []
+                                )
+
+                                try:
+                                    sim_cat = selector.find_best_analog(
+                                        relevant_row, known_classes
+                                    )
+                                    print(
+                                        f"[Auto-Analog] Selected '{sim_cat}' for new protein '{cat}'"
+                                    )
+                                except Exception as e:
+                                    print(f"[Auto-Analog] Error during selection: {e}")
+                            else:
+                                print(
+                                    f"[Auto-Analog] Warning: Could not find data row for category '{cat}'. Skipping."
+                                )
                     self._smart_expand_category(feature, cat, similar_category=sim_cat)
                     expanded_any = True
 

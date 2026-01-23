@@ -554,9 +554,26 @@ class AnalogSelector:
 
     def __init__(self, reference_df: pd.DataFrame):
         # Create unique library of known proteins
+        # We start by dropping duplicates to get unique protein definitions
         self.library = reference_df.drop_duplicates(subset=["Protein_type"]).copy()
 
-        # Weights for distance calculation (Adjust based on importance)
+        # --- FIX: Filter out None/none/nan/null Protein Types ---
+        if "Protein_type" in self.library.columns:
+            # 1. Drop standard pandas NaN/None values
+            self.library = self.library.dropna(subset=["Protein_type"])
+
+            # 2. Filter out string representations of "none" (case-insensitive)
+            # Create a mask where True keeps the row, False drops it
+            mask = (
+                ~self.library["Protein_type"]
+                .astype(str)
+                .str.strip()
+                .str.lower()
+                .isin(["none", "nan", "null", "", "unknown"])
+            )
+            self.library = self.library[mask]
+        # ---------------------------------------------------------
+
         self.weights = {
             "PI_mean": 2.0,  # Charge is dominant
             "kP": 1.5,  # Interaction proxy
@@ -565,6 +582,12 @@ class AnalogSelector:
         }
 
     def find_best_analog(self, new_protein_row: pd.Series, known_classes: list) -> str:
+        # Safety check: If library is empty after filtering, we cannot suggest an analog.
+        if self.library.empty:
+            raise ValueError(
+                "Reference library is empty after filtering 'None' values. Cannot find analog."
+            )
+
         target_class = new_protein_row.get("Protein_class_type", "Unknown")
 
         # Tier 1: Class Filter
@@ -582,6 +605,8 @@ class AnalogSelector:
             candidates = self.library[
                 self.library["Protein_class_type"].isin(fallback_classes)
             ].copy()
+
+            # If fallback yields nothing, search the entire valid library
             if candidates.empty:
                 candidates = self.library.copy()
 
@@ -590,17 +615,30 @@ class AnalogSelector:
         valid_cols = 0
 
         for col, weight in self.weights.items():
+            # Ensure we compare against numeric data only
             if col in new_protein_row and col in candidates.columns:
-                target_val = float(new_protein_row[col])
-                col_values = candidates[col].astype(float)
-                col_std = col_values.std() + 1e-6
+                try:
+                    target_val = float(new_protein_row[col])
+                    col_values = candidates[col].astype(float)
+                    col_std = col_values.std()
 
-                diff = ((col_values - target_val) / col_std) ** 2
-                candidates["score"] += diff * weight
-                valid_cols += 1
+                    # Avoid division by zero if std is 0 (all values same)
+                    if pd.isna(col_std) or col_std == 0:
+                        col_std = 1.0
 
+                    diff = ((col_values - target_val) / col_std) ** 2
+                    candidates["score"] += diff * weight
+                    valid_cols += 1
+                except (ValueError, TypeError):
+                    continue
+
+        # If no physicochemical columns matched, return the first valid candidate
         if valid_cols == 0:
+            if candidates.empty:
+                # Should be caught by library check, but safe fallback to full library
+                return self.library.iloc[0]["Protein_type"]
             return candidates.iloc[0]["Protein_type"]
 
+        # Return the candidate with the lowest difference score
         best_match = candidates.nsmallest(1, "score").iloc[0]
         return best_match["Protein_type"]
