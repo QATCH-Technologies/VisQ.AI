@@ -121,22 +121,20 @@ class LearnableSoftThresholdPrior(nn.Module):
         scores_tensor = cast(torch.Tensor, self.static_scores)
         base_score = scores_tensor[p_idx, r_idx, e_idx].unsqueeze(1)
 
-        # 1. Unclamped Delta (The "Power" to fix the error)
+        # 1. Unclamped Delta (Safe range)
         d = torch.clamp(self.delta[p_idx, r_idx, e_idx], -5.0, 5.0).unsqueeze(1)
 
-        # 2. BULLETPROOF THRESHOLD (The "Safety")
-        # Force thresholds to be positive and non-zero to prevent singularity.
-        # .abs() ensures positivity. .clamp(min=0.1) prevents division by zero.
+        # 2. BULLETPROOF THRESHOLD (The "Anti-NaN" Fix)
+        # Use abs() to force positivity and clamp(min=0.1) to prevent division by zero
         thresh = self.thresholds[e_idx].abs().clamp(min=0.1).unsqueeze(1)
 
-        # 3. Stabilized Weights
         w_b = self.w_below[p_idx, r_idx, e_idx].unsqueeze(1)
         w_a = self.w_above[p_idx, r_idx, e_idx].unsqueeze(1)
 
-        # 4. Calculation
+        # 3. Calculation
         conc_ratio = raw_concentration / thresh
 
-        # Clamp sharpness to prevent overflow in sigmoid
+        # Clamp sharpness to prevent sigmoid overflow/underflow
         s = torch.clamp(self.sharpness, min=1.0, max=20.0)
         gate = torch.sigmoid(s * (conc_ratio - 1.0))
 
@@ -145,9 +143,7 @@ class LearnableSoftThresholdPrior(nn.Module):
 
         conc_term = ((1 - gate) * effect_below) + (gate * effect_above)
 
-        # Final result
         result = (base_score + d) * conc_term
-
         return result, {"gate": gate, "conc_term": conc_term}
 
 

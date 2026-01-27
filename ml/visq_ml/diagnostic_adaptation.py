@@ -47,7 +47,7 @@ df_test = pd.read_csv(io.StringIO(csv_data))
 
 # --- 2. Configuration ---
 # Update this path to your actual checkpoint
-CHECKPOINT_PATH = "models/experiments/20260127_122435/model_4.pt"
+CHECKPOINT_PATH = "models/experiments/20260127_140127/model_3.pt"
 
 
 def run_diagnostic():

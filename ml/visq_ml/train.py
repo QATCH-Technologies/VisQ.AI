@@ -138,7 +138,9 @@ def objective_cv(
                 loss.backward()
 
                 # GRADIENT CHECK: Prune if gradients explode
-                total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+                total_norm = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), max_norm=1.0
+                )
                 if torch.isnan(total_norm) or torch.isinf(total_norm):
                     raise optuna.exceptions.TrialPruned("Gradient Explosion")
 
@@ -257,10 +259,11 @@ def train_final_ensemble(
         )
 
         criterion = PhysicsInformedLoss(
-            lambda_shear=best_params["lambda_shear"],
-            lambda_input=best_params["lambda_input"],
+            lambda_shear=0.0,  # FORCE TO 0.0 (Was ~0.27)
+            lambda_input=0.0,  # FORCE TO 0.0 (Was ~0.04)
             numeric_cols=BASE_NUMERIC,
         )
+
         optimizer = optim.Adam(
             model.parameters(),
             lr=best_params["lr"],
