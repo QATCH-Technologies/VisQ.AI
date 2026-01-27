@@ -389,41 +389,92 @@ class ViscosityPredictor:
     def _train_gated_adapter(
         self, df_new: pd.DataFrame, y_new: np.ndarray, n_epochs: int, lr: float
     ):
-        """Trains the Residual Adapter on prediction residuals."""
+        """
+        Trains with Aggressive Physics Warmup to force 'Delta' to move.
+        """
         if self.processor is None or self.model is None:
             raise RuntimeError("Processor and Model must be initialized.")
+
         X_num, X_cat = self.processor.transform(df_new)
         cat_dims = [len(m) for m in self.processor.cat_maps.values()]
         num_dim = X_num.shape[1]
 
         self.adapter = ResidualAdapter(num_dim, cat_dims, embed_dim=32).to(self.device)
-        optimizer = optim.Adam(self.adapter.parameters(), lr=lr)
+
+        # Collect Parameters
+        physics_params = []
+        if hasattr(self.model, "physics_layers"):
+            for layer in self.model.physics_layers:
+                if isinstance(layer, LearnableSoftThresholdPrior):
+                    physics_params.extend(layer.parameters())
+
+        adapter_params = list(self.adapter.parameters())
+        all_trainable_params = adapter_params + physics_params
+
+        # --- FIX 1: AGGRESSIVE PHYSICS LEARNING RATE ---
+        # Multiplier increased to 10.0x to force Delta to grow from 0.02 to ~1.5
+        optimizer = optim.Adam(
+            [
+                {"params": physics_params, "lr": lr * 10.0},
+                {"params": adapter_params, "lr": lr},
+            ]
+        )
+
         loss_fn = nn.MSELoss()
 
-        # --- FIX: Ensure y_log_t matches model output shape [Batch, 1] ---
+        # Prepare Tensors
         y_log = log_transform_targets(y_new)
         y_log_t = torch.tensor(y_log, dtype=torch.float32).to(self.device)
         if y_log_t.dim() == 1:
             y_log_t = y_log_t.unsqueeze(1)
-        # ---------------------------------------------------------------
 
         with torch.no_grad():
             X_num_t, X_cat_t = to_tensors(X_num, X_cat)
             X_num_t = X_num_t.to(self.device)
             X_cat_t = X_cat_t.to(self.device)
-            # Base model prediction
-            base_preds = self.model(X_num_t, X_cat_t)
 
-        # Calculate residuals. Shapes must match!
-        # y_log_t: [N, 1], base_preds: [N, 1]
-        target_residuals = y_log_t - base_preds
+        # Loop Setup
+        self.model.eval()
+        for layer in self.model.physics_layers:
+            layer.train()
         self.adapter.train()
 
-        for _ in range(n_epochs):
+        warmup_epochs = int(n_epochs * 0.2)
+
+        for epoch in range(n_epochs):
             optimizer.zero_grad()
-            pred_residuals = self.adapter(X_num_t, X_cat_t)
-            loss = loss_fn(pred_residuals, target_residuals)
+
+            # Warmup Phase
+            is_warmup = epoch < warmup_epochs
+            for param in self.adapter.parameters():
+                param.requires_grad = not is_warmup
+
+            # Forward Passes
+            base_preds = self.model(X_num_t, X_cat_t)
+
+            if is_warmup:
+                total_pred = base_preds
+            else:
+                adapter_preds = self.adapter(X_num_t, X_cat_t)
+                total_pred = base_preds + adapter_preds
+
+            # Dimension Safety
+            if y_log_t.shape[1] != total_pred.shape[1]:
+                pred_subset = total_pred[:, : y_log_t.shape[1]]
+                loss = loss_fn(pred_subset, y_log_t)
+            else:
+                loss = loss_fn(total_pred, y_log_t)
+
+            if torch.isnan(loss):
+                print(f"[Warning] NaN Loss at epoch {epoch}. Stopping.")
+                break
+
             loss.backward()
+
+            # --- FIX 2: RELAXED CLIPPING ---
+            # Increased max_norm to 5.0 to allow bigger updates
+            torch.nn.utils.clip_grad_norm_(all_trainable_params, max_norm=5.0)
+
             optimizer.step()
 
         self._attach_gated_adapter()

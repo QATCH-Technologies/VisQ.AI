@@ -47,7 +47,7 @@ df_test = pd.read_csv(io.StringIO(csv_data))
 
 # --- 2. Configuration ---
 # Update this path to your actual checkpoint
-CHECKPOINT_PATH = "models/experiments/20260120_152300/model_0.pt"
+CHECKPOINT_PATH = "models/experiments/20260127_122435/model_4.pt"
 
 
 def run_diagnostic():
@@ -74,7 +74,14 @@ def run_diagnostic():
 
     # 4. Prepare Data for `learn`
     # We must provide valid Y targets so the adapter training doesn't crash
-    y_test = df_test["Viscosity_100"].values
+    TARGET_COLS = [
+        "Viscosity_100",
+        "Viscosity_1000",
+        "Viscosity_10000",
+        "Viscosity_100000",
+        "Viscosity_15000000",
+    ]
+    y_test = df_test[TARGET_COLS].values
     ref_df = pd.read_csv("data/raw/formulation_data_12292025.csv")
     # 5. Run Adaptation (The Function Under Test)
     print(f"\n[Action] Running vp.learn() for Vudalimab...")
@@ -84,7 +91,7 @@ def run_diagnostic():
             df_new=df_test,
             y_new=y_test,
             epochs=100,
-            lr=0.005,
+            lr=0.02,
             reference_df=ref_df,
         )
     except Exception as e:
@@ -120,25 +127,29 @@ def run_diagnostic():
         if "surfactant" in name.lower() or "excipient" in name.lower():
             phys_layer = model.physics_layers[i]
             if hasattr(phys_layer, "static_scores"):
-                layer_found = True
-                scores = phys_layer.static_scores
-
-                # Check the score for the NEW class (bispecific)
-                # shape: [n_classes, n_regimes, n_excipients]
-                new_score_mag = scores[new_class_idx, :, :].abs().mean().item()
-
-                print(f"   Layer: {name}")
-                print(
-                    f"   - Target Class ({target_class_name}) Mean Physics Score: {new_score_mag:.6f}"
+                # 1. Static Prior (Fixed)
+                static_val = (
+                    phys_layer.static_scores[new_class_idx, :, :].abs().mean().item()
                 )
 
-                if new_score_mag == 0.0:
-                    print(
-                        f"   >>> FAIL: Physics priors for class '{target_class_name}' are ZERO."
+                # 2. Learnable Delta (Active) - THIS is what changes!
+                delta_val = phys_layer.delta[new_class_idx, :, :].abs().mean().item()
+
+                # 3. Total Effective Prior
+                total_mag = (
+                    (
+                        phys_layer.static_scores[new_class_idx]
+                        + phys_layer.delta[new_class_idx]
                     )
-                    print("       This confirms the 'Physics Lobotomy' bug.")
-                else:
-                    print(f"   >>> PASS: Physics priors have non-zero values.")
+                    .abs()
+                    .mean()
+                    .item()
+                )
+
+                print(f"   Layer: {name}")
+                print(f"   - Static Base:   {static_val:.6f} (Fixed)")
+                print(f"   - Learned Delta: {delta_val:.6f} <--- Check this!")
+                print(f"   - Total Magnitude: {total_mag:.6f}")
 
     if not layer_found:
         print("WARNING: No active physics layers found to test.")
@@ -149,6 +160,20 @@ F465,Vudalimab,bispecific,5,152,8.1,0.3,320,25,Histidine,6,15,none,0,none,0,none
     # 7. Prediction Check on Surfactant Data
     print("\n[Verification] Prediction Check on Row F465 (Contains Tween-80)")
     eval_row = df_eval[df_eval["ID"] == "F465"]
+
+    # We expect reasonable predictions if physics are present.
+    # If physics are missing, the Adapter might have over-corrected during the 1 epoch of training.
+    res = vp.predict(eval_row)
+    print(f"   Target Viscosity: {eval_row['Viscosity_100'].values[0]}")
+    print(f"   Model Prediction: {res[0][0]:.4f}")
+
+    eval_csv_data = """ID,Protein_type,Protein_class_type,kP,MW,PI_mean,PI_range,Protein_conc,Temperature,Buffer_type,Buffer_pH,Buffer_conc,Salt_type,Salt_conc,Stabilizer_type,Stabilizer_conc,Surfactant_type,Surfactant_conc,Excipient_type,Excipient_conc,C_Class,HCI,Viscosity_100,Viscosity_1000,Viscosity_10000,Viscosity_100000,Viscosity_15000000
+F165,Adalimumab,mAb_IgG1,3.0,148.0,8.7,0.3,100.0,27.5,Acetate,5.0,20,none,0,none,0.0,none,0.0,none,0,1.0,1.0,3.19,2.72,2.48,2.32,1.45"""
+
+    df_eval = pd.read_csv(io.StringIO(eval_csv_data))
+    # 7. Prediction Check on Surfactant Data
+    print("\n[Verification] Legacy Prediction")
+    eval_row = df_eval[df_eval["ID"] == "F165"]
 
     # We expect reasonable predictions if physics are present.
     # If physics are missing, the Adapter might have over-corrected during the 1 epoch of training.

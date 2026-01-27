@@ -27,19 +27,19 @@ from torch.nn import Embedding, Linear
 try:
     from .config import TARGETS
     from .data import DataProcessor
-    from .layers import ResidualAdapter
+    from .layers import LearnableSoftThresholdPrior, ResidualAdapter
     from .models import Model
 except (ImportError, ModuleNotFoundError):
     try:
         from config import TARGETS
-        from layers import ResidualAdapter
+        from layers import LearnableSoftThresholdPrior, ResidualAdapter
 
         from data import DataProcessor
         from models import Model
     except (ImportError, ModuleNotFoundError):
         from visq_ml.config import TARGETS
         from visq_ml.data import DataProcessor
-        from visq_ml.layers import ResidualAdapter
+        from visq_ml.layers import LearnableSoftThresholdPrior, ResidualAdapter
         from visq_ml.models import Model
 
 
@@ -57,79 +57,34 @@ def expand_processor_and_model(
     model.expand_categorical_embedding(feature_name, new_categories, initialization)
 
 
-def attach_adapter(
-    model: Model,
-    adapter_state_dict: Dict,
-    gating_thresholds: Optional[Dict[str, int]] = None,
-) -> nn.Module:
+def attach_adapter(model: Model, adapter_state: Dict) -> ResidualAdapter:
     """
-    Reconstructs a residual adapter and attaches it to the model with dynamic gating.
+    Reconstructs and loads a ResidualAdapter from a state dictionary.
+    Used during inference hydration.
     """
-    # Inspect model dimensions
-    cat_dims = [len(m) for m in model.cat_maps.values()]
-    total_in = cast(Linear, model.base[0]).in_features
-    total_emb = sum((cast(Embedding, e).embedding_dim for e in model.embeddings), 0)
-
-    numeric_dim = total_in - total_emb
-
-    # Initialize Adapter
-    adapter = ResidualAdapter(numeric_dim, cat_dims, embed_dim=16)
-    adapter.load_state_dict(adapter_state_dict)
-    adapter.eval()
-    original_forward = model.forward
-
-    # If no thresholds provided, fallback to "always on" or legacy "last protein" logic
-    checks = []
-    if gating_thresholds:
-        for feat, threshold in gating_thresholds.items():
-            if feat in model.cat_feature_names:
-                idx = model.cat_feature_names.index(feat)
-                checks.append((idx, threshold))
+    # Infer dimensions from the adapter state dict
+    # Note: New architecture uses Sequential for num_proj, so key is 'num_proj.0.weight'
+    if "num_proj.0.weight" in adapter_state:
+        embed_dim = adapter_state["num_proj.0.weight"].shape[0]
+        numeric_dim = adapter_state["num_proj.0.weight"].shape[1]
     else:
-        try:
-            p_idx = model.cat_feature_names.index("Protein_type")
-            p_thresh = len(model.cat_maps["Protein_type"]) - 1  # Only last one
-            checks.append((p_idx, p_thresh))
-        except ValueError:
-            pass
+        # Fallback for old architecture
+        embed_dim = adapter_state["num_proj.weight"].shape[0]
+        numeric_dim = adapter_state["num_proj.weight"].shape[1]
 
-    def new_forward(
-        x_num,
-        x_cat,
-        return_features: bool = False,
-        return_physics_details: bool = False,
-    ):
-        if return_features or return_physics_details:
-            ret = original_forward(
-                x_num,
-                x_cat,
-                return_features=return_features,
-                return_physics_details=return_physics_details,
-            )
-            if isinstance(ret, tuple):
-                pred = ret[0]
-                others = ret[1:]
-            else:
-                pred = ret
-                others = ()
+    # Infer cat dims from embedding weights
+    cat_dims = []
+    i = 0
+    while True:
+        key = f"embeddings.{i}.weight"
+        if key in adapter_state:
+            cat_dims.append(adapter_state[key].shape[0])
+            i += 1
         else:
-            pred = original_forward(x_num, x_cat)
-            others = ()
-        adapt = adapter(x_num, x_cat)
+            break
 
-        # Dynamic Masking
-        mask = torch.zeros(x_cat.size(0), 1, dtype=torch.bool, device=x_cat.device)
-        for col_idx, cutoff in checks:
-            is_new = x_cat[:, col_idx] >= cutoff
-            mask = mask | is_new.unsqueeze(1)
-
-        res = pred + (adapt * mask.float())
-
-        if others:
-            return (res,) + others
-        return res
-
-    model.forward = new_forward
+    adapter = ResidualAdapter(numeric_dim, cat_dims, embed_dim=embed_dim)
+    adapter.load_state_dict(adapter_state)
     return adapter
 
 
@@ -142,6 +97,7 @@ def save_model_checkpoint(
 ) -> None:
     """
     Save a comprehensive model checkpoint to disk.
+    Includes model weights, data processor state, and adapter state.
     """
     checkpoint = {
         "model_state_dict": model.state_dict(),
@@ -160,19 +116,16 @@ def save_model_checkpoint(
         },
     }
 
+    # Handle Adapter State
     if adapter is not None:
         checkpoint["adapter_state_dict"] = adapter.state_dict()
         checkpoint["has_adapter"] = True
+    elif hasattr(model, "adapter_state_dict") and model.adapter_state_dict is not None:
+        # Check if the model itself has a detached state dict stored from previous load
+        checkpoint["adapter_state_dict"] = model.adapter_state_dict
+        checkpoint["has_adapter"] = True
     else:
-        # Check if the model itself has a detached state dict stored
-        if (
-            hasattr(model, "adapter_state_dict")
-            and model.adapter_state_dict is not None
-        ):
-            checkpoint["adapter_state_dict"] = model.adapter_state_dict
-            checkpoint["has_adapter"] = True
-        else:
-            checkpoint["has_adapter"] = False
+        checkpoint["has_adapter"] = False
 
     torch.save(checkpoint, filepath)
 
@@ -185,10 +138,11 @@ def load_model_checkpoint(
 
     Handles dimension mismatches that occur if the model vocabulary was expanded
     without increasing embedding width (preserving transfer learning weights).
+    Also handles upgrading legacy Physics Layers (missing 'sharpness').
     """
     checkpoint = torch.load(filepath, map_location=device, weights_only=False)
 
-    # Reconstruct processor
+    # 1. Reconstruct Processor
     processor = DataProcessor()
     processor.cat_maps = checkpoint.get("cat_maps", {})
     processor.numeric_features = checkpoint.get("numeric_features", [])
@@ -222,7 +176,7 @@ def load_model_checkpoint(
         processor.scaler = None
         actual_numeric_dim = len(processor.numeric_features)
 
-    # Reconstruct model
+    # 2. Reconstruct Model Architecture
     best_params = checkpoint["best_params"]
     hidden_size = best_params["hidden_size"]
     n_layers = best_params["n_layers"]
@@ -238,7 +192,7 @@ def load_model_checkpoint(
         split_indices=processor.split_indices,
     )
 
-    # Handle Ensemble Keys
+    # 3. Handle Ensemble/Standard Key Mismatch
     state_dict = checkpoint["model_state_dict"]
     first_key = next(iter(state_dict.keys()))
     if first_key.startswith("models."):
@@ -249,15 +203,10 @@ def load_model_checkpoint(
                 new_state_dict[new_key] = v
         state_dict = new_state_dict
 
-    # --- FIX: Reconcile Embedding Dimensions ---
-    # The Model constructor may initialize larger embedding dimensions due to
-    # larger vocab sizes (heuristic). We must force the model to match the
-    # dimensions stored in the checkpoint.
-
+    # 4. Reconcile Embedding Dimensions (Fix Heuristic Mismatch)
     total_emb_dim = 0
     dims_changed = False
 
-    # 1. Fix Embedding Layers
     for i, emb_layer in enumerate(model.embeddings):
         key = f"embeddings.{i}.weight"
         if key in state_dict:
@@ -266,7 +215,6 @@ def load_model_checkpoint(
 
             # If width differs, replace the layer
             if emb_layer.embedding_dim != saved_dim:
-                # We trust the saved_vocab size (rows) matches processor.cat_maps
                 model.embeddings[i] = nn.Embedding(saved_vocab, saved_dim)
                 dims_changed = True
 
@@ -274,11 +222,8 @@ def load_model_checkpoint(
         else:
             total_emb_dim += emb_layer.embedding_dim
 
-    # 2. Fix Base Network (MLP) Input Layer
-    # If embedding dimensions changed, the concatenated input size to the MLP changed.
+    # 5. Fix Base Network (MLP) Input Layer if dims changed
     if dims_changed:
-        input_dim = total_emb_dim + actual_numeric_dim
-
         # Verify against checkpoint to be sure
         base_key = "base.0.weight"
         if base_key in state_dict:
@@ -296,13 +241,25 @@ def load_model_checkpoint(
                     prev = h
                 model.base = nn.Sequential(*layers)
 
-    model.load_state_dict(state_dict)
+    # 6. Physics Layer Upgrade Logic
+    # Check if checkpoint has 'sharpness' parameter. If not, inject it.
+    for i, layer in enumerate(model.physics_layers):
+        if isinstance(layer, LearnableSoftThresholdPrior):
+            sharpness_key = f"physics_layers.{i}.sharpness"
+            if sharpness_key not in state_dict:
+                # Inject default sharpness for backward compatibility
+                state_dict[sharpness_key] = torch.tensor(10.0)
+
+    # 7. Load State Dict
+    model.load_state_dict(
+        state_dict, strict=False
+    )  # strict=False handles minor mismatches gracefully
     model.to(device)
 
-    # Attach adapter state dict to model for downstream use
+    # 8. Attach adapter state dict for downstream use
     if "adapter_state_dict" in checkpoint:
-        # print("FOUND ADAPTER, RELOADING...")
         model.adapter_state_dict = checkpoint["adapter_state_dict"]
     else:
         model.adapter_state_dict = None  # type: ignore
+
     return model, processor, best_params
