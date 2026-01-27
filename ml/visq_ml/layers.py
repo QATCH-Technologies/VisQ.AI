@@ -55,6 +55,7 @@ class LearnableSoftThresholdPrior(nn.Module):
         self.w_above = nn.Parameter(
             torch.ones(n_classes, n_regimes, n_excipients) * 0.5
         )
+        self.sharpness = nn.Parameter(torch.tensor(10.0))
 
     def expand_indices(self, dim: int, new_entries: int = 1, source_idx: int = -1):
         """
@@ -119,13 +120,14 @@ class LearnableSoftThresholdPrior(nn.Module):
     def forward(self, p_idx, r_idx, e_idx, raw_concentration):
         scores_tensor = cast(torch.Tensor, self.static_scores)
         base_score = scores_tensor[p_idx, r_idx, e_idx].unsqueeze(1)
-        d = torch.clamp(self.delta[p_idx, r_idx, e_idx], -2.0, 2.0).unsqueeze(1)
+        d = torch.clamp(self.delta[p_idx, r_idx, e_idx], -5.0, 5.0).unsqueeze(1)
         thresh = self.thresholds[e_idx].unsqueeze(1)
         w_b = self.w_below[p_idx, r_idx, e_idx].unsqueeze(1)
         w_a = self.w_above[p_idx, r_idx, e_idx].unsqueeze(1)
 
         conc_ratio = raw_concentration / (thresh + 1e-6)
-        gate = torch.sigmoid(10 * (conc_ratio - 1.0))
+        s = torch.clamp(self.sharpness, min=1.0, max=50.0)
+        gate = torch.sigmoid(s * (conc_ratio - 1.0))
         effect_below = torch.tanh(conc_ratio) * w_b
         effect_above = torch.log1p(conc_ratio) * w_a
         conc_term = ((1 - gate) * effect_below) + (gate * effect_above)
