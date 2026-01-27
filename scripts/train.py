@@ -19,16 +19,16 @@ from sklearn.model_selection import KFold
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 # --- MODULAR IMPORTS ---
-from visq_core.config import (
+from visq_ml.config import (
     BASE_CATEGORICAL,
     BASE_NUMERIC,
     TARGETS,
 )
-from visq_core.data import DataProcessor
-from visq_core.loss import PhysicsInformedLoss, get_physics_masks
-from visq_core.management import save_model_checkpoint
-from visq_core.models import EnsembleModel, Model
-from visq_core.utils import (
+from visq_ml.data import DataProcessor
+from visq_ml.loss import PhysicsInformedLoss, get_physics_masks
+from visq_ml.management import save_model_checkpoint
+from visq_ml.models import EnsembleModel, Model
+from visq_ml.utils import (
     calculate_sample_weights,
     clean,
     log_transform_targets,
@@ -362,7 +362,7 @@ def train_final_ensemble(
 
 
 if __name__ == "__main__":
-    DATA_PATH = r"data/processed/formulation_data_augmented.csv"
+    DATA_PATH = r"data/raw/formulation_data_01092026.csv"
 
     # Configuration
     N_TRIALS = 40

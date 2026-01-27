@@ -231,18 +231,31 @@ class ResidualBlock(nn.Module):
 
 class ResidualAdapter(nn.Module):
     """
-    Residual Adapter network for domain adaptation.
-    Uses a separate embedding set and projection for numeric inputs.
+    Enhanced Residual Adapter for VisQ.AI.
+    Increased capacity to handle large shifts in log-space residuals
+    caused by new protein types or classes.
     """
 
-    def __init__(self, numeric_dim, cat_dims, embed_dim=16):
+    def __init__(self, numeric_dim, cat_dims, embed_dim=32):  # Increased from 16
         super().__init__()
-        self.num_proj = nn.Linear(numeric_dim, embed_dim)
+        # Project numeric features to a higher dimension to match categorical resolution
+        self.num_proj = nn.Sequential(
+            nn.Linear(numeric_dim, embed_dim), nn.LayerNorm(embed_dim), nn.ReLU()
+        )
+
+        # Embeddings for new categorical levels
         self.embeddings = nn.ModuleList([nn.Embedding(n, embed_dim) for n in cat_dims])
 
-        # Output dim is len(TARGETS) imported from config
+        input_dim = embed_dim * (len(cat_dims) + 1)
+
+        # Deep residual mapping with bottleneck and normalization
         self.net = nn.Sequential(
-            nn.Linear(embed_dim * (len(cat_dims) + 1), 64),
+            nn.Linear(input_dim, 128),  # Increased from 64
+            nn.LayerNorm(128),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(128, 64),  # Increased from 32
+            nn.LayerNorm(64),
             nn.ReLU(),
             nn.Linear(64, 32),
             nn.ReLU(),
@@ -250,7 +263,14 @@ class ResidualAdapter(nn.Module):
         )
 
     def forward(self, x_num, x_cat):
+        # Generate embeddings for all categorical features
         embs = [emb(x_cat[:, i]) for i, emb in enumerate(self.embeddings)]
+
+        # Process numeric features through local projection
         num_emb = self.num_proj(x_num)
+
+        # Global concatenation of features
         x = torch.cat(embs + [num_emb], dim=1)
+
+        # Calculate the residual delta
         return self.net(x)

@@ -356,8 +356,9 @@ class ViscosityPredictor:
         with torch.no_grad():
             new_emb_layer.weight[:-1] = old_emb.weight
             if source_idx >= 0:
+                # Remove the 1.5 multiplier. Use 1.0 to stay in the same 'neighborhood'
                 noise = torch.randn(old_emb.embedding_dim) * 0.01
-                new_emb_layer.weight[-1] = (old_emb.weight[source_idx] * 1.5) + noise
+                new_emb_layer.weight[-1] = old_emb.weight[source_idx] + noise
             else:
                 new_emb_layer.weight[-1] = old_emb.weight.mean(dim=0)
 
@@ -395,7 +396,7 @@ class ViscosityPredictor:
         cat_dims = [len(m) for m in self.processor.cat_maps.values()]
         num_dim = X_num.shape[1]
 
-        self.adapter = ResidualAdapter(num_dim, cat_dims, embed_dim=16).to(self.device)
+        self.adapter = ResidualAdapter(num_dim, cat_dims, embed_dim=32).to(self.device)
         optimizer = optim.Adam(self.adapter.parameters(), lr=lr)
         loss_fn = nn.MSELoss()
 
@@ -444,7 +445,7 @@ class ViscosityPredictor:
         cat_dims = [len(m) for m in self.processor.cat_maps.values()]
         num_dim = X_num.shape[1]
 
-        self.adapter = ResidualAdapter(num_dim, cat_dims, embed_dim=16).to(self.device)
+        self.adapter = ResidualAdapter(num_dim, cat_dims, embed_dim=32).to(self.device)
 
         with torch.no_grad():
             X_num_t, X_cat_t, y_log_t = to_tensors(X_num, X_cat, y_log)

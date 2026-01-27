@@ -553,26 +553,23 @@ class AnalogSelector:
     """Helper to find the best physicochemical match for a new protein."""
 
     def __init__(self, reference_df: pd.DataFrame):
-        # Create unique library of known proteins
-        # We start by dropping duplicates to get unique protein definitions
+        # Create unique library and immediately normalize core categorical columns to lowercase
         self.library = reference_df.drop_duplicates(subset=["Protein_type"]).copy()
 
-        # --- FIX: Filter out None/none/nan/null Protein Types ---
-        if "Protein_type" in self.library.columns:
-            # 1. Drop standard pandas NaN/None values
-            self.library = self.library.dropna(subset=["Protein_type"])
+        # Ensure categorical matching columns are string-type and lowercase
+        for col in ["Protein_type", "Protein_class_type"]:
+            if col in self.library.columns:
+                self.library[col] = (
+                    self.library[col].astype(str).str.strip().str.lower()
+                )
 
-            # 2. Filter out string representations of "none" (case-insensitive)
-            # Create a mask where True keeps the row, False drops it
-            mask = (
-                ~self.library["Protein_type"]
-                .astype(str)
-                .str.strip()
-                .str.lower()
-                .isin(["none", "nan", "null", "", "unknown"])
+        # --- Filter out invalid Protein Types ---
+        if "Protein_type" in self.library.columns:
+            self.library = self.library.dropna(subset=["Protein_type"])
+            mask = ~self.library["Protein_type"].isin(
+                ["none", "nan", "null", "", "unknown"]
             )
             self.library = self.library[mask]
-        # ---------------------------------------------------------
 
         self.weights = {
             "PI_mean": 2.0,  # Charge is dominant
@@ -582,63 +579,57 @@ class AnalogSelector:
         }
 
     def find_best_analog(self, new_protein_row: pd.Series, known_classes: list) -> str:
-        # Safety check: If library is empty after filtering, we cannot suggest an analog.
         if self.library.empty:
-            raise ValueError(
-                "Reference library is empty after filtering 'None' values. Cannot find analog."
+            raise ValueError("Reference library is empty.")
+
+        # Normalize target class to lowercase for matching
+        target_class = (
+            str(new_protein_row.get("Protein_class_type", "unknown")).strip().lower()
+        )
+
+        # 1. STRICT CLASS FILTERING
+        # Library is already lowercased, so we can do a direct comparison
+        class_match = self.library[self.library["Protein_class_type"] == target_class]
+
+        if not class_match.empty:
+            candidates = class_match.copy()
+            print(
+                f"[Selector] Found {len(candidates)} candidates in class '{target_class}'"
             )
-
-        target_class = new_protein_row.get("Protein_class_type", "Unknown")
-
-        # Tier 1: Class Filter
-        if target_class in self.library["Protein_class_type"].values:
-            candidates = self.library[
-                self.library["Protein_class_type"] == target_class
-            ].copy()
         else:
-            # Fallback for completely new classes
+            # Fallback logic with lowercased keys
             fallback_map = {
-                "Bispecific": ["mAb", "Monoclonal Antibody"],
-                "Fusion_Protein": ["Complex_Protein", "Other"],
+                "bispecific": ["mab", "monoclonal antibody"],
+                "fusion_protein": ["complex_protein", "other"],
+                "vudalimab": [
+                    "bispecific",
+                    "mab",
+                ],  # Manual context for the specific protein issue
             }
-            fallback_classes = fallback_map.get(target_class, [])
+            # Use lowercased list from known_classes if needed
+            known_classes_lower = [str(c).lower() for c in known_classes]
+
+            fallback_keys = fallback_map.get(target_class, [])
             candidates = self.library[
-                self.library["Protein_class_type"].isin(fallback_classes)
+                self.library["Protein_class_type"].isin(fallback_keys)
             ].copy()
 
-            # If fallback yields nothing, search the entire valid library
             if candidates.empty:
                 candidates = self.library.copy()
 
-        # Tier 2: Weighted Euclidean Distance
+        # 2. DISTANCE RANKING (Only within the filtered candidate pool)
         candidates["score"] = 0.0
-        valid_cols = 0
-
         for col, weight in self.weights.items():
-            # Ensure we compare against numeric data only
             if col in new_protein_row and col in candidates.columns:
                 try:
                     target_val = float(new_protein_row[col])
                     col_values = candidates[col].astype(float)
-                    col_std = col_values.std()
-
-                    # Avoid division by zero if std is 0 (all values same)
-                    if pd.isna(col_std) or col_std == 0:
-                        col_std = 1.0
+                    col_std = col_values.std() or 1.0
 
                     diff = ((col_values - target_val) / col_std) ** 2
                     candidates["score"] += diff * weight
-                    valid_cols += 1
                 except (ValueError, TypeError):
                     continue
 
-        # If no physicochemical columns matched, return the first valid candidate
-        if valid_cols == 0:
-            if candidates.empty:
-                # Should be caught by library check, but safe fallback to full library
-                return self.library.iloc[0]["Protein_type"]
-            return candidates.iloc[0]["Protein_type"]
-
-        # Return the candidate with the lowest difference score
         best_match = candidates.nsmallest(1, "score").iloc[0]
         return best_match["Protein_type"]
