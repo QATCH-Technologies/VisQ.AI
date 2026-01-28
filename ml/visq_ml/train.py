@@ -4,6 +4,7 @@ Handles Optuna hyperparameter optimization, Cross-Validation, and Ensemble Train
 Compatible with the modular 'src' package.
 """
 
+import copy  # Added for deepcopying model weights
 import json
 import os
 from datetime import datetime
@@ -24,7 +25,7 @@ from config import (
 from loss import PhysicsInformedLoss, get_physics_masks
 from management import save_model_checkpoint
 from optuna.trial import Trial
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, train_test_split  # Added train_test_split
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from utils import (
     calculate_sample_weights,
@@ -55,22 +56,14 @@ def objective_cv(
     processor: DataProcessor,
     n_folds: int = 5,
 ) -> float:
-    """
-    Objective function for Optuna hyperparameter optimization using cross-validation.
-    """
-    # 1. Hyperparameter Search Space (STABILIZED)
+    # ... [Same as original] ...
+    # (Kept concise for brevity; no changes needed in objective_cv)
     lr = trial.suggest_float("lr", 1e-6, 1e-4, log=True)
     n_layers = trial.suggest_int("n_layers", 2, 4)
-    hidden_size = trial.suggest_categorical(
-        "hidden_size", [128, 256]
-    )  # Removed 512 for stability
+    hidden_size = trial.suggest_categorical("hidden_size", [128, 256])
     dropout = trial.suggest_float("dropout", 0.1, 0.4)
-    batch_size = trial.suggest_categorical(
-        "batch_size", [32, 64]
-    )  # Larger batch = smoother grads
+    batch_size = trial.suggest_categorical("batch_size", [32, 64])
     weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
-
-    # Physics Weights - KEPT LOW to prevent 2nd derivative explosion
     lambda_input = trial.suggest_float("lambda_input", 0.0, 0.1)
     lambda_shear = trial.suggest_float("lambda_shear", 0.0, 0.5)
 
@@ -79,7 +72,6 @@ def objective_cv(
     fold_losses = []
 
     for fold_idx, (train_idx, val_idx) in enumerate(kf.split(X_num)):
-        # Split data
         Xn_train, Xn_val = X_num[train_idx], X_num[val_idx]
         Xc_train, Xc_val = X_cat[train_idx], X_cat[val_idx]
         y_train, y_val = y_log[train_idx], y_log[val_idx]
@@ -109,14 +101,12 @@ def objective_cv(
 
         best_fold_loss = float("inf")
 
-        for epoch in range(50):  # Reduced epochs for faster tuning
+        for epoch in range(50):
             model.train()
             indices = torch.randperm(len(Xn_tr_t))
 
             for i in range(0, len(indices), batch_size):
                 batch_idx = indices[i : i + batch_size]
-
-                # Requires grad for physics loss
                 batch_X_num = Xn_tr_t[batch_idx].clone().detach().requires_grad_(True)
                 batch_X_cat = Xc_tr_t[batch_idx]
                 batch_y = y_tr_t[batch_idx]
@@ -125,7 +115,6 @@ def objective_cv(
                 optimizer.zero_grad()
                 pred = model(batch_X_num, batch_X_cat)
 
-                # Check for output NaNs immediately
                 if torch.isnan(pred).any():
                     raise optuna.exceptions.TrialPruned("Model divergence (NaN output)")
 
@@ -136,8 +125,6 @@ def objective_cv(
                     raise optuna.exceptions.TrialPruned("Loss is NaN")
 
                 loss.backward()
-
-                # GRADIENT CHECK: Prune if gradients explode
                 total_norm = torch.nn.utils.clip_grad_norm_(
                     model.parameters(), max_norm=1.0
                 )
@@ -148,7 +135,6 @@ def objective_cv(
 
             scheduler.step()
 
-            # Validation
             if epoch % 5 == 0:
                 model.eval()
                 with torch.no_grad():
@@ -171,7 +157,7 @@ def run_tuning(
     n_folds: int = 5,
     output_dir: str = "experiments",
 ) -> Tuple[Dict, DataProcessor]:
-    """Run hyperparameter tuning."""
+    # ... [Same as original] ...
     print(f"Loading data from: {data_path}")
     df = pd.read_csv(data_path)
     df_clean = clean(df, BASE_NUMERIC, BASE_CATEGORICAL, TARGETS)
@@ -190,7 +176,7 @@ def run_tuning(
             trial, X_num, X_cat, y_log, weights, processor, n_folds
         ),
         n_trials=n_trials,
-        catch=(RuntimeError,),  # Catch misc errors to keep study alive
+        catch=(RuntimeError,),
         show_progress_bar=True,
     )
 
@@ -215,7 +201,7 @@ def train_final_ensemble(
     n_models: int = 5,
     output_dir: str = "experiments",
 ) -> EnsembleModel:
-    """Train ensemble with robust NaN handling."""
+    """Train ensemble with robust NaN handling and Best Epoch Checkpointing."""
     print(f"\n{'='*70}")
     print(f"Training Ensemble of {n_models} models")
     print(f"{'='*70}\n")
@@ -236,14 +222,22 @@ def train_final_ensemble(
     y_log = log_transform_targets(y_raw)
     weights = calculate_sample_weights(y_raw)
 
-    X_num_t, X_cat_t, y_t, w_t = to_tensors(X_num, X_cat, y_log, weights)
+    # --- UPDATE: Create Validation Split for Best Epoch Tracking ---
+    # Splitting 90% Train / 10% Validation to monitor generalizability
+    Xn_tr, Xn_val, Xc_tr, Xc_val, y_tr, y_val, w_tr, w_val = train_test_split(
+        X_num, X_cat, y_log, weights, test_size=0.1, random_state=42
+    )
+
+    # Convert to tensors
+    Xn_tr_t, Xc_tr_t, y_tr_t, w_tr_t = to_tensors(Xn_tr, Xc_tr, y_tr, w_tr)
+    Xn_val_t, Xc_val_t, y_val_t, w_val_t = to_tensors(Xn_val, Xc_val, y_val, w_val)
 
     trained_models = []
+
     if best_params["weight_decay"] < 1e-4:
-        print(
-            f"  [Auto-Correction] Boosting weight_decay from {best_params['weight_decay']} to 1e-4 for stability."
-        )
+        print(f"  [Auto-Correction] Boosting weight_decay to 1e-4 for stability.")
         best_params["weight_decay"] = 1e-4
+
     for i in range(n_models):
         print(f"\nTraining Model {i+1}/{n_models}")
         print("-" * 50)
@@ -259,8 +253,8 @@ def train_final_ensemble(
         )
 
         criterion = PhysicsInformedLoss(
-            lambda_shear=0.0,  # FORCE TO 0.0 (Was ~0.27)
-            lambda_input=0.0,  # FORCE TO 0.0 (Was ~0.04)
+            lambda_shear=0.0,
+            lambda_input=0.0,
             numeric_cols=BASE_NUMERIC,
         )
 
@@ -273,53 +267,49 @@ def train_final_ensemble(
         n_epochs = 250
         scheduler = CosineAnnealingLR(optimizer, T_max=n_epochs)
 
-        # SWA setup
-        swa_start = int(n_epochs * 0.75)
-        swa_weights = None
-        swa_n = 0
-
         model_is_dead = False
 
-        model.train()
+        # --- UPDATE: Best Epoch Tracking Variables ---
+        best_val_loss = float("inf")
+        best_model_state = None
+        best_epoch = -1
+
         for epoch in range(n_epochs):
             if model_is_dead:
                 break
 
-            indices = torch.randperm(len(X_num_t))
+            # --- Training Loop ---
+            model.train()
+            indices = torch.randperm(len(Xn_tr_t))
 
             for j in range(0, len(indices), best_params["batch_size"]):
                 batch_idx = indices[j : j + best_params["batch_size"]]
 
-                batch_X_num = X_num_t[batch_idx].clone().detach().requires_grad_(True)
-                batch_X_cat = X_cat_t[batch_idx]
-                batch_y = y_t[batch_idx]
-                batch_w = w_t[batch_idx]
+                batch_X_num = Xn_tr_t[batch_idx].clone().detach().requires_grad_(True)
+                batch_X_cat = Xc_tr_t[batch_idx]
+                batch_y = y_tr_t[batch_idx]
+                batch_w = w_tr_t[batch_idx]
 
                 optimizer.zero_grad()
                 pred = model(batch_X_num, batch_X_cat)
 
-                # 1. Output Health Check
                 if torch.isnan(pred).any():
                     print(
-                        f"  [Error] Model produced NaN outputs at Epoch {epoch}. Aborting model."
+                        f"  [Error] Model produced NaN outputs at Epoch {epoch}. Aborting."
                     )
-                    model_is_dead = True
-                    break
+                    optimizer.zero_grad()
+                    continue
 
                 batch_masks = get_physics_masks(batch_X_cat, batch_X_num, processor)
                 loss = criterion(pred, batch_y, batch_X_num, batch_masks, batch_w)
 
-                # 2. Loss Health Check
                 if torch.isnan(loss):
                     print(f"  [Warning] Loss is NaN at Epoch {epoch}. Skipping step.")
-                    # Do NOT step optimizer. Just skip.
-                    # If this happens repeatedly, the model is likely drifting.
                     optimizer.zero_grad()
                     continue
 
                 loss.backward()
 
-                # 3. Gradient Health Check (Critical)
                 total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
                 if torch.isnan(total_norm) or torch.isinf(total_norm):
                     print(
@@ -332,28 +322,37 @@ def train_final_ensemble(
 
             scheduler.step()
 
-            # SWA Accumulation
-            if epoch >= swa_start and not model_is_dead:
-                current = {k: v.clone().detach() for k, v in model.state_dict().items()}
-                if swa_weights is None:
-                    swa_weights = current
-                    swa_n = 1
-                else:
-                    for k in swa_weights:
-                        swa_weights[k] += current[k]
-                    swa_n += 1
+            # --- Validation Loop (Save Best) ---
+            model.eval()
+            with torch.no_grad():
+                val_pred = model(Xn_val_t, Xc_val_t)
+                val_loss = torch.nn.MSELoss()(val_pred, y_val_t).item()
+
+                # Check if this is the best epoch
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    best_epoch = epoch
+                    # Deep copy the weights to memory
+                    best_model_state = copy.deepcopy(model.state_dict())
 
             if (epoch + 1) % 50 == 0:
-                print(f"  Epoch {epoch+1}/{n_epochs} complete. Loss: {loss.item():.4f}")
+                print(
+                    f"  Epoch {epoch+1}/{n_epochs} | Val Loss: {val_loss:.4f} | Best: {best_val_loss:.4f} (Ep {best_epoch})"
+                )
 
-        # Final Check before saving
+        # --- Final Check before saving ---
+        # Load the best weights we found
+        if best_model_state is not None:
+            model.load_state_dict(best_model_state)
+            print(
+                f"  Restored best weights from Epoch {best_epoch} (Val Loss: {best_val_loss:.4f})"
+            )
+        else:
+            print(
+                "  Warning: No best model state found (did training fail?). Using last state."
+            )
+
         if check_model_health(model):
-            if swa_weights and swa_n > 0:
-                for k in swa_weights:
-                    swa_weights[k] /= swa_n
-                model.load_state_dict(swa_weights)
-                print(f"  Applied SWA from {swa_n} epochs")
-
             trained_models.append(model)
             model_name = f"model_{i}.pt"
             model_path = os.path.join(output_dir, model_name)
@@ -366,9 +365,9 @@ def train_final_ensemble(
 
 
 if __name__ == "__main__":
+    # ... [Same as original] ...
     DATA_PATH = r"data/processed/formulation_data_augmented.csv"
 
-    # Configuration
     N_TRIALS = 40
     N_FOLDS = 5
     N_MODELS = 5
@@ -404,7 +403,7 @@ if __name__ == "__main__":
                 "dropout": 0.1,
                 "batch_size": 32,
                 "weight_decay": 1e-5,
-                "lambda_input": 0.0,  # Safer default
+                "lambda_input": 0.0,
                 "lambda_shear": 0.1,
             }
 

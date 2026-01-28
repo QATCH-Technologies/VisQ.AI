@@ -147,69 +147,6 @@ class LearnableSoftThresholdPrior(nn.Module):
         return result, {"gate": gate, "conc_term": conc_term}
 
 
-# class LearnablePhysicsPrior(nn.Module):
-#     """
-#     Implements the learnable weighted physics prior logic.
-#     Scores are initialized by the Model class using the config priors.
-#     """
-
-#     def __init__(self, n_classes, n_regimes, n_excipients):
-#         super().__init__()
-#         self.register_buffer(
-#             "static_scores", torch.zeros(n_classes, n_regimes, n_excipients)
-#         )
-#         self.delta = nn.Parameter(torch.zeros(n_classes, n_regimes, n_excipients))
-#         self.w_L = nn.Parameter(torch.ones(n_classes, n_regimes, n_excipients) * 0.5)
-#         self.w_H = nn.Parameter(torch.ones(n_classes, n_regimes, n_excipients) * 1.0)
-
-#     def expand_indices(self, dim: int, new_entries: int = 1):
-#         """Dynamically resizes internal tensors."""
-#         device = self.delta.device
-
-#         def _expand_param(param, d, n, init_val=0.0):
-#             shape = list(param.shape)
-#             shape[d] = n
-#             new_data = torch.ones(shape, device=device, dtype=param.dtype) * init_val
-#             res = torch.cat([param, new_data], dim=d)
-#             return nn.Parameter(res)
-
-#         def _expand_buffer(buff, d, n, init_val=0.0):
-#             shape = list(buff.shape)
-#             shape[d] = n
-#             new_data = torch.ones(shape, device=device, dtype=buff.dtype) * init_val
-#             return torch.cat([buff, new_data], dim=d)
-
-#         self.static_scores = _expand_buffer(self.static_scores, dim, new_entries, 0.0)
-#         self.delta = _expand_param(self.delta, dim, new_entries, 0.0)
-#         self.w_L = _expand_param(self.w_L, dim, new_entries, 0.5)
-#         self.w_H = _expand_param(self.w_H, dim, new_entries, 1.0)
-
-#     def forward(self, p_idx, r_idx, e_idx, e_low_norm, e_high_norm):
-#         scores_tensor = cast(torch.Tensor, self.static_scores)
-#         score = scores_tensor[p_idx, r_idx, e_idx]
-#         d = torch.clamp(self.delta[p_idx, r_idx, e_idx], min=-2.0, max=2.0)
-#         wl = self.w_L[p_idx, r_idx, e_idx]
-#         wh = self.w_H[p_idx, r_idx, e_idx]
-
-#         el = e_low_norm.view(-1)
-#         eh = torch.tanh(e_high_norm.view(-1))
-#         base_term = score + d
-#         conc_term = (wl * el) + (wh * eh)
-#         result = base_term * conc_term
-#         details = {
-#             "static_score": score,
-#             "delta": d,
-#             "w_L": wl,
-#             "w_H": wh,
-#             "e_low_norm": el,
-#             "e_high_norm": eh,
-#             "base_term": base_term,
-#             "conc_term": conc_term,
-#             "result": result,
-#         }
-#         return result.unsqueeze(1), details
-
-
 class EmbeddingDropout(nn.Module):
     """Drop entire embedding vectors, not individual dimensions."""
 

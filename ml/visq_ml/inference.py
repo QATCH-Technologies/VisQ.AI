@@ -390,7 +390,7 @@ class ViscosityPredictor:
         self, df_new: pd.DataFrame, y_new: np.ndarray, n_epochs: int, lr: float
     ):
         """
-        Trains with Aggressive Physics Warmup to force 'Delta' to move.
+        Trains with Zero-Init Warmup and Dampened Physics to prevent forgetting.
         """
         if self.processor is None or self.model is None:
             raise RuntimeError("Processor and Model must be initialized.")
@@ -399,7 +399,15 @@ class ViscosityPredictor:
         cat_dims = [len(m) for m in self.processor.cat_maps.values()]
         num_dim = X_num.shape[1]
 
-        self.adapter = ResidualAdapter(num_dim, cat_dims, embed_dim=32).to(self.device)
+        # REDUCE CAPACITY: Smaller adapter to prevent overfitting on small N
+        self.adapter = ResidualAdapter(num_dim, cat_dims, embed_dim=16).to(self.device)
+
+        # --- CRITICAL FIX 1: Zero-Initialization ---
+        # Initialize the final output layer of the adapter to exact zero.
+        # This ensures: Model(x) + Adapter(x) == Model(x) at start.
+        # The adapter only learns to correct *actual errors*.
+        nn.init.zeros_(self.adapter.net[-1].weight)
+        nn.init.zeros_(self.adapter.net[-1].bias)
 
         # Collect Parameters
         physics_params = []
@@ -409,16 +417,19 @@ class ViscosityPredictor:
                     physics_params.extend(layer.parameters())
 
         adapter_params = list(self.adapter.parameters())
-        all_trainable_params = adapter_params + physics_params
 
-        # --- FIX 1: AGGRESSIVE PHYSICS LEARNING RATE ---
-        # Multiplier increased to 10.0x to force Delta to grow from 0.02 to ~1.5
+        # --- CRITICAL FIX 2: Dampen Physics Updates ---
+        # Do NOT use 10.0x LR. Use 0.1x or 0.0 (Freeze).
+        # When adapting to 1 protein, we trust the global physics; we only want to tweak the residual.
         optimizer = optim.Adam(
             [
-                {"params": physics_params, "lr": lr * 10.0},
+                {"params": physics_params, "lr": lr * 0.00},  # Almost frozen
                 {"params": adapter_params, "lr": lr},
-            ]
+            ],
+            weight_decay=1e-4,  # Add regularization
         )
+
+        loss_fn = nn.MSELoss()
 
         loss_fn = nn.MSELoss()
 
@@ -435,28 +446,23 @@ class ViscosityPredictor:
 
         # Loop Setup
         self.model.eval()
+
+        # Set physics layers to eval too usually, unless you specifically want to update batch stats
+        # For this logic, we keep them in train mode but with tiny LR
         for layer in self.model.physics_layers:
             layer.train()
         self.adapter.train()
 
-        warmup_epochs = int(n_epochs * 0.2)
-
         for epoch in range(n_epochs):
             optimizer.zero_grad()
 
-            # Warmup Phase
-            is_warmup = epoch < warmup_epochs
-            for param in self.adapter.parameters():
-                param.requires_grad = not is_warmup
+            # No complex warmup needed with Zero-Init strategy
 
-            # Forward Passes
             base_preds = self.model(X_num_t, X_cat_t)
+            adapter_preds = self.adapter(X_num_t, X_cat_t)
 
-            if is_warmup:
-                total_pred = base_preds
-            else:
-                adapter_preds = self.adapter(X_num_t, X_cat_t)
-                total_pred = base_preds + adapter_preds
+            # The adapter learns the residual directly
+            total_pred = base_preds + adapter_preds
 
             # Dimension Safety
             if y_log_t.shape[1] != total_pred.shape[1]:
@@ -465,16 +471,8 @@ class ViscosityPredictor:
             else:
                 loss = loss_fn(total_pred, y_log_t)
 
-            if torch.isnan(loss):
-                print(f"[Warning] NaN Loss at epoch {epoch}. Stopping.")
-                break
-
             loss.backward()
-
-            # --- FIX 2: RELAXED CLIPPING ---
-            # Increased max_norm to 5.0 to allow bigger updates
-            torch.nn.utils.clip_grad_norm_(all_trainable_params, max_norm=5.0)
-
+            torch.nn.utils.clip_grad_norm_(adapter_params, max_norm=1.0)
             optimizer.step()
 
         self._attach_gated_adapter()

@@ -297,7 +297,7 @@ class Model(nn.Module):
                     ][0]
                     idx_start, idx_end = self.split_indices[conc_name]
                     val_raw = x_num[:, idx_start:idx_end]
-
+                    val_raw = torch.clamp(val_raw, min=-15.0, max=15.0)
                     # Ignore "none" categories
                     none_idx = self.none_indices.get(col_name, -1)
                     if none_idx != -1:

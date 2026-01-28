@@ -549,23 +549,22 @@ class DataProcessor:
         self.generated_feature_names = state.get("generated_feature_names", [])
 
 
-from typing import Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 
 
+#
 class AnalogSelector:
     """
-    Dynamic physicochemical matcher.
-    Uses data-driven class centroids to find the best analog without hardcoded groups.
+    Physicochemical matcher with Tiered Logic and Exact-Match shortcuts.
     """
 
     def __init__(self, reference_df: pd.DataFrame):
-        # 1. Clean and Prepare Library
         self.library = reference_df.drop_duplicates(subset=["Protein_type"]).copy()
 
-        # Normalize strings
+        # Normalize strings for consistent matching
         for col in ["Protein_type", "Protein_class_type"]:
             if col in self.library.columns:
                 self.library[col] = (
@@ -580,114 +579,102 @@ class AnalogSelector:
             )
             self.library = self.library[mask]
 
-        # 2. Define Weights for Similarity (Used for both Class and Protein matching)
+        # Weights emphasizing dominant physics drivers
         self.weights = {
-            "PI_mean": 2.0,  # Charge is dominant driver of behavior
-            "kP": 1.5,  # Interaction proxy
-            "MW": 1.0,  # Size proxy
-            "diff_coeff": 1.0,
+            "PI_mean": 2.0,  # Electrostatics are dominant
+            "kP": 1.5,  # Interaction parameter
+            "MW": 1.0,  # Size
+            "diff_coeff": 1.0,  # Mobility
         }
 
-        # 3. Pre-compute Class Centroids (The "Dynamic Grouping" Engine)
-        # We calculate the mean vector for every class in the library
+        # Pre-compute Class Centroids
         self.class_centroids = self._compute_class_centroids()
 
     def _compute_class_centroids(self) -> pd.DataFrame:
-        """Calculates the average physicochemical profile for each class."""
         if self.library.empty:
             return pd.DataFrame()
 
-        # Select only numeric columns relevant to physics
         numeric_cols = [c for c in self.weights.keys() if c in self.library.columns]
-
         if not numeric_cols:
             return pd.DataFrame()
 
-        # Group by class and compute mean
-        centroids = self.library.groupby("Protein_class_type")[numeric_cols].mean()
-
-        # Calculate standard deviations for normalization
+        # Compute global stats for robust normalization
         self.lib_stats = {
             col: {
                 "mean": self.library[col].mean(),
-                "std": self.library[col].std() if self.library[col].std() > 0 else 1.0,
+                "std": (
+                    self.library[col].std() if self.library[col].std() > 1e-6 else 1.0
+                ),
             }
             for col in numeric_cols
         }
-        return centroids
+
+        return self.library.groupby("Protein_class_type")[numeric_cols].mean()
 
     def _calculate_score(
         self, target_row: pd.Series, candidates: pd.DataFrame
     ) -> pd.Series:
-        """Computes weighted Euclidean distance between target and candidates."""
+        """Computes weighted Euclidean distance (Lower score = Better match)."""
         scores = np.zeros(len(candidates))
 
         for col, weight in self.weights.items():
             if col in target_row and col in candidates.columns:
                 try:
-                    # Get target value
                     t_val = float(target_row[col])
-
-                    # Get candidate values
                     c_vals = candidates[col].astype(float).values
 
-                    # Robust Normalization using global library stats (prevents local skew)
-                    # If global stats missing, fall back to 1.0
+                    # Robust Normalization
                     std = self.lib_stats.get(col, {}).get("std", 1.0)
 
-                    # Weighted squared difference
                     diff = ((c_vals - t_val) / std) ** 2
                     scores += diff * weight
-                except (ValueError, TypeError, KeyError):
+                except (ValueError, TypeError):
                     continue
-
         return pd.Series(scores, index=candidates.index)
 
     def find_best_analog(self, new_protein_row: pd.Series, known_classes: list) -> str:
         if self.library.empty:
             raise ValueError("Reference library is empty.")
 
+        # --- STEP 0: Global Exact Physics Shortcut ---
+        # If we have a protein with IDENTICAL physics (dist ~ 0), pick it regardless of Class.
+        # This fixes "Vuda" (Class A) failing to match "Vudalimab" (Class B).
+        global_scores = self._calculate_score(new_protein_row, self.library)
+        min_dist = global_scores.min()
+
+        # Threshold: 0.05 is extremely close in standardized space
+        if min_dist < 0.05:
+            best_idx = global_scores.idxmin()
+            match_name = self.library.loc[best_idx, "Protein_type"]
+            # print(f"[AnalogSelector] Found exact physics match: {match_name} (Dist: {min_dist:.4f})")
+            return match_name
+
+        # --- Standard Tiered Search ---
         target_class = (
             str(new_protein_row.get("Protein_class_type", "unknown")).strip().lower()
         )
+        candidates = pd.DataFrame()
 
-        # --- STEP 1: Strict Class Match ---
-        # First, try to find exact class matches in the library.
-        candidates = self.library[self.library["Protein_class_type"] == target_class]
+        # Step 1: Strict Class Match
+        if target_class in self.library["Protein_class_type"].values:
+            candidates = self.library[
+                self.library["Protein_class_type"] == target_class
+            ]
 
-        if not candidates.empty:
-            # Found exact class -> Find best protein within this class
-            pass
-
-        # --- STEP 2: Dynamic Class Matching (The Fix) ---
-        # If no exact class match, find the "nearest neighbor class" based on centroids.
-        elif not self.class_centroids.empty:
-            # print(f"[Selector] Class '{target_class}' not found. Searching for similar classes...")
-
-            # Score the centroids against the new protein's properties
+        # Step 2: Dynamic Class Matching (Centroids)
+        if candidates.empty and not self.class_centroids.empty:
             class_scores = self._calculate_score(new_protein_row, self.class_centroids)
-
             if not class_scores.empty:
-                # Pick the single best matching CLASS
                 best_class = class_scores.idxmin()
-                # print(f"[Selector] Dynamically mapped '{target_class}' to class '{best_class}'")
-
-                # Filter library to only this best-matching class
                 candidates = self.library[
                     self.library["Protein_class_type"] == best_class
                 ]
 
-        # --- STEP 3: Fallback (Global Search) ---
-        # If dynamic matching failed (e.g. not enough data for centroids), use full library
+        # Step 3: Fallback (Global Search)
         if candidates.empty:
-            # print("[Selector] Warning: Dynamic matching failed. Using full library.")
             candidates = self.library.copy()
 
-        # --- STEP 4: Select Best Protein Analog ---
-        # Now find the specific protein within the selected candidate pool
+        # Step 4: Select Best
         scores = self._calculate_score(new_protein_row, candidates)
-        candidates = candidates.copy()
-        candidates["final_score"] = scores
-
-        best_match_row = candidates.nsmallest(1, "final_score").iloc[0]
-        return best_match_row["Protein_type"]
+        best_idx = scores.idxmin()
+        return candidates.loc[best_idx, "Protein_type"]

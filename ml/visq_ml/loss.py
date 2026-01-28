@@ -253,7 +253,7 @@ class PhysicsInformedLoss(nn.Module):
                 only_inputs=True,
                 allow_unused=True,
             )[0]
-
+            grads = torch.nan_to_num(grads, nan=0.0, posinf=100.0, neginf=-100.0)
             if grads is not None:
                 # Ionic/Excipient Viscosity Reduction
                 # Logic: In "Near/Mixed" regimes, Salts and Amino Acids (Arg, Lys, Pro)
