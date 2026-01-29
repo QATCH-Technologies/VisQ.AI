@@ -236,16 +236,7 @@ class ViscosityPredictor:
         analog_protein: Optional[str] = None,
         reference_df: Optional[pd.DataFrame] = None,
     ):
-        """Adapts the model to new data using transfer learning and auto-analog selection.
-
-        Args:
-            df_new (pd.DataFrame): The new input features.
-            y_new (np.ndarray): The corresponding target values.
-            epochs (int): Number of training epochs for the adapter.
-            lr (float): Learning rate for the adapter.
-            analog_protein (str, optional): Manual override for the analog protein.
-            reference_df (pd.DataFrame, optional): Training data registry for auto-selecting analogs.
-        """
+        """Adapts the model to new data using transfer learning and auto-analog selection."""
         try:
             self._ensure_hydrated()
             if self.processor is None:
@@ -262,6 +253,7 @@ class ViscosityPredictor:
             for feature, categories in new_cats.items():
                 for cat in categories:
                     sim_cat = None
+                    # ... [Auto-Analog Selection Logic omitted for brevity, identical to your code] ...
                     if feature == "Protein_type":
                         if analog_protein:
                             sim_cat = analog_protein
@@ -273,16 +265,12 @@ class ViscosityPredictor:
                                     df_new[feature].astype(str).str.lower()
                                     == str(cat).lower()
                                 )
-
                             subset = df_new[mask]
-
                             if not subset.empty:
                                 relevant_row = subset.iloc[0]
-
                                 known_classes = self.processor.cat_maps.get(
                                     "Protein_class_type", []
                                 )
-
                                 try:
                                     sim_cat = selector.find_best_analog(
                                         relevant_row, known_classes
@@ -296,10 +284,22 @@ class ViscosityPredictor:
                                 print(
                                     f"[Auto-Analog] Warning: Could not find data row for category '{cat}'. Skipping."
                                 )
+
                     self._smart_expand_category(feature, cat, similar_category=sim_cat)
                     expanded_any = True
 
             if expanded_any:
+                # --- CRITICAL FIX: FREEZE BACKBONE ---
+                # 1. Freeze the Physics Backbone
+                # This prevents "catastrophic forgetting" and removes ~300k params from the AIC.
+                print("[Adaptation] Freezing Physics Backbone parameters...")
+                if hasattr(self.model, "physics_layers"):
+                    for param in self.model.physics_layers.parameters():
+                        param.requires_grad = False
+
+                # NOTE: We do NOT unfreeze the adapter here because it hasn't been created yet.
+                # It is created and trained fresh in the next step.
+
                 self._train_gated_adapter(df_new, y_new, n_epochs=epochs, lr=lr)
 
         except Exception:
@@ -307,6 +307,166 @@ class ViscosityPredictor:
 
             traceback.print_exc()
             raise
+
+    def _train_gated_adapter(
+        self, df_new: pd.DataFrame, y_new: np.ndarray, n_epochs: int, lr: float
+    ):
+        """
+        Trains with Zero-Init Warmup. Physics is assumed frozen in 'learn'.
+        """
+        if self.processor is None or self.model is None:
+            raise RuntimeError("Processor and Model must be initialized.")
+
+        X_num, X_cat = self.processor.transform(df_new)
+        cat_dims = [len(m) for m in self.processor.cat_maps.values()]
+        num_dim = X_num.shape[1]
+
+        # REDUCE CAPACITY: Smaller adapter (16 dim) to prevent overfitting on small N
+        self.adapter = ResidualAdapter(num_dim, cat_dims, embed_dim=16).to(self.device)
+
+        # --- CRITICAL FIX 1: Zero-Initialization ---
+        # Initialize output to zero so model starts exactly at the physics prediction
+        nn.init.zeros_(self.adapter.net[-1].weight)
+        if self.adapter.net[-1].bias is not None:
+            nn.init.zeros_(self.adapter.net[-1].bias)
+
+        # Collect Parameters
+        # We only pass params that require gradients.
+        # If physics was frozen in learn(), 'physics_params' will be empty, preventing crashes.
+        physics_params = []
+        if hasattr(self.model, "physics_layers"):
+            for layer in self.model.physics_layers:
+                if isinstance(layer, LearnableSoftThresholdPrior):
+                    physics_params.extend(
+                        [p for p in layer.parameters() if p.requires_grad]
+                    )
+
+        adapter_params = list(self.adapter.parameters())
+
+        # Construct Optimizer Groups
+        optimizer_groups = [{"params": adapter_params, "lr": lr}]
+
+        # Only add physics group if they are NOT frozen
+        if len(physics_params) > 0:
+            optimizer_groups.append({"params": physics_params, "lr": lr * 0.01})
+
+        optimizer = optim.Adam(optimizer_groups, weight_decay=1e-4)
+        loss_fn = nn.MSELoss()
+
+        # Prepare Tensors
+        y_log = log_transform_targets(y_new)
+        y_log_t = torch.tensor(y_log, dtype=torch.float32).to(self.device)
+        if y_log_t.dim() == 1:
+            y_log_t = y_log_t.unsqueeze(1)
+
+        with torch.no_grad():
+            X_num_t, X_cat_t = to_tensors(X_num, X_cat)
+            X_num_t = X_num_t.to(self.device)
+            X_cat_t = X_cat_t.to(self.device)
+
+        self.model.eval()
+        self.adapter.train()
+
+        for epoch in range(n_epochs):
+            optimizer.zero_grad()
+
+            base_preds = self.model(X_num_t, X_cat_t)
+            adapter_preds = self.adapter(X_num_t, X_cat_t)
+
+            total_pred = base_preds + adapter_preds
+
+            if y_log_t.shape[1] != total_pred.shape[1]:
+                pred_subset = total_pred[:, : y_log_t.shape[1]]
+                loss = loss_fn(pred_subset, y_log_t)
+            else:
+                loss = loss_fn(total_pred, y_log_t)
+
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(adapter_params, max_norm=1.0)
+            optimizer.step()
+
+        self._attach_gated_adapter()
+
+    # def learn(
+    #     self,
+    #     df_new: pd.DataFrame,
+    #     y_new: np.ndarray,
+    #     epochs: int = 500,
+    #     lr: float = 5e-3,
+    #     analog_protein: Optional[str] = None,
+    #     reference_df: Optional[pd.DataFrame] = None,
+    # ):
+    #     """Adapts the model to new data using transfer learning and auto-analog selection.
+
+    #     Args:
+    #         df_new (pd.DataFrame): The new input features.
+    #         y_new (np.ndarray): The corresponding target values.
+    #         epochs (int): Number of training epochs for the adapter.
+    #         lr (float): Learning rate for the adapter.
+    #         analog_protein (str, optional): Manual override for the analog protein.
+    #         reference_df (pd.DataFrame, optional): Training data registry for auto-selecting analogs.
+    #     """
+    #     try:
+    #         self._ensure_hydrated()
+    #         if self.processor is None:
+    #             raise RuntimeError("Processor not initialized despite hydration.")
+
+    #         new_cats = self.processor.detect_new_categories(df_new)
+    #         expanded_any = False
+
+    #         # Initialize selector only if needed and data is available
+    #         selector = None
+    #         if reference_df is not None:
+    #             selector = AnalogSelector(reference_df)
+
+    #         for feature, categories in new_cats.items():
+    #             for cat in categories:
+    #                 sim_cat = None
+    #                 if feature == "Protein_type":
+    #                     if analog_protein:
+    #                         sim_cat = analog_protein
+    #                     elif selector is not None:
+    #                         if pd.isna(cat):
+    #                             mask = df_new[feature].isna()
+    #                         else:
+    #                             mask = (
+    #                                 df_new[feature].astype(str).str.lower()
+    #                                 == str(cat).lower()
+    #                             )
+
+    #                         subset = df_new[mask]
+
+    #                         if not subset.empty:
+    #                             relevant_row = subset.iloc[0]
+
+    #                             known_classes = self.processor.cat_maps.get(
+    #                                 "Protein_class_type", []
+    #                             )
+
+    #                             try:
+    #                                 sim_cat = selector.find_best_analog(
+    #                                     relevant_row, known_classes
+    #                                 )
+    #                                 print(
+    #                                     f"[Auto-Analog] Selected '{sim_cat}' for new protein '{cat}'"
+    #                                 )
+    #                             except Exception as e:
+    #                                 print(f"[Auto-Analog] Error during selection: {e}")
+    #                         else:
+    #                             print(
+    #                                 f"[Auto-Analog] Warning: Could not find data row for category '{cat}'. Skipping."
+    #                             )
+    #                 self._smart_expand_category(feature, cat, similar_category=sim_cat)
+    #                 expanded_any = True
+
+    #         if expanded_any:
+    #             self._train_gated_adapter(df_new, y_new, n_epochs=epochs, lr=lr)
+
+    #     except Exception:
+    #         import traceback
+
+    #         traceback.print_exc()
+    #         raise
 
     def _smart_expand_category(
         self,
@@ -386,96 +546,96 @@ class ViscosityPredictor:
                 # Excipient expansion is dimension 2
                 layer.expand_indices(2, 1, source_idx=source_idx)
 
-    def _train_gated_adapter(
-        self, df_new: pd.DataFrame, y_new: np.ndarray, n_epochs: int, lr: float
-    ):
-        """
-        Trains with Zero-Init Warmup and Dampened Physics to prevent forgetting.
-        """
-        if self.processor is None or self.model is None:
-            raise RuntimeError("Processor and Model must be initialized.")
+    # def _train_gated_adapter(
+    #     self, df_new: pd.DataFrame, y_new: np.ndarray, n_epochs: int, lr: float
+    # ):
+    #     """
+    #     Trains with Zero-Init Warmup and Dampened Physics to prevent forgetting.
+    #     """
+    #     if self.processor is None or self.model is None:
+    #         raise RuntimeError("Processor and Model must be initialized.")
 
-        X_num, X_cat = self.processor.transform(df_new)
-        cat_dims = [len(m) for m in self.processor.cat_maps.values()]
-        num_dim = X_num.shape[1]
+    #     X_num, X_cat = self.processor.transform(df_new)
+    #     cat_dims = [len(m) for m in self.processor.cat_maps.values()]
+    #     num_dim = X_num.shape[1]
 
-        # REDUCE CAPACITY: Smaller adapter to prevent overfitting on small N
-        self.adapter = ResidualAdapter(num_dim, cat_dims, embed_dim=16).to(self.device)
+    #     # REDUCE CAPACITY: Smaller adapter to prevent overfitting on small N
+    #     self.adapter = ResidualAdapter(num_dim, cat_dims, embed_dim=16).to(self.device)
 
-        # --- CRITICAL FIX 1: Zero-Initialization ---
-        # Initialize the final output layer of the adapter to exact zero.
-        # This ensures: Model(x) + Adapter(x) == Model(x) at start.
-        # The adapter only learns to correct *actual errors*.
-        nn.init.zeros_(self.adapter.net[-1].weight)
-        nn.init.zeros_(self.adapter.net[-1].bias)
+    #     # --- CRITICAL FIX 1: Zero-Initialization ---
+    #     # Initialize the final output layer of the adapter to exact zero.
+    #     # This ensures: Model(x) + Adapter(x) == Model(x) at start.
+    #     # The adapter only learns to correct *actual errors*.
+    #     nn.init.zeros_(self.adapter.net[-1].weight)
+    #     nn.init.zeros_(self.adapter.net[-1].bias)
 
-        # Collect Parameters
-        physics_params = []
-        if hasattr(self.model, "physics_layers"):
-            for layer in self.model.physics_layers:
-                if isinstance(layer, LearnableSoftThresholdPrior):
-                    physics_params.extend(layer.parameters())
+    #     # Collect Parameters
+    #     physics_params = []
+    #     if hasattr(self.model, "physics_layers"):
+    #         for layer in self.model.physics_layers:
+    #             if isinstance(layer, LearnableSoftThresholdPrior):
+    #                 physics_params.extend(layer.parameters())
 
-        adapter_params = list(self.adapter.parameters())
+    #     adapter_params = list(self.adapter.parameters())
 
-        # --- CRITICAL FIX 2: Dampen Physics Updates ---
-        # Do NOT use 10.0x LR. Use 0.1x or 0.0 (Freeze).
-        # When adapting to 1 protein, we trust the global physics; we only want to tweak the residual.
-        optimizer = optim.Adam(
-            [
-                {"params": physics_params, "lr": lr * 0.00},  # Almost frozen
-                {"params": adapter_params, "lr": lr},
-            ],
-            weight_decay=1e-4,  # Add regularization
-        )
+    #     # --- CRITICAL FIX 2: Dampen Physics Updates ---
+    #     # Do NOT use 10.0x LR. Use 0.1x or 0.0 (Freeze).
+    #     # When adapting to 1 protein, we trust the global physics; we only want to tweak the residual.
+    #     optimizer = optim.Adam(
+    #         [
+    #             {"params": physics_params, "lr": lr * 0.00},  # Almost frozen
+    #             {"params": adapter_params, "lr": lr},
+    #         ],
+    #         weight_decay=1e-4,  # Add regularization
+    #     )
 
-        loss_fn = nn.MSELoss()
+    #     loss_fn = nn.MSELoss()
 
-        loss_fn = nn.MSELoss()
+    #     loss_fn = nn.MSELoss()
 
-        # Prepare Tensors
-        y_log = log_transform_targets(y_new)
-        y_log_t = torch.tensor(y_log, dtype=torch.float32).to(self.device)
-        if y_log_t.dim() == 1:
-            y_log_t = y_log_t.unsqueeze(1)
+    #     # Prepare Tensors
+    #     y_log = log_transform_targets(y_new)
+    #     y_log_t = torch.tensor(y_log, dtype=torch.float32).to(self.device)
+    #     if y_log_t.dim() == 1:
+    #         y_log_t = y_log_t.unsqueeze(1)
 
-        with torch.no_grad():
-            X_num_t, X_cat_t = to_tensors(X_num, X_cat)
-            X_num_t = X_num_t.to(self.device)
-            X_cat_t = X_cat_t.to(self.device)
+    #     with torch.no_grad():
+    #         X_num_t, X_cat_t = to_tensors(X_num, X_cat)
+    #         X_num_t = X_num_t.to(self.device)
+    #         X_cat_t = X_cat_t.to(self.device)
 
-        # Loop Setup
-        self.model.eval()
+    #     # Loop Setup
+    #     self.model.eval()
 
-        # Set physics layers to eval too usually, unless you specifically want to update batch stats
-        # For this logic, we keep them in train mode but with tiny LR
-        for layer in self.model.physics_layers:
-            layer.train()
-        self.adapter.train()
+    #     # Set physics layers to eval too usually, unless you specifically want to update batch stats
+    #     # For this logic, we keep them in train mode but with tiny LR
+    #     for layer in self.model.physics_layers:
+    #         layer.train()
+    #     self.adapter.train()
 
-        for epoch in range(n_epochs):
-            optimizer.zero_grad()
+    #     for epoch in range(n_epochs):
+    #         optimizer.zero_grad()
 
-            # No complex warmup needed with Zero-Init strategy
+    #         # No complex warmup needed with Zero-Init strategy
 
-            base_preds = self.model(X_num_t, X_cat_t)
-            adapter_preds = self.adapter(X_num_t, X_cat_t)
+    #         base_preds = self.model(X_num_t, X_cat_t)
+    #         adapter_preds = self.adapter(X_num_t, X_cat_t)
 
-            # The adapter learns the residual directly
-            total_pred = base_preds + adapter_preds
+    #         # The adapter learns the residual directly
+    #         total_pred = base_preds + adapter_preds
 
-            # Dimension Safety
-            if y_log_t.shape[1] != total_pred.shape[1]:
-                pred_subset = total_pred[:, : y_log_t.shape[1]]
-                loss = loss_fn(pred_subset, y_log_t)
-            else:
-                loss = loss_fn(total_pred, y_log_t)
+    #         # Dimension Safety
+    #         if y_log_t.shape[1] != total_pred.shape[1]:
+    #             pred_subset = total_pred[:, : y_log_t.shape[1]]
+    #             loss = loss_fn(pred_subset, y_log_t)
+    #         else:
+    #             loss = loss_fn(total_pred, y_log_t)
 
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(adapter_params, max_norm=1.0)
-            optimizer.step()
+    #         loss.backward()
+    #         torch.nn.utils.clip_grad_norm_(adapter_params, max_norm=1.0)
+    #         optimizer.step()
 
-        self._attach_gated_adapter()
+    #     self._attach_gated_adapter()
 
     def hydrate_adapter(
         self, df_support: pd.DataFrame, n_epochs: int = 500, lr: float = 5e-3

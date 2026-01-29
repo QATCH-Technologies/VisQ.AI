@@ -180,48 +180,89 @@ class ResidualBlock(nn.Module):
         return x + residual
 
 
+# class ResidualAdapter(nn.Module):
+#     """
+#     "Bottleneck" Residual Adapter for VisQ.AI.
+
+#     OPTIMIZED FOR: Small Data (~500 samples)
+#     STRATEGY: High bias, low variance. Forces the model to find
+#               simple, robust physical corrections rather than memorizing noise.
+#     """
+
+#     def __init__(self, numeric_dim, cat_dims, embed_dim=4):  # REDUCED: 32 -> 4
+#         super().__init__()
+
+#         # 1. REMOVED: numeric projection (self.num_proj).
+#         # Reason: Projecting 8 floats to 32 dimensions adds parameters
+#         # without adding information. We use raw numeric values now.
+
+#         # 2. SHRUNK: Embeddings.
+#         # We only need enough dimensions to separate "High Salt" from "Low Salt".
+#         # 4 dimensions is plenty for this.
+#         self.embeddings = nn.ModuleList([nn.Embedding(n, embed_dim) for n in cat_dims])
+
+#         # Calculate input size: Raw Numeric + (Cats * Embed Size)
+#         input_dim = numeric_dim + (len(cat_dims) * embed_dim)
+
+#         # 3. FLATTENED: The Network.
+#         # Old: 128 -> 64 -> 32 -> Out (4 layers, ~50k params)
+#         # New: 16 -> Out (2 layers, ~1k params)
+#         self.net = nn.Sequential(
+#             nn.Linear(input_dim, 16),  # Bottleneck layer
+#             nn.LayerNorm(16),  # Stability
+#             nn.ReLU(),  # Non-linearity
+#             nn.Dropout(0.2),  # Higher dropout for small data
+#             nn.Linear(16, len(TARGETS)),  # Direct mapping to targets
+#         )
+
+#         # Initialize weights to be near-zero so the adapter starts
+#         # by outputting ~0 residual (trusting the PINN backbone initially).
+#         self._init_weights()
+
+#     def _init_weights(self):
+#         for m in self.net.modules():
+#             if isinstance(m, nn.Linear):
+#                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+#                 if m.bias is not None:
+#                     nn.init.constant_(m.bias, 0)
+#         # specifically zero out the last layer so initial predictions change little
+#         nn.init.constant_(self.net[-1].weight, 0)
+
+#     def forward(self, x_num, x_cat):
+#         # Generate small embeddings
+#         embs = [emb(x_cat[:, i]) for i, emb in enumerate(self.embeddings)]
+
+#         # Concatenate raw numeric features with embeddings
+#         # Note: x_num is used directly now!
+#         x = torch.cat(embs + [x_num], dim=1)
+
+
+#         return self.net(x)
+# File: visq_ml/layers.py
 class ResidualAdapter(nn.Module):
     """
-    Enhanced Residual Adapter for VisQ.AI.
-    Increased capacity to handle large shifts in log-space residuals
-    caused by new protein types or classes.
+    Bottleneck Adapter optimized for small-data adaptation.
     """
 
-    def __init__(self, numeric_dim, cat_dims, embed_dim=32):  # Increased from 16
+    def __init__(self, numeric_dim, cat_dims, embed_dim=4):  # Low dim embeddings
         super().__init__()
-        # Project numeric features to a higher dimension to match categorical resolution
-        self.num_proj = nn.Sequential(
-            nn.Linear(numeric_dim, embed_dim), nn.LayerNorm(embed_dim), nn.ReLU()
-        )
 
-        # Embeddings for new categorical levels
         self.embeddings = nn.ModuleList([nn.Embedding(n, embed_dim) for n in cat_dims])
 
-        input_dim = embed_dim * (len(cat_dims) + 1)
+        # Input = Raw Numerics + Concatenated Embeddings
+        input_dim = numeric_dim + (len(cat_dims) * embed_dim)
 
-        # Deep residual mapping with bottleneck and normalization
+        # Shallow Network: Only 1 hidden layer
         self.net = nn.Sequential(
-            nn.Linear(input_dim, 128),  # Increased from 64
-            nn.LayerNorm(128),
+            nn.Linear(input_dim, 16),  # Bottleneck (High Bias/Low Variance)
+            nn.LayerNorm(16),
             nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(128, 64),  # Increased from 32
-            nn.LayerNorm(64),
-            nn.ReLU(),
-            nn.Linear(64, 32),
-            nn.ReLU(),
-            nn.Linear(32, len(TARGETS)),
+            nn.Dropout(0.2),
+            nn.Linear(16, 5),  # Maps directly to 5 targets
         )
 
     def forward(self, x_num, x_cat):
-        # Generate embeddings for all categorical features
         embs = [emb(x_cat[:, i]) for i, emb in enumerate(self.embeddings)]
-
-        # Process numeric features through local projection
-        num_emb = self.num_proj(x_num)
-
-        # Global concatenation of features
-        x = torch.cat(embs + [num_emb], dim=1)
-
-        # Calculate the residual delta
+        # Use raw numeric features + embeddings
+        x = torch.cat(embs + [x_num], dim=1)
         return self.net(x)
