@@ -366,9 +366,9 @@ def train_final_ensemble(
 
 if __name__ == "__main__":
     # ... [Same as original] ...
-    DATA_PATH = r"data/processed/formulation_data_augmented.csv"
+    DATA_PATH = r"data/processed/formulation_data_augmented_no_trast.csv"
 
-    N_TRIALS = 40
+    N_TRIALS = 4
     N_FOLDS = 5
     N_MODELS = 5
     DO_TUNING = True
