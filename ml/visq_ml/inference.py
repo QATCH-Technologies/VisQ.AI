@@ -153,6 +153,8 @@ class ViscosityPredictor:
 
         self.model.eval()
         self._hydrated = True
+        self.base_cat_maps = {k: list(v) for k, v in self.processor.cat_maps.items()}
+        
         return self
 
     def _ensure_hydrated(self):
@@ -307,12 +309,13 @@ class ViscosityPredictor:
 
             traceback.print_exc()
             raise
-
     def _train_gated_adapter(
         self, df_new: pd.DataFrame, y_new: np.ndarray, n_epochs: int, lr: float
     ):
         """
-        Trains with Zero-Init Warmup. Physics is assumed frozen in 'learn'.
+        Trains with Regime-Based Freezing.
+        - N < 12: Train ONLY the Bias (Intercept). Forces pure Mean-Shift.
+        - N >= 12: Train EVERYTHING. Allows full non-linear adaptation.
         """
         if self.processor is None or self.model is None:
             raise RuntimeError("Processor and Model must be initialized.")
@@ -320,37 +323,44 @@ class ViscosityPredictor:
         X_num, X_cat = self.processor.transform(df_new)
         cat_dims = [len(m) for m in self.processor.cat_maps.values()]
         num_dim = X_num.shape[1]
+        n_samples = len(df_new)
 
-        # REDUCE CAPACITY: Smaller adapter (16 dim) to prevent overfitting on small N
-        self.adapter = ResidualAdapter(num_dim, cat_dims, embed_dim=16).to(self.device)
+        # 1. Initialize MLP Adapter (Restored from layers.py)
+        self.adapter = ResidualAdapter(num_dim, cat_dims, embed_dim=4).to(self.device)
 
-        # --- CRITICAL FIX 1: Zero-Initialization ---
-        # Initialize output to zero so model starts exactly at the physics prediction
-        nn.init.zeros_(self.adapter.net[-1].weight)
-        if self.adapter.net[-1].bias is not None:
-            nn.init.zeros_(self.adapter.net[-1].bias)
+        # 2. Zero-Initialization
+        # Access the last linear layer of the Sequential block
+        last_layer = self.adapter.net[-1]
+        nn.init.zeros_(last_layer.weight)
+        if last_layer.bias is not None:
+            nn.init.zeros_(last_layer.bias)
 
-        # Collect Parameters
-        # We only pass params that require gradients.
-        # If physics was frozen in learn(), 'physics_params' will be empty, preventing crashes.
-        physics_params = []
-        if hasattr(self.model, "physics_layers"):
-            for layer in self.model.physics_layers:
-                if isinstance(layer, LearnableSoftThresholdPrior):
-                    physics_params.extend(
-                        [p for p in layer.parameters() if p.requires_grad]
-                    )
-
-        adapter_params = list(self.adapter.parameters())
-
-        # Construct Optimizer Groups
-        optimizer_groups = [{"params": adapter_params, "lr": lr}]
-
-        # Only add physics group if they are NOT frozen
-        if len(physics_params) > 0:
-            optimizer_groups.append({"params": physics_params, "lr": lr * 0.01})
-
-        optimizer = optim.Adam(optimizer_groups, weight_decay=1e-4)
+        # 3. Regime-Based Parameter Selection (THE FIX)
+        if n_samples < 12:
+            print(f"  [Adapter] Micro-Data Regime (N={n_samples}). Training BIAS only.")
+            # Freeze everything
+            for param in self.adapter.parameters():
+                param.requires_grad = False
+            
+            # Unfreeze ONLY the final bias vector
+            if last_layer.bias is not None:
+                last_layer.bias.requires_grad = True
+                optimizer = optim.Adam([last_layer.bias], lr=lr)
+            else:
+                # Fallback (shouldn't happen with Linear layer defaults)
+                optimizer = optim.Adam(self.adapter.parameters(), lr=lr)
+        else:
+            print(f"  [Adapter] Macro-Data Regime (N={n_samples}). Training FULL network.")
+            # Train everything
+            for param in self.adapter.parameters():
+                param.requires_grad = True
+                
+            optimizer = optim.Adam(
+                self.adapter.parameters(),
+                lr=min(lr, 1e-3),
+                weight_decay=1e-4 # Standard decay for full training
+            )
+        
         loss_fn = nn.MSELoss()
 
         # Prepare Tensors
@@ -364,15 +374,16 @@ class ViscosityPredictor:
             X_num_t = X_num_t.to(self.device)
             X_cat_t = X_cat_t.to(self.device)
 
-        self.model.eval()
+        self.model.eval() 
         self.adapter.train()
 
         for epoch in range(n_epochs):
             optimizer.zero_grad()
 
-            base_preds = self.model(X_num_t, X_cat_t)
-            adapter_preds = self.adapter(X_num_t, X_cat_t)
+            with torch.no_grad():
+                base_preds = self.model(X_num_t, X_cat_t)
 
+            adapter_preds = self.adapter(X_num_t, X_cat_t)
             total_pred = base_preds + adapter_preds
 
             if y_log_t.shape[1] != total_pred.shape[1]:
@@ -382,11 +393,15 @@ class ViscosityPredictor:
                 loss = loss_fn(total_pred, y_log_t)
 
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(adapter_params, max_norm=1.0)
+            
+            # Clip gradients only for active parameters
+            active_params = [p for p in self.adapter.parameters() if p.requires_grad]
+            if active_params:
+                torch.nn.utils.clip_grad_norm_(active_params, max_norm=1.0)
+            
             optimizer.step()
 
         self._attach_gated_adapter()
-
     # def learn(
     #     self,
     #     df_new: pd.DataFrame,
@@ -684,26 +699,39 @@ class ViscosityPredictor:
         self._attach_gated_adapter()
 
     def _attach_gated_adapter(self):
-        """Attaches the adapter to the model with conditional gating.
-
-        Modifies `self.model.forward` to include the adapter output ONLY if the
-        input contains categorical values that were not present in the base model's
-        vocabulary at load time (e.g., a new protein).
+        """
+        Attaches the adapter with a ROBUST Identity-Based Gate.
+        Handles cases where DataProcessor re-sorts indices (e.g. alphabetical).
         """
         if self.adapter is None:
             return
         adapter_ref = self.adapter
-
         self.adapter.eval()
+        
         if self.model is None:
             raise RuntimeError("Model must be initialized.")
-
+            
         original_forward = cast(Callable[..., Any], self.model.forward)
-        gating_thresholds = []
-        for feat, base_size in self.base_vocab_sizes.items():
-            if feat in self.model.cat_feature_names:
-                idx = self.model.cat_feature_names.index(feat)
-                gating_thresholds.append((idx, base_size))
+        
+        # Build a Lookup Table for "Is New?" for each categorical column.
+        # This maps every index in the CURRENT vocabulary to a boolean [True/False].
+        is_new_lookups = []
+        
+        # Iterate in the order of MODEL columns to match x_cat input
+        for feat in self.model.cat_feature_names:
+            if feat not in self.base_cat_maps:
+                # If feature didn't exist at load time, everything is new
+                vocab_size = len(self.processor.cat_maps[feat])
+                mask_tensor = torch.ones(vocab_size, dtype=torch.bool, device=self.device)
+            else:
+                old_cats = set(self.base_cat_maps[feat])
+                current_cats = self.processor.cat_maps[feat]
+                
+                # Mark True if the category name was NOT in the base map
+                mask_values = [(cat not in old_cats) for cat in current_cats]
+                mask_tensor = torch.tensor(mask_values, dtype=torch.bool, device=self.device)
+            
+            is_new_lookups.append(mask_tensor)
 
         def new_forward(
             x_num: torch.Tensor,
@@ -718,6 +746,7 @@ class ViscosityPredictor:
                 return_physics_details=return_physics_details,
             )
 
+            # Unwrap tuple if necessary
             if return_features or return_physics_details:
                 if isinstance(base_output, tuple):
                     pred = base_output[0]
@@ -728,14 +757,30 @@ class ViscosityPredictor:
             else:
                 pred = base_output
                 extras = None
+            
+            # --- ROBUST GATING LOGIC ---
             adapt = adapter_ref(x_num, x_cat)
 
-            mask = torch.zeros(x_cat.size(0), 1, dtype=torch.bool, device=x_cat.device)
-            for col_idx, cutoff in gating_thresholds:
-                is_new = x_cat[:, col_idx] >= cutoff
-                mask = mask | is_new.unsqueeze(1)
+            # Initialize global mask (Batch, 1)
+            global_mask = torch.zeros(x_cat.size(0), 1, dtype=torch.bool, device=x_cat.device)
+            
+            # Check each column against its Identity Lookup Table
+            for i, lookup in enumerate(is_new_lookups):
+                # x_cat[:, i] contains indices. We use them to pick from the boolean lookup table.
+                indices = x_cat[:, i].long()
+                
+                # Safety clip in case indices are out of bounds (shouldn't happen if maps are synced)
+                if indices.max() >= len(lookup):
+                     indices = torch.clamp(indices, max=len(lookup)-1)
 
-            final_pred = pred + (adapt * mask.float())
+                # Gather the "Is New" status for these indices
+                col_is_new = lookup[indices] # Shape: (Batch)
+                
+                # OR logic: If ANY feature in the row is new, trigger the adapter
+                global_mask = global_mask | col_is_new.unsqueeze(1)
+
+            final_pred = pred + (adapt * global_mask.float())
+            
             if extras is not None and len(extras) > 0:
                 return (final_pred,) + extras
             return final_pred

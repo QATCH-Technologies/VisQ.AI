@@ -52,163 +52,175 @@ TARGET_COLS = [
 ]
 
 
-def run_loocv_diagnostic():
+def load_data():
     df_full = pd.read_csv(io.StringIO(trastuzumab_csv))
-    
-    # --- Load Reference Data for Generalizability Check ---
     try:
         ref_df = pd.read_csv(REFERENCE_DATA_PATH)
-        y_ref = ref_df[TARGET_COLS].values
         print(f"Reference data loaded: {len(ref_df)} rows")
-        
-        # Calculate Baseline Performance on Reference Data (Before any adaptation)
-        vp_base = ViscosityPredictor(CHECKPOINT_PATH)
-        vp_base.hydrate()
+    except Exception as e:
+        print(f"Warning: Reference data not found ({e}).")
+        ref_df = None
+    return df_full, ref_df
+
+
+def run_loocv_diagnostic(df_full, ref_df):
+    """
+    Standard Random Split CV.
+    Tests Interpolation (Gap Filling) and Reference Drift.
+    """
+    if ref_df is not None:
+        y_ref = ref_df[TARGET_COLS].values
+        vp_base = ViscosityPredictor(CHECKPOINT_PATH).hydrate()
         preds_base = vp_base.predict(ref_df)
         baseline_ref_mape = mean_absolute_percentage_error(y_ref.flatten(), preds_base.flatten())
         print(f"Baseline Reference MAPE: {baseline_ref_mape:.2%}")
         del vp_base
-        
-    except Exception as e:
-        print(f"Warning: Reference data not found or error ({e}). Skipping generalizability check.")
-        ref_df = None
+    else:
         baseline_ref_mape = 0.0
 
-    test_range = [1, 2, 3, 5, 8, 10, 12, 14] # Added N=2 for granular check
-    K_FOLDS = 5 # Reduced slightly for speed, increase if needed
+    test_range = [1, 2, 3, 5, 8, 10, 12, 14]
+    K_FOLDS = 5 
 
-    # Header
     header = (
         f"{'N':<3} | "
         f"{'Seen MAPE':<10} | "
         f"{'Unseen MAPE':<12} | "
         f"{'Unseen RMSE':<12} | "
-        f"{'Std Unseen':<10} | "
         f"{'Ref MAPE':<10} | "
         f"{'Ref Drift':<10}"
     )
     print("\n" + "=" * len(header))
-    print(header)
+    print(" INTERPOLATION TEST (Random Split)")
+    print(" Checks: Can we fill in gaps within the design space?")
     print("=" * len(header))
+    print(header)
+    print("-" * len(header))
 
     for n_train in test_range:
-        # Storage for metrics across folds
-        metrics = {
-            "seen_mape": [],
-            "unseen_mape": [],
-            "unseen_rmse": [],
-            "ref_mape": []
-        }
+        metrics = {"seen_mape": [], "unseen_mape": [], "unseen_rmse": [], "ref_mape": []}
 
         for k in range(K_FOLDS):
-            # Shuffle Data
-            df_shuffled = df_full.sample(
-                frac=1, random_state=RANDOM_SEED + k + n_train
-            ).reset_index(drop=True)
-
-            # Split Train/Test
+            df_shuffled = df_full.sample(frac=1, random_state=RANDOM_SEED + k + n_train).reset_index(drop=True)
             df_train = df_shuffled.iloc[:n_train].copy()
             y_train = df_train[TARGET_COLS].values
-            
             df_test = df_shuffled.iloc[n_train:].copy()
-            if len(df_test) == 0:
-                continue # Skip if no test data left
+            if len(df_test) == 0: continue
             y_test = df_test[TARGET_COLS].values
 
-            # Initialize Fresh Model
-            vp = ViscosityPredictor(CHECKPOINT_PATH)
-            vp.hydrate()
-
-            # Capture stdout to silence training logs
+            vp = ViscosityPredictor(CHECKPOINT_PATH).hydrate()
+            
+            # Silent Train
             stdout_backup = sys.stdout
             sys.stdout = io.StringIO()
-            
             try:
-                # TRAIN
-                vp.learn(
-                    df_new=df_train,
-                    y_new=y_train,
-                    epochs=EPOCHS,
-                    lr=LEARNING_RATE,
-                    reference_df=ref_df,
-                )
-            except Exception as e:
-                sys.stdout = stdout_backup
-                print(f"Training failed: {e}")
-                continue
-            
+                vp.learn(df_train, y_train, epochs=EPOCHS, lr=LEARNING_RATE)
+            except:
+                pass
             sys.stdout = stdout_backup
 
-            # --- EVALUATION ---
-            
-            # 1. Seen Metrics (Did we learn the support set?)
+            # Metrics
             pred_train = vp.predict(df_train)
             metrics["seen_mape"].append(mean_absolute_percentage_error(y_train.flatten(), pred_train.flatten()))
 
-            # 2. Unseen Metrics (Generalization to this protein)
             pred_test = vp.predict(df_test)
             metrics["unseen_mape"].append(mean_absolute_percentage_error(y_test.flatten(), pred_test.flatten()))
             metrics["unseen_rmse"].append(np.sqrt(mean_squared_error(y_test.flatten(), pred_test.flatten())))
 
-            # 3. Reference Metrics (Did we break the physics?)
             if ref_df is not None:
                 pred_ref = vp.predict(ref_df)
                 metrics["ref_mape"].append(mean_absolute_percentage_error(y_ref.flatten(), pred_ref.flatten()))
 
-        # Aggregation
         if metrics["unseen_mape"]:
             avg_seen = np.mean(metrics["seen_mape"])
             avg_unseen = np.mean(metrics["unseen_mape"])
             avg_rmse = np.mean(metrics["unseen_rmse"])
-            std_unseen = np.std(metrics["unseen_mape"])
-            
             if metrics["ref_mape"]:
                 avg_ref = np.mean(metrics["ref_mape"])
                 drift = avg_ref - baseline_ref_mape
-                drift_str = f"{drift:+.2%}"
             else:
                 avg_ref = 0.0
-                drift_str = "N/A"
+                drift = 0.0
 
             print(
                 f"{n_train:<3} | "
                 f"{avg_seen:>10.2%} | "
                 f"{avg_unseen:>12.2%} | "
                 f"{avg_rmse:>12.4f} | "
-                f"{std_unseen:>10.2%} | "
                 f"{avg_ref:>10.2%} | "
-                f"{drift_str:>10}"
+                f"{drift:>+10.2%}"
             )
-        else:
-            print(f"{n_train:<3} | {'N/A'}")
 
-    # --- Final Full Fit Check ---
-    print("\nTraining on Full Dataset (Final Check)...")
-    vp_final = ViscosityPredictor(CHECKPOINT_PATH)
-    vp_final.hydrate()
+def run_extrapolation_diagnostic(df_full):
+    """
+    Concentration Extrapolation Test.
+    Train on LOW Concentration -> Test on HIGH Concentration.
+    Tests: Did we learn the Physics (Slope) or just the Bias (Intercept)?
+    """
+    # Sort by concentration
+    df_sorted = df_full.sort_values("Protein_conc").reset_index(drop=True)
+    
+    # Define test points (Requires enough points to form a train set)
+    # Trastuzumab Concs: 50, 60, 70, 75, 90, 100, 100, 125...
+    test_range = [3, 5, 8, 10] 
 
-    stdout_backup = sys.stdout
-    sys.stdout = io.StringIO()
-    vp_final.learn(
-        df_new=df_full,
-        y_new=df_full[TARGET_COLS].values,
-        epochs=EPOCHS,
-        lr=LEARNING_RATE,
-        reference_df=ref_df,
+    header = (
+        f"{'N':<3} | "
+        f"{'Train Conc Range':<18} | "
+        f"{'Test Conc Range':<18} | "
+        f"{'Seen MAPE':<10} | "
+        f"{'Extra MAPE':<10}"
     )
-    sys.stdout = stdout_backup
+    print("\n" + "=" * len(header))
+    print(" EXTRAPOLATION TEST (Physics Generalization)")
+    print(" Checks: Can we predict High Concentration behavior from Low Concentration data?")
+    print("=" * len(header))
+    print(header)
+    print("-" * len(header))
 
-    final_preds = vp_final.predict(df_full)
-    print(f"\n{'Shear Rate':<20} | {'R2 Score':<10} | {'RMSE':<10}")
-    print("-" * 46)
-    for i, col in enumerate(TARGET_COLS):
-        r2 = r2_score(df_full[TARGET_COLS].values[:, i], final_preds[:, i])
-        rmse = np.sqrt(
-            np.mean((df_full[TARGET_COLS].values[:, i] - final_preds[:, i]) ** 2)
+    for n_train in test_range:
+        df_train = df_sorted.iloc[:n_train].copy()
+        df_test = df_sorted.iloc[n_train:].copy()
+        
+        y_train = df_train[TARGET_COLS].values
+        y_test = df_test[TARGET_COLS].values
+        
+        # Info strings
+        min_tr, max_tr = df_train["Protein_conc"].min(), df_train["Protein_conc"].max()
+        min_te, max_te = df_test["Protein_conc"].min(), df_test["Protein_conc"].max()
+        tr_range = f"{min_tr:.0f}-{max_tr:.0f} mg/mL"
+        te_range = f"{min_te:.0f}-{max_te:.0f} mg/mL"
+
+        vp = ViscosityPredictor(CHECKPOINT_PATH).hydrate()
+        
+        # Silent Train
+        stdout_backup = sys.stdout
+        sys.stdout = io.StringIO()
+        try:
+            vp.learn(df_train, y_train, epochs=EPOCHS, lr=LEARNING_RATE)
+        except:
+            pass
+        sys.stdout = stdout_backup
+
+        pred_train = vp.predict(df_train)
+        seen_mape = mean_absolute_percentage_error(y_train.flatten(), pred_train.flatten())
+
+        pred_test = vp.predict(df_test)
+        extra_mape = mean_absolute_percentage_error(y_test.flatten(), pred_test.flatten())
+
+        print(
+            f"{n_train:<3} | "
+            f"{tr_range:<18} | "
+            f"{te_range:<18} | "
+            f"{seen_mape:>10.2%} | "
+            f"{extra_mape:>10.2%}"
         )
-        shear_label = col.replace("Viscosity_", "") + " s^-1"
-        print(f"{shear_label:<20} | {r2:>8.4f}   | {rmse:>8.4f}")
 
 
 if __name__ == "__main__":
-    run_loocv_diagnostic()
+    df, ref_df = load_data()
+    
+    # 1. Run Standard Interpolation / Drift Check
+    run_loocv_diagnostic(df, ref_df)
+    
+    # 2. Run New Physics Generalization Check
+    run_extrapolation_diagnostic(df)

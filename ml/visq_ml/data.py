@@ -127,10 +127,10 @@ class DataProcessor:
         if not missing:
             tau = self.TAU
             delta_ph = (df["Buffer_pH"] - df["PI_mean"]).abs()
-            df["CCI_Score"] = df["C_Class"] * np.exp(-delta_ph / tau)
+            df.loc[:, "CCI_Score"] = df["C_Class"] * np.exp(-delta_ph / tau)
             cci_values = df["CCI_Score"]
         else:
-            df["CCI_Score"] = np.nan
+            df.loc[:, "CCI_Score"] = np.nan
             cci_values = pd.Series([np.nan] * len(df), index=df.index)
 
         for i in range(len(df)):
@@ -239,7 +239,16 @@ class DataProcessor:
         gen_names = []
         new_split_indices = {}
         current_idx = 0
-
+        if "Temperature" in df.columns:
+            # Convert Celsius to Kelvin and take Inverse
+            # T_k = T_c + 273.15
+            # Feature = 1000 / T_k (Scaling factor 1000 keeps values ~3.3 instead of 0.003)
+            temp_k = df["Temperature"].fillna(25.0).values + 273.15
+            inv_temp = 1000.0 / temp_k
+            
+            feature_arrays.append(inv_temp)
+            gen_names.append("Inv_Temperature")
+            current_idx += 1
         for col in self.numeric_features:
             # Check if this column requires splitting (defined in CONC_TYPE_PAIRS)
             if col in CONC_TYPE_PAIRS:

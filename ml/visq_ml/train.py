@@ -115,21 +115,27 @@ def objective_cv(
                 optimizer.zero_grad()
                 pred = model(batch_X_num, batch_X_cat)
 
+                # 1. Check Prediction NaNs
                 if torch.isnan(pred).any():
-                    raise optuna.exceptions.TrialPruned("Model divergence (NaN output)")
+                    print(f"  [Warn] NaN in prediction at Epoch {epoch}. Skipping Batch.")
+                    continue  # Skip step, don't abort
 
                 batch_masks = get_physics_masks(batch_X_cat, batch_X_num, processor)
                 loss = criterion(pred, batch_y, batch_X_num, batch_masks, batch_w)
 
+                # 2. Check Loss NaNs
                 if torch.isnan(loss):
-                    raise optuna.exceptions.TrialPruned("Loss is NaN")
+                    print(f"  [Warn] NaN in loss at Epoch {epoch}. Skipping Batch.")
+                    continue # Skip step
 
                 loss.backward()
-                total_norm = torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), max_norm=1.0
-                )
+
+                # 3. Check Gradient Norms
+                total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
                 if torch.isnan(total_norm) or torch.isinf(total_norm):
-                    raise optuna.exceptions.TrialPruned("Gradient Explosion")
+                    print(f"  [Warn] Gradient explosion (Norm: {total_norm}) at Epoch {epoch}. Skipping.")
+                    optimizer.zero_grad() # Clear the "poisoned" gradients
+                    continue
 
                 optimizer.step()
 
@@ -234,9 +240,9 @@ def train_final_ensemble(
 
     trained_models = []
 
-    if best_params["weight_decay"] < 1e-4:
-        print(f"  [Auto-Correction] Boosting weight_decay to 1e-4 for stability.")
-        best_params["weight_decay"] = 1e-4
+    # if best_params["weight_decay"] < 1e-4:
+    #     print(f"  [Auto-Correction] Boosting weight_decay to 1e-4 for stability.")
+    #     best_params["weight_decay"] = 1e-4
 
     for i in range(n_models):
         print(f"\nTraining Model {i+1}/{n_models}")
@@ -368,7 +374,7 @@ if __name__ == "__main__":
     # ... [Same as original] ...
     DATA_PATH = r"data/processed/formulation_data_augmented_no_trast.csv"
 
-    N_TRIALS = 4
+    N_TRIALS = 25
     N_FOLDS = 5
     N_MODELS = 5
     DO_TUNING = True

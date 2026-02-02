@@ -17,6 +17,7 @@ from typing import cast
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F  # Add this import
 
 try:
     from .config import TARGETS
@@ -49,12 +50,13 @@ class LearnableSoftThresholdPrior(nn.Module):
         self.thresholds = nn.Parameter(t_data.to(dtype=torch.float32))
 
         # 4. Learnable Weights
-        self.w_below = nn.Parameter(
-            torch.ones(n_classes, n_regimes, n_excipients) * 0.1
-        )
-        self.w_above = nn.Parameter(
-            torch.ones(n_classes, n_regimes, n_excipients) * 0.5
-        )
+        self.w_below = nn.Parameter(torch.ones(n_classes, n_regimes, n_excipients) * 0.1)
+        self.w_above = nn.Parameter(torch.ones(n_classes, n_regimes, n_excipients) * 0.5)
+        
+        # --- NEW: Linear Term Weight ---
+        # Initialize small to avoid disrupting initial training
+        self.w_linear = nn.Parameter(torch.zeros(n_classes, n_regimes, n_excipients)) 
+        
         self.sharpness = nn.Parameter(torch.tensor(10.0))
 
     def expand_indices(self, dim: int, new_entries: int = 1, source_idx: int = -1):
@@ -109,7 +111,7 @@ class LearnableSoftThresholdPrior(nn.Module):
         # Weights (init_val is ignored now that we use mean/copy)
         self.w_below = _expand_tensor(self.w_below, dim, new_entries, 0.1, source_idx)
         self.w_above = _expand_tensor(self.w_above, dim, new_entries, 0.5, source_idx)
-
+        self.w_linear = _expand_tensor(self.w_linear, dim, new_entries, 0.0, source_idx)
         # If expanding excipients (dim 2), we must also resize thresholds
         if dim == 2:
             # Thresholds is 1D [n_excipients], so we expand dim 0 of the thresholds tensor
@@ -121,27 +123,36 @@ class LearnableSoftThresholdPrior(nn.Module):
         scores_tensor = cast(torch.Tensor, self.static_scores)
         base_score = scores_tensor[p_idx, r_idx, e_idx].unsqueeze(1)
 
-        # 1. Unclamped Delta (Safe range)
         d = torch.clamp(self.delta[p_idx, r_idx, e_idx], -5.0, 5.0).unsqueeze(1)
-
-        # 2. BULLETPROOF THRESHOLD (The "Anti-NaN" Fix)
-        # Use abs() to force positivity and clamp(min=0.1) to prevent division by zero
+        
+        # Existing safe threshold logic
         thresh = self.thresholds[e_idx].abs().clamp(min=0.1).unsqueeze(1)
 
         w_b = self.w_below[p_idx, r_idx, e_idx].unsqueeze(1)
         w_a = self.w_above[p_idx, r_idx, e_idx].unsqueeze(1)
 
-        # 3. Calculation
-        conc_ratio = raw_concentration / thresh
+        # --- FIX STARTS HERE ---
+        # 1. Project standardized input to positive space. 
+        #    Softplus is differentiable and mimics "0 concentration" behavior smoothly.
+        #    You can also add a small epsilon to be safe.
+        safe_concentration = F.softplus(raw_concentration) 
+        conc_ratio = safe_concentration / thresh
+        # --- FIX ENDS HERE ---
 
-        # Clamp sharpness to prevent sigmoid overflow/underflow
         s = torch.clamp(self.sharpness, min=1.0, max=20.0)
         gate = torch.sigmoid(s * (conc_ratio - 1.0))
 
+        # 1. Saturation Effect (Logarithmic)
         effect_below = torch.tanh(conc_ratio) * w_b
-        effect_above = torch.log1p(conc_ratio) * w_a
+        effect_above = torch.log1p(conc_ratio) * w_a 
+        
+        # 2. Crowding Effect (Linear in Log-Space)
+        # This allows modeling: Viscosity ~ exp(k * Conc)
+        w_lin = self.w_linear[p_idx, r_idx, e_idx].unsqueeze(1)
+        effect_linear = conc_ratio * w_lin
 
-        conc_term = ((1 - gate) * effect_below) + (gate * effect_above)
+        # Combine: (Gated Saturation) + (Linear Crowding)
+        conc_term = ((1 - gate) * effect_below) + (gate * effect_above) + effect_linear
 
         result = (base_score + d) * conc_term
         return result, {"gate": gate, "conc_term": conc_term}
@@ -239,30 +250,98 @@ class ResidualBlock(nn.Module):
 
 #         return self.net(x)
 # File: visq_ml/layers.py
+# class ResidualAdapter(nn.Module):
+#     """
+#     Bottleneck Adapter optimized for small-data adaptation.
+#     """
+
+#     def __init__(self, numeric_dim, cat_dims, embed_dim=4):  # Low dim embeddings
+#         super().__init__()
+
+#         self.embeddings = nn.ModuleList([nn.Embedding(n, embed_dim) for n in cat_dims])
+
+#         # Input = Raw Numerics + Concatenated Embeddings
+#         input_dim = numeric_dim + (len(cat_dims) * embed_dim)
+
+#         # Shallow Network: Only 1 hidden layer
+#         self.net = nn.Sequential(
+#             nn.Linear(input_dim, 16),  # Bottleneck (High Bias/Low Variance)
+#             nn.LayerNorm(16),
+#             nn.ReLU(),
+#             nn.Dropout(0.2),
+#             nn.Linear(16, 5),  # Maps directly to 5 targets
+#         )
+
+#     def forward(self, x_num, x_cat):
+#         embs = [emb(x_cat[:, i]) for i, emb in enumerate(self.embeddings)]
+#         # Use raw numeric features + embeddings
+#         x = torch.cat(embs + [x_num], dim=1)
+#         return self.net(x)
+# File: ml/visq_ml/layers.py
+
+
+
+# class ResidualAdapter(nn.Module):
+#     """
+#     Bottleneck Residual Adapter.
+#     Simplified inputs to preserve directionality of standardized features.
+#     """
+
+#     def __init__(self, numeric_dim, cat_dims, embed_dim=4):
+#         super().__init__()
+        
+#         self.embeddings = nn.ModuleList([nn.Embedding(n, embed_dim) for n in cat_dims])
+        
+#         # --- FIX: Remove x_log dimensions ---
+#         # Input = (Raw Numerics) + (Embeddings)
+#         # We removed the "+ numeric_dim" that was previously there for the log features
+#         input_dim = numeric_dim + (len(cat_dims) * embed_dim)
+
+#         self.net = nn.Sequential(
+#             nn.Linear(input_dim, 32),
+#             nn.LayerNorm(32),
+#             nn.ReLU(),
+#             nn.Dropout(0.2), 
+#             nn.Linear(32, 5),
+#         )
+
+#     def forward(self, x_num, x_cat):
+#         # 1. Embed Categoricals
+#         embs = [emb(x_cat[:, i]) for i, emb in enumerate(self.embeddings)]
+        
+#         # --- FIX: Removed Broken Log-Transform ---
+#         # x_num is standardized (Z-score). We use it directly to preserve 
+#         # the sign (directionality) of the features.
+        
+#         # 2. Concatenate: Embeddings + Raw Numerics
+#         x = torch.cat(embs + [x_num], dim=1)
+        
+#         return self.net(x)
+
 class ResidualAdapter(nn.Module):
     """
-    Bottleneck Adapter optimized for small-data adaptation.
+    Bottleneck MLP Adapter.
+    Restored capacity for full-dataset learning.
     """
 
-    def __init__(self, numeric_dim, cat_dims, embed_dim=4):  # Low dim embeddings
+    def __init__(self, numeric_dim, cat_dims, embed_dim=4):
         super().__init__()
-
+        
         self.embeddings = nn.ModuleList([nn.Embedding(n, embed_dim) for n in cat_dims])
-
-        # Input = Raw Numerics + Concatenated Embeddings
+        
+        # Input = (Raw Numerics) + (Embeddings)
         input_dim = numeric_dim + (len(cat_dims) * embed_dim)
 
-        # Shallow Network: Only 1 hidden layer
+        # Standard MLP Structure
         self.net = nn.Sequential(
-            nn.Linear(input_dim, 16),  # Bottleneck (High Bias/Low Variance)
-            nn.LayerNorm(16),
+            nn.Linear(input_dim, 32),
+            nn.LayerNorm(32),
             nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(16, 5),  # Maps directly to 5 targets
+            nn.Dropout(0.2), 
+            nn.Linear(32, 5),  # Index [-1] is this layer
         )
 
     def forward(self, x_num, x_cat):
         embs = [emb(x_cat[:, i]) for i, emb in enumerate(self.embeddings)]
-        # Use raw numeric features + embeddings
         x = torch.cat(embs + [x_num], dim=1)
         return self.net(x)
