@@ -88,10 +88,22 @@ def load_and_preprocess(csv_path, save_dir=None):
         "HCI",
     ]
 
-    # Fill defaults
+    # Fill defaults for numeric columns
     for c in num_cols:
         if c not in df.columns:
             df[c] = 0.0
+
+    # ---------------------------------------------------------
+    # NEW: Normalize categorical columns to lowercase
+    # ---------------------------------------------------------
+    for c in cat_cols:
+        if c in df.columns:
+            # Convert to string (handles mixed types) and lowercase
+            df[c] = df[c].astype(str).str.lower()
+        else:
+            # Optional: Fill missing categorical columns with 'unknown'
+            # to prevent OneHotEncoder errors if a column is missing entirely
+            df[c] = "unknown"
 
     # Pipeline
     preprocessor = ColumnTransformer(

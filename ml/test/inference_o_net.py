@@ -265,3 +265,37 @@ class ViscosityPredictorCNP:
             "static_dim": self.static_dim,
         }
         torch.save(checkpoint, save_path)
+
+
+if __name__ == "__main__":
+    model_dir = r"models/experiments/o_net"
+    data = """ID,Protein_type,Protein_class_type,kP,MW,PI_mean,PI_range,Protein_conc,Temperature,Buffer_type,Buffer_pH,Buffer_conc,Salt_type,Salt_conc,Stabilizer_type,Stabilizer_conc,Surfactant_type,Surfactant_conc,Excipient_type,Excipient_conc,C_Class,HCI,Viscosity_100,Viscosity_1000,Viscosity_10000,Viscosity_100000,Viscosity_15000000
+F1,poly-hIgG,polyclonal,3.0,150.0,7.6,1.0,145.0,27.5,PBS,7.4,10,NaCl,140,Sucrose,1.0,none,0.0,none,0,0.9,0.9,12.5,11.5,9.8,8.8,6.92"""
+    import io
+
+    training_df = pd.read_csv("data/processed/formulation_data_augmented_no_trast.csv")
+    new_df = pd.read_csv(io.StringIO(data))
+    predictor = ViscosityPredictorCNP(model_dir)
+    out = predictor.predict(new_df, context_df=new_df)
+    print(
+        out[
+            [
+                "Viscosity_100",
+                "Viscosity_1000",
+                "Viscosity_10000",
+                "Viscosity_100000",
+                "Viscosity_15000000",
+            ]
+        ]
+    )
+    print(
+        out[
+            [
+                "Pred_Viscosity_100",
+                "Pred_Viscosity_1000",
+                "Pred_Viscosity_10000",
+                "Pred_Viscosity_100000",
+                "Pred_Viscosity_15000000",
+            ]
+        ]
+    )
