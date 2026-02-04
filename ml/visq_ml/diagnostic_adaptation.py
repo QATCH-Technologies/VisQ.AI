@@ -20,28 +20,28 @@ except ImportError:
 
 # --- 1. Load the Vuda Data ---
 csv_data = """ID,Protein_type,Protein_class_type,kP,MW,PI_mean,PI_range,Protein_conc,Temperature,Buffer_type,Buffer_pH,Buffer_conc,Salt_type,Salt_conc,Stabilizer_type,Stabilizer_conc,Surfactant_type,Surfactant_conc,Excipient_type,Excipient_conc,C_Class,HCI,Viscosity_100,Viscosity_1000,Viscosity_10000,Viscosity_100000,Viscosity_15000000
-F466,Vuda,bispecific,5,152,8.1,0.3,145,25,Histidine,6,15,none,0,none,0,none,0,none,0,1.5,1.3,3.6,3.4,3.4,3.4,3.4
-F467,Vuda,bispecific,5,152,8.1,0.3,80,25,Histidine,6,15,none,0,none,0,none,0,none,0,1.5,1.3,3.3,2.3,2,1.8,1.3
-F468,Vuda,bispecific,5,152,8.1,0.3,100,25,Histidine,6,15,none,0,none,0,none,0,none,0,1.5,1.3,2.7,2.6,2.5,2.4,2.3
-F469,Vuda,bispecific,5,152,8.1,0.3,100,25,Histidine,6,15,NaCl,140,none,0,none,0,none,0,1.5,1.3,1.2,1.2,1.2,1.2,1.2
-F470,Vuda,bispecific,5,152,8.1,0.3,100,25,Histidine,6,15,none,0,Sucrose,0.4,none,0,none,0,1.5,1.3,2.3,1.9,1.5,1.2,1
-F471,Vuda,bispecific,5,152,8.1,0.3,100,25,Histidine,6,15,none,0,none,0,tween-80,0.05,none,0,1.5,1.3,2.1,2.1,2,1.9,1.9
-F472,Vuda,bispecific,5,152,8.1,0.3,100,25,Histidine,6,15,NaCl,140,Sucrose,0.4,none,0,none,0,1.5,1.3,2.5,1.9,1.7,1.6,1.3
-F473,Vuda,bispecific,5,152,8.1,0.3,145,25,Histidine,6,15,none,0,none,0,none,0,Arginine,100,1.5,1.3,6.4,4.3,3.9,3.5,2.7
-F474,Vuda,bispecific,5,152,8.1,0.3,145,25,Histidine,6,15,none,0,none,0,none,0,Arginine,200,1.5,1.3,5,4.2,4,3.9,3.7
-F475,Vuda,bispecific,5,152,8.1,0.3,276,25,Acetate,5,20,none,0,none,0,none,0,none,0,1.5,1.3,10.3,8.5,7.9,7.3,6.1
-F476,Vuda,bispecific,5,152,8.1,0.3,138,25,Acetate,5,20,none,0,none,0,none,0,none,0,1.5,1.3,2.5,2,2,2,2
-F477,Vuda,bispecific,5,152,8.1,0.3,69,25,Acetate,5,20,none,0,none,0,none,0,none,0,1.5,1.3,1.1,1,1,0.9,0.9
-F478,Vuda,bispecific,5,152,8.1,0.3,150,25,Acetate,5,20,NaCl,175,none,0,none,0,none,0,1.5,1.3,2.7,2.5,2.5,2.5,2.5
-F479,Vuda,bispecific,5,152,8.1,0.3,150,25,Acetate,5,20,none,0,Sucrose,0.5,none,0,none,0,1.5,1.3,7.6,6.1,5.6,5.2,4.3
-F480,Vuda,bispecific,5,152,8.1,0.3,150,25,Acetate,5,20,none,0,none,0,tween-80,0.0625,none,0,1.5,1.3,3.4,3.1,3,2.9,2.8
-F481,Vuda,bispecific,5,152,8.1,0.3,150,25,Acetate,5,20,NaCl,175,Sucrose,0.5,none,0,none,0,1.5,1.3,10.5,7.4,6.6,5.8,4
-F482,Vuda,bispecific,5,152,8.1,0.3,150,25,Histidine,6,15,none,0,none,0,none,0,none,0,1.5,1.3,4.2,3.8,3.7,3.7,3.7
-F483,Vuda,bispecific,5,152,8.1,0.3,50,25,Histidine,6,15,none,0,none,0,none,0,none,0,1.5,1.3,1.6,1.6,1.3,1.3,1.4
-F484,Vuda,bispecific,5,152,8.1,0.3,50,25,Histidine,6,15,none,0,Sucrose,0.4,none,0,none,0,1.5,1.3,1.9,1.5,1.4,1.3,1.3
-F485,Vuda,bispecific,5,152,8.1,0.3,50,25,Histidine,6,15,none,0,Sucrose,0.8,none,0,none,0,1.5,1.3,1.2,1.2,1.1,1.1,1.2
-F486,Vuda,bispecific,5,152,8.1,0.3,150,25,Histidine,6,15,NaCl,140,Sucrose,0.8,none,0,none,0,1.5,1.3,3.4,3,2.9,2.8,2.7
-F487,Vuda,bispecific,5,152,8.1,0.3,150,25,Histidine,6,15,none,0,Sucrose,0.4,none,0,none,0,1.5,1.3,2.9,2.9,2.9,2.9,2.5"""
+F466,Vuda,bispecific,5,148.0,8.7,0.3,145,25,Histidine,6,15,none,0,none,0,none,0,none,0,1.5,1.3,3.6,3.4,3.4,3.4,3.4
+F467,Vuda,bispecific,5,148.0,8.7,0.3,80,25,Histidine,6,15,none,0,none,0,none,0,none,0,1.5,1.3,3.3,2.3,2,1.8,1.3
+F468,Vuda,bispecific,5,148.0,8.7,0.3,100,25,Histidine,6,15,none,0,none,0,none,0,none,0,1.5,1.3,2.7,2.6,2.5,2.4,2.3
+F469,Vuda,bispecific,5,148.0,8.7,0.3,100,25,Histidine,6,15,NaCl,140,none,0,none,0,none,0,1.5,1.3,1.2,1.2,1.2,1.2,1.2
+F470,Vuda,bispecific,5,148.0,8.7,0.3,100,25,Histidine,6,15,none,0,Sucrose,0.4,none,0,none,0,1.5,1.3,2.3,1.9,1.5,1.2,1
+F471,Vuda,bispecific,5,148.0,8.7,0.3,100,25,Histidine,6,15,none,0,none,0,tween-80,0.05,none,0,1.5,1.3,2.1,2.1,2,1.9,1.9
+F472,Vuda,bispecific,5,148.0,8.7,0.3,100,25,Histidine,6,15,NaCl,140,Sucrose,0.4,none,0,none,0,1.5,1.3,2.5,1.9,1.7,1.6,1.3
+F473,Vuda,bispecific,5,148.0,8.7,0.3,145,25,Histidine,6,15,none,0,none,0,none,0,Arginine,100,1.5,1.3,6.4,4.3,3.9,3.5,2.7
+F474,Vuda,bispecific,5,148.0,8.7,0.3,145,25,Histidine,6,15,none,0,none,0,none,0,Arginine,200,1.5,1.3,5,4.2,4,3.9,3.7
+F475,Vuda,bispecific,5,148.0,8.7,0.3,276,25,Acetate,5,20,none,0,none,0,none,0,none,0,1.5,1.3,10.3,8.5,7.9,7.3,6.1
+F476,Vuda,bispecific,5,148.0,8.7,0.3,138,25,Acetate,5,20,none,0,none,0,none,0,none,0,1.5,1.3,2.5,2,2,2,2
+F477,Vuda,bispecific,5,148.0,8.7,0.3,69,25,Acetate,5,20,none,0,none,0,none,0,none,0,1.5,1.3,1.1,1,1,0.9,0.9
+F478,Vuda,bispecific,5,148.0,8.7,0.3,150,25,Acetate,5,20,NaCl,175,none,0,none,0,none,0,1.5,1.3,2.7,2.5,2.5,2.5,2.5
+F479,Vuda,bispecific,5,148.0,8.7,0.3,150,25,Acetate,5,20,none,0,Sucrose,0.5,none,0,none,0,1.5,1.3,7.6,6.1,5.6,5.2,4.3
+F480,Vuda,bispecific,5,148.0,8.7,0.3,150,25,Acetate,5,20,none,0,none,0,tween-80,0.0625,none,0,1.5,1.3,3.4,3.1,3,2.9,2.8
+F481,Vuda,bispecific,5,148.0,8.7,0.3,150,25,Acetate,5,20,NaCl,175,Sucrose,0.5,none,0,none,0,1.5,1.3,10.5,7.4,6.6,5.8,4
+F482,Vuda,bispecific,5,148.0,8.7,0.3,150,25,Histidine,6,15,none,0,none,0,none,0,none,0,1.5,1.3,4.2,3.8,3.7,3.7,3.7
+F483,Vuda,bispecific,5,148.0,8.7,0.3,50,25,Histidine,6,15,none,0,none,0,none,0,none,0,1.5,1.3,1.6,1.6,1.3,1.3,1.4
+F484,Vuda,bispecific,5,148.0,8.7,0.3,50,25,Histidine,6,15,none,0,Sucrose,0.4,none,0,none,0,1.5,1.3,1.9,1.5,1.4,1.3,1.3
+F485,Vuda,bispecific,5,148.0,8.7,0.3,50,25,Histidine,6,15,none,0,Sucrose,0.8,none,0,none,0,1.5,1.3,1.2,1.2,1.1,1.1,1.2
+F486,Vuda,bispecific,5,148.0,8.7,0.3,150,25,Histidine,6,15,NaCl,140,Sucrose,0.8,none,0,none,0,1.5,1.3,3.4,3,2.9,2.8,2.7
+F487,Vuda,bispecific,5,148.0,8.7,0.3,150,25,Histidine,6,15,none,0,Sucrose,0.4,none,0,none,0,1.5,1.3,2.9,2.9,2.9,2.9,2.5"""
 
 df_test = pd.read_csv(io.StringIO(csv_data))
 

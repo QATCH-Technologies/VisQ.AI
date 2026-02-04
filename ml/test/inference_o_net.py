@@ -266,36 +266,60 @@ class ViscosityPredictorCNP:
         }
         torch.save(checkpoint, save_path)
 
-
 if __name__ == "__main__":
-    model_dir = r"models/experiments/o_net"
-    data = """ID,Protein_type,Protein_class_type,kP,MW,PI_mean,PI_range,Protein_conc,Temperature,Buffer_type,Buffer_pH,Buffer_conc,Salt_type,Salt_conc,Stabilizer_type,Stabilizer_conc,Surfactant_type,Surfactant_conc,Excipient_type,Excipient_conc,C_Class,HCI,Viscosity_100,Viscosity_1000,Viscosity_10000,Viscosity_100000,Viscosity_15000000
-F1,poly-hIgG,polyclonal,3.0,150.0,7.6,1.0,145.0,27.5,PBS,7.4,10,NaCl,140,Sucrose,1.0,none,0.0,none,0,0.9,0.9,12.5,11.5,9.8,8.8,6.92"""
     import io
+    import os
 
-    training_df = pd.read_csv("data/processed/formulation_data_augmented_no_trast.csv")
-    new_df = pd.read_csv(io.StringIO(data))
+    import pandas as pd
+    
+    # Adjust this import to match your file structure
+    # from inference_cnp import ViscosityPredictorCNP 
+
+    # Configuration
+    model_dir = r"models/experiments/o_net"
+    training_file = "data/processed/formulation_data_augmented_no_trast.csv"
+    
+    # 1. Load and Filter Historical Data
+    print(f"Loading training data from {training_file}...")
+    if not os.path.exists(training_file):
+        raise FileNotFoundError(f"Could not find training file: {training_file}")
+        
+    full_train_df = pd.read_csv(training_file)
+    
+    # Filter for ONLY Adalimumab samples
+    # This creates a "Context Set" containing every Adalimumab sample the model has ever seen
+    history_df = full_train_df[full_train_df['Protein_type'] == 'Adalimumab'].copy()
+    
+    print(f"Found {len(history_df)} historical 'Adalimumab' samples.")
+    print(f"Sample IDs: {history_df['ID'].tolist()}")
+
+    # 2. Define the 'New' Data (Sample F1)
+    # Even though F1 might be in the history, we treat this dataframe as the "Query"
+    target_data = """ID,Protein_type,Protein_class_type,kP,MW,PI_mean,PI_range,Protein_conc,Temperature,Buffer_type,Buffer_pH,Buffer_conc,Salt_type,Salt_conc,Stabilizer_type,Stabilizer_conc,Surfactant_type,Surfactant_conc,Excipient_type,Excipient_conc,C_Class,HCI,Viscosity_100,Viscosity_1000,Viscosity_10000,Viscosity_100000,Viscosity_15000000
+F1,Adalimumab,mab-igg1,3.0,150.0,7.6,1.0,220.0,27.5,Histidine,7.4,10,none,0,none,0.0,none,0.0,none,0,0.9,0.9,12.5,11.5,9.8,8.8,6.92"""
+    
+    target_df = pd.read_csv(io.StringIO(target_data))
+
+    # 3. Initialize Predictor
     predictor = ViscosityPredictorCNP(model_dir)
-    out = predictor.predict(new_df, context_df=new_df)
-    print(
-        out[
-            [
-                "Viscosity_100",
-                "Viscosity_1000",
-                "Viscosity_10000",
-                "Viscosity_100000",
-                "Viscosity_15000000",
-            ]
-        ]
-    )
-    print(
-        out[
-            [
-                "Pred_Viscosity_100",
-                "Pred_Viscosity_1000",
-                "Pred_Viscosity_10000",
-                "Pred_Viscosity_100000",
-                "Pred_Viscosity_15000000",
-            ]
-        ]
-    )
+
+    # 4. LEARN: Adapt the model to the "Adalimumab" class physics
+    # We feed it the entire history so it learns the Sucrose curves, Salt effects, etc.
+    # specific to this molecule.
+    print("\nAdapting model to 'Adalimumab' class behavior...")
+    predictor.learn(history_df, fine_tune=True, steps=50, lr=1e-3)
+
+    # 5. PREDICT: Run inference on the specific sample F1
+    print("\nPredicting Sample F1 based on adapted knowledge...")
+    out = predictor.predict(target_df)
+
+    # 6. Compare Results
+    cols_actual = ["Viscosity_100", "Viscosity_1000", "Viscosity_15000000"]
+    cols_pred = ["Pred_Viscosity_100", "Pred_Viscosity_1000", "Pred_Viscosity_15000000"]
+    
+    print("\n--- RESULTS ---")
+    print("Actual (Ground Truth):")
+    print(out[cols_actual].to_string(index=False))
+    
+    print("\nPredicted (After Class Fine-Tuning):")
+    print(out[cols_pred].to_string(index=False))
