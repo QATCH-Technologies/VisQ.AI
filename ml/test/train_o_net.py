@@ -57,49 +57,251 @@ class CrossSampleCNP(nn.Module):
 # ==========================================
 # 2. Data Pipeline
 # ==========================================
-
+CONC_THRESHOLDS = {
+    "arginine": 150.0,
+    "lysine": 100.0,
+    "proline": 200.0,
+    "nacl": 150.0,
+    "tween-20": 0.01,
+    "tween-80": 0.01,
+    "stabilizer": 0.2,
+    "trehalose": 0.2,
+}
 PRIOR_TABLE = {
     "mab_igg1": {
-        "Near-pI": {"arginine": -2, "lysine": -1, "nacl": -1, "proline": 0, "stabilizer": 1, "tween-20": -1, "tween-80": -1},
-        "Mixed":   {"arginine": -1, "lysine": -1, "nacl": -1, "proline": -1, "stabilizer": 1, "tween-20": -1, "tween-80": -1},
-        "Far":     {"arginine": 0,  "lysine": -1, "nacl": -1, "proline": -1, "stabilizer": 1, "tween-20": -1, "tween-80": -1},
+        "Near-pI": {
+            "arginine": -2,
+            "lysine": -1,
+            "nacl": -1,
+            "proline": 0,
+            "stabilizer": 1,
+            "tween-20": -1,
+            "tween-80": -1,
+        },
+        "Mixed": {
+            "arginine": -1,
+            "lysine": -1,
+            "nacl": -1,
+            "proline": -1,
+            "stabilizer": 1,
+            "tween-20": -1,
+            "tween-80": -1,
+        },
+        "Far": {
+            "arginine": 0,
+            "lysine": -1,
+            "nacl": -1,
+            "proline": -1,
+            "stabilizer": 1,
+            "tween-20": -1,
+            "tween-80": -1,
+        },
     },
     "mab_igg4": {
-        "Near-pI": {"arginine": -2, "lysine": -1, "nacl": -1, "proline": 0, "stabilizer": 1, "tween-20": -1, "tween-80": -1},
-        "Mixed":   {"arginine": -2, "lysine": -1, "nacl": -1, "proline": -1, "stabilizer": 1, "tween-20": -1, "tween-80": -1},
-        "Far":     {"arginine": -1, "lysine": -1, "nacl": -1, "proline": -1, "stabilizer": 1, "tween-20": -1, "tween-80": -1},
+        "Near-pI": {
+            "arginine": -2,
+            "lysine": -1,
+            "nacl": -1,
+            "proline": 0,
+            "stabilizer": 1,
+            "tween-20": -1,
+            "tween-80": -1,
+        },
+        "Mixed": {
+            "arginine": -2,
+            "lysine": -1,
+            "nacl": -1,
+            "proline": -1,
+            "stabilizer": 1,
+            "tween-20": -1,
+            "tween-80": -1,
+        },
+        "Far": {
+            "arginine": -1,
+            "lysine": -1,
+            "nacl": -1,
+            "proline": -1,
+            "stabilizer": 1,
+            "tween-20": -1,
+            "tween-80": -1,
+        },
     },
     "fc-fusion": {
-        "Near-pI": {"arginine": -1, "lysine": -1, "nacl": -1, "proline": -1, "stabilizer": 1, "tween-20": -2, "tween-80": -2},
-        "Mixed":   {"arginine": -1, "lysine": 0, "nacl": 0, "proline": -2, "stabilizer": 1, "tween-20": -2, "tween-80": -2},
-        "Far":     {"arginine": 0, "lysine": 0, "nacl": 0, "proline": -2, "stabilizer": 1, "tween-20": -2, "tween-80": -2},
+        "Near-pI": {
+            "arginine": -1,
+            "lysine": -1,
+            "nacl": -1,
+            "proline": -1,
+            "stabilizer": 1,
+            "tween-20": -2,
+            "tween-80": -2,
+        },
+        "Mixed": {
+            "arginine": -1,
+            "lysine": 0,
+            "nacl": 0,
+            "proline": -2,
+            "stabilizer": 1,
+            "tween-20": -2,
+            "tween-80": -2,
+        },
+        "Far": {
+            "arginine": 0,
+            "lysine": 0,
+            "nacl": 0,
+            "proline": -2,
+            "stabilizer": 1,
+            "tween-20": -2,
+            "tween-80": -2,
+        },
     },
     "bispecific": {
-        "Near-pI": {"arginine": -2, "lysine": -1, "nacl": -1, "proline": 0, "stabilizer": 1, "tween-20": -1, "tween-80": -1},
-        "Mixed":   {"arginine": -1, "lysine": 0, "nacl": 0, "proline": -1, "stabilizer": 1, "tween-20": -2, "tween-80": -2},
-        "Far":     {"arginine": 0, "lysine": 0, "nacl": 0, "proline": -1, "stabilizer": 1, "tween-20": -2, "tween-80": -2},
+        "Near-pI": {
+            "arginine": -2,
+            "lysine": -1,
+            "nacl": -1,
+            "proline": 0,
+            "stabilizer": 1,
+            "tween-20": -1,
+            "tween-80": -1,
+        },
+        "Mixed": {
+            "arginine": -1,
+            "lysine": 0,
+            "nacl": 0,
+            "proline": -1,
+            "stabilizer": 1,
+            "tween-20": -2,
+            "tween-80": -2,
+        },
+        "Far": {
+            "arginine": 0,
+            "lysine": 0,
+            "nacl": 0,
+            "proline": -1,
+            "stabilizer": 1,
+            "tween-20": -2,
+            "tween-80": -2,
+        },
     },
     "adc": {
-        "Near-pI": {"arginine": -2, "lysine": -1, "nacl": -1, "proline": 0, "stabilizer": 1, "tween-20": -1, "tween-80": -1},
-        "Mixed":   {"arginine": -1, "lysine": 0, "nacl": 0, "proline": -1, "stabilizer": 1, "tween-20": -2, "tween-80": -2},
-        "Far":     {"arginine": 0, "lysine": 0, "nacl": 0, "proline": -1, "stabilizer": 1, "tween-20": -2, "tween-80": -2},
+        "Near-pI": {
+            "arginine": -2,
+            "lysine": -1,
+            "nacl": -1,
+            "proline": 0,
+            "stabilizer": 1,
+            "tween-20": -1,
+            "tween-80": -1,
+        },
+        "Mixed": {
+            "arginine": -1,
+            "lysine": 0,
+            "nacl": 0,
+            "proline": -1,
+            "stabilizer": 1,
+            "tween-20": -2,
+            "tween-80": -2,
+        },
+        "Far": {
+            "arginine": 0,
+            "lysine": 0,
+            "nacl": 0,
+            "proline": -1,
+            "stabilizer": 1,
+            "tween-20": -2,
+            "tween-80": -2,
+        },
     },
     "bsa": {
-        "Near-pI": {"arginine": -1, "lysine": -1, "nacl": -1, "proline": 0, "stabilizer": 1, "tween-20": 0, "tween-80": 0},
-        "Mixed":   {"arginine": 0, "lysine": 0, "nacl": 0, "proline": -1, "stabilizer": 1, "tween-20": 0, "tween-80": 0},
-        "Far":     {"arginine": 0, "lysine": 0, "nacl": 0, "proline": -1, "stabilizer": 1, "tween-20": 0, "tween-80": 0},
+        "Near-pI": {
+            "arginine": -1,
+            "lysine": -1,
+            "nacl": -1,
+            "proline": 0,
+            "stabilizer": 1,
+            "tween-20": 0,
+            "tween-80": 0,
+        },
+        "Mixed": {
+            "arginine": 0,
+            "lysine": 0,
+            "nacl": 0,
+            "proline": -1,
+            "stabilizer": 1,
+            "tween-20": 0,
+            "tween-80": 0,
+        },
+        "Far": {
+            "arginine": 0,
+            "lysine": 0,
+            "nacl": 0,
+            "proline": -1,
+            "stabilizer": 1,
+            "tween-20": 0,
+            "tween-80": 0,
+        },
     },
     "polyclonal": {
-        "Near-pI": {"arginine": -1, "lysine": -1, "nacl": -1, "proline": 0, "stabilizer": 1, "tween-20": 0, "tween-80": 0},
-        "Mixed":   {"arginine": 0, "lysine": 0, "nacl": 0, "proline": -1, "stabilizer": 1, "tween-20": 0, "tween-80": 0},
-        "Far":     {"arginine": 0, "lysine": 0, "nacl": 0, "proline": -1, "stabilizer": 1, "tween-20": 0, "tween-80": 0},
+        "Near-pI": {
+            "arginine": -1,
+            "lysine": -1,
+            "nacl": -1,
+            "proline": 0,
+            "stabilizer": 1,
+            "tween-20": 0,
+            "tween-80": 0,
+        },
+        "Mixed": {
+            "arginine": 0,
+            "lysine": 0,
+            "nacl": 0,
+            "proline": -1,
+            "stabilizer": 1,
+            "tween-20": 0,
+            "tween-80": 0,
+        },
+        "Far": {
+            "arginine": 0,
+            "lysine": 0,
+            "nacl": 0,
+            "proline": -1,
+            "stabilizer": 1,
+            "tween-20": 0,
+            "tween-80": 0,
+        },
     },
     "default": {
-        "Near-pI": {"arginine": -1, "lysine": -1, "nacl": 0, "proline": 0, "stabilizer": 1, "tween-20": 0, "tween-80": 0},
-        "Mixed":   {"arginine": 0,  "lysine": 0,  "nacl": 0, "proline": -1, "stabilizer": 1, "tween-20": 0, "tween-80": 0},
-        "Far":     {"arginine": 0,  "lysine": 0,  "nacl": 0, "proline": -1, "stabilizer": 1, "tween-20": 0, "tween-80": 0},
-    }
+        "Near-pI": {
+            "arginine": -1,
+            "lysine": -1,
+            "nacl": 0,
+            "proline": 0,
+            "stabilizer": 1,
+            "tween-20": 0,
+            "tween-80": 0,
+        },
+        "Mixed": {
+            "arginine": 0,
+            "lysine": 0,
+            "nacl": 0,
+            "proline": -1,
+            "stabilizer": 1,
+            "tween-20": 0,
+            "tween-80": 0,
+        },
+        "Far": {
+            "arginine": 0,
+            "lysine": 0,
+            "nacl": 0,
+            "proline": -1,
+            "stabilizer": 1,
+            "tween-20": 0,
+            "tween-80": 0,
+        },
+    },
 }
+
 
 def load_and_preprocess(csv_path, save_dir=None):
     print(f"Loading data from {csv_path}...")
@@ -107,13 +309,29 @@ def load_and_preprocess(csv_path, save_dir=None):
 
     # Feature Config
     cat_cols = [
-        "Protein_type", "Protein_class_type", "Buffer_type", "Salt_type",
-        "Stabilizer_type", "Surfactant_type", "Excipient_type",
+        "Protein_type",
+        "Protein_class_type",
+        "Buffer_type",
+        "Salt_type",
+        "Stabilizer_type",
+        "Surfactant_type",
+        "Excipient_type",
     ]
     num_cols = [
-        "kP", "MW", "PI_mean", "PI_range", "Protein_conc", "Temperature",
-        "Buffer_pH", "Buffer_conc", "Salt_conc", "Stabilizer_conc",
-        "Surfactant_conc", "Excipient_conc", "C_Class", "HCI",
+        "kP",
+        "MW",
+        "PI_mean",
+        "PI_range",
+        "Protein_conc",
+        "Temperature",
+        "Buffer_pH",
+        "Buffer_conc",
+        "Salt_conc",
+        "Stabilizer_conc",
+        "Surfactant_conc",
+        "Excipient_conc",
+        "C_Class",
+        "HCI",
     ]
 
     # 1. Fill defaults for numeric columns
@@ -131,81 +349,148 @@ def load_and_preprocess(csv_path, save_dir=None):
     # =========================================================
     # NEW: Physics-Informed Feature Engineering
     # =========================================================
-    def calculate_cci(row):
-        # Default C_Class to 1.0 if missing
-        c_class = row.get('C_Class', 1.0)
-        # Delta = |pH - pI|
-        delta_ph = abs(row.get('Buffer_pH', 7.0) - row.get('PI_mean', 7.0))
-        tau = 1.5
-        return c_class * np.exp(-delta_ph / tau)
-    
-    def get_physics_prior(row):
-        cci = calculate_cci(row)
-        p_type = row.get('Protein_class_type', 'default').lower()
-        regime = "Far"
-        if 'mab_igg1' in p_type:
-            if cci >= 0.90: regime = "Near-pI"
-            elif cci >= 0.50: regime = "Mixed"
-        elif 'mab_igg4' in p_type:
-            if cci >= 0.80: regime = "Near-pI"
-            elif cci >= 0.40: regime = "Mixed"
-        elif 'fc-fusion' or 'trispecific':
-            if cci >= 0.70: regime = "Near-pI"
-            elif cci >= 0.40: regime = 'Mixed'
-        elif 'bispecific' or 'adc':
-            if cci >=0.80: regime = 'Near-pI'
-            elif cci >= 0.45: regime = 'Mixed'
-        elif 'bsa' or 'polyclonal':
-            if cci >= 0.70: regime = 'Near-pI'
-            elif cci >= 0.40: regime = 'Mixed'
-        else: 
-            if cci >= 0.70: regime = "Near-pI"
-            elif cci >= 0.40: regime = "Mixed"
 
+    # 2a. Define Priors and Split Features names
+    # Note: These map to the keys in the PRIOR_TABLE's inner dictionaries
+    new_prior_cols = [
+        "prior_arginine",
+        "prior_lysine",
+        "prior_proline",
+        "prior_nacl",
+        "prior_stabilizer",
+        "prior_tween-20",
+        "prior_tween-80",
+    ]
+
+    new_conc_cols = []
+    for k in CONC_THRESHOLDS.keys():
+        new_conc_cols.append(f"{k}_low")
+        new_conc_cols.append(f"{k}_high")
+
+    def process_row_features(row):
+        # --- A. Determine Regime ---
+        c_class = row.get("C_Class", 1.0)
+        delta_ph = abs(row.get("Buffer_pH", 7.0) - row.get("PI_mean", 7.0))
+        tau = 1.5
+        cci = c_class * np.exp(-delta_ph / tau)
+
+        p_type = str(row.get("Protein_class_type", "default")).lower()
+        regime = "Far"
+
+        # Simplified boolean logic for Regime detection
+        if "mab_igg1" in p_type:
+            if cci >= 0.90:
+                regime = "Near-pI"
+            elif cci >= 0.50:
+                regime = "Mixed"
+        elif "mab_igg4" in p_type:
+            if cci >= 0.80:
+                regime = "Near-pI"
+            elif cci >= 0.40:
+                regime = "Mixed"
+        elif any(x in p_type for x in ["fc-fusion", "trispecific"]):
+            if cci >= 0.70:
+                regime = "Near-pI"
+            elif cci >= 0.40:
+                regime = "Mixed"
+        elif any(x in p_type for x in ["bispecific", "adc"]):
+            if cci >= 0.80:
+                regime = "Near-pI"
+            elif cci >= 0.45:
+                regime = "Mixed"
+        elif any(x in p_type for x in ["bsa", "polyclonal"]):
+            if cci >= 0.70:
+                regime = "Near-pI"
+            elif cci >= 0.40:
+                regime = "Mixed"
+        else:
+            if cci >= 0.70:
+                regime = "Near-pI"
+            elif cci >= 0.40:
+                regime = "Mixed"
+
+        # --- B. Get Prior Table ---
         lookup_key = "default"
         for key in PRIOR_TABLE.keys():
             if key != "default" and key in p_type:
                 lookup_key = key
                 break
-        
+
         table = PRIOR_TABLE[lookup_key]
-        # Get the dictionary for the current regime
         regime_dict = table.get(regime, table["Far"])
 
-        score = 0.0
-        
-        # 3. Calculate Score based on ingredients
-        
-        # A. Stabilizer Logic: If present, map to 'stabilizer' key
-        stab_type = row.get("Stabilizer_type", "none")
-        stab_conc = row.get("Stabilizer_conc", 0.0)
-        if stab_type != "none" and stab_type != "unknown" and stab_conc > 0:
-            score += regime_dict.get("stabilizer", 0)
+        # --- C. Calculate Priors & Split Concentrations ---
+        # Initialize with 0.0
+        priors = {k: 0.0 for k in new_prior_cols}
+        concs = {k: 0.0 for k in new_conc_cols}
 
-        # B. Surfactant Logic: Check for tween-20 / tween-80
-        surf_type = row.get("Surfactant_type", "none")
-        if "tween-20" in surf_type:
-            score += regime_dict.get("tween-20", 0)
-        elif "tween-80" in surf_type:
-            score += regime_dict.get("tween-80", 0)
+        # Pairs of (Type_Col, Conc_Col) to scan
+        scan_cols = [
+            ("Salt_type", "Salt_conc"),
+            ("Stabilizer_type", "Stabilizer_conc"),
+            ("Excipient_type", "Excipient_conc"),
+            ("Surfactant_type", "Surfactant_conc"),
+        ]
 
-        # C. Salt / Excipient Logic: Check for arginine, lysine, nacl, proline
-        # We check both Salt_type and Excipient_type columns
-        for col in ["Salt_type", "Excipient_type"]:
-            val = row.get(col, "none")
-            # Iterate through known keys to find matches
-            for key in ["arginine", "lysine", "nacl", "proline"]:
-                if key in val:
-                    score += regime_dict.get(key, 0)
+        for type_col, conc_col in scan_cols:
+            ing_name = str(row.get(type_col, "none")).lower()
+            ing_conc = float(row.get(conc_col, 0.0))
 
-        return score
+            if ing_name in ["none", "unknown", "nan"] or ing_conc <= 0:
+                continue
+
+            # --- Logic for PRIORS ---
+            if "arginine" in ing_name or "arg" in ing_name:
+                priors["prior_arginine"] = regime_dict.get("arginine", 0)
+            elif "lysine" in ing_name or "lys" in ing_name:
+                priors["prior_lysine"] = regime_dict.get("lysine", 0)
+            elif "proline" in ing_name:
+                priors["prior_proline"] = regime_dict.get("proline", 0)
+            elif "nacl" in ing_name:
+                priors["prior_nacl"] = regime_dict.get("nacl", 0)
+
+            # Stabilizer check
+            elif type_col == "Stabilizer_type":
+                # This catches sucrose, trehalose, etc as general stabilizers
+                priors["prior_stabilizer"] = regime_dict.get("stabilizer", 0)
+
+            # Tween check
+            elif "tween" in ing_name or "polysorbate" in ing_name:
+                # Specific map for tween-20 vs 80
+                t_key = "tween-20" if "20" in ing_name else "tween-80"
+                priors[f"prior_{t_key}"] = regime_dict.get(t_key, 0)
+
+            # --- Logic for CONCENTRATION SPLITS ---
+            for target_ing, threshold in CONC_THRESHOLDS.items():
+                # Check if current ingredient matches target
+                match = False
+                if target_ing in ing_name:
+                    match = True
+                elif target_ing == "arginine" and "arg" in ing_name:
+                    match = True
+
+                if match:
+                    # Calculate Splits
+                    e_low = min(ing_conc, threshold)
+                    e_high = max(ing_conc - threshold, 0)
+
+                    concs[f"{target_ing}_low"] = e_low
+                    concs[f"{target_ing}_high"] = e_high
+
+        # Return concatenated dict
+        return {**priors, **concs}
 
     # Apply Logic
-    print("Calculating Physics Priors based on Excipient Identifiers...")
-    df['Physics_Prior'] = df.apply(get_physics_prior, axis=1)
-    print(df['Physics_Prior'])
-    # Add new feature to numeric list so it gets Scaled
-    num_cols.append('Physics_Prior')
+    print("Calculating Physics Priors and Concentration Splits...")
+    # Apply function and expand result dictionary into columns
+    features_df = df.apply(process_row_features, axis=1, result_type="expand")
+
+    # Concatenate new features to original dataframe
+    df = pd.concat([df, features_df], axis=1)
+
+    # Add all new columns to num_cols so they get normalized
+    num_cols.extend(new_prior_cols)
+    num_cols.extend(new_conc_cols)
 
     # =========================================================
     # Pipeline & Processing
@@ -223,7 +508,6 @@ def load_and_preprocess(csv_path, save_dir=None):
 
     X_matrix = preprocessor.fit_transform(df)
 
-    # Save Preprocessor for Inference
     if save_dir:
         os.makedirs(save_dir, exist_ok=True)
         joblib.dump(preprocessor, os.path.join(save_dir, "preprocessor.pkl"))
@@ -243,18 +527,22 @@ def load_and_preprocess(csv_path, save_dir=None):
         for col, shear_val in shear_map.items():
             if col in df.columns and pd.notna(df.iloc[i][col]):
                 v = df.iloc[i][col]
-                if v <= 0: v = 1e-6
+                if v <= 0:
+                    v = 1e-6
                 pts.append([np.log10(shear_val), np.log10(v)])
 
         if pts:
-            samples.append({
-                "static": torch.tensor(X_matrix[i], dtype=torch.float32),
-                "points": torch.tensor(pts, dtype=torch.float32),
-                "group": df.iloc[i]["Protein_type"],
-                "id": df.iloc[i]["ID"],
-            })
+            samples.append(
+                {
+                    "static": torch.tensor(X_matrix[i], dtype=torch.float32),
+                    "points": torch.tensor(pts, dtype=torch.float32),
+                    "group": df.iloc[i]["Protein_type"],
+                    "id": df.iloc[i]["ID"],
+                }
+            )
 
     return samples, X_matrix.shape[1]
+
 
 # ==========================================
 # 3. Training/Validation Helpers
@@ -399,8 +687,8 @@ def objective(trial, train_samples, val_samples, static_dim, device):
 # ==========================================
 if __name__ == "__main__":
 
-    data = "data/processed/formulation_data_augmented_no_trast.csv"
-    out = "./models/experiments/o_net"
+    data = "data/processed/formulation_data_augmented_no_eta.csv"
+    out = "./models/experiments/o_net_no_eta"
     trials = 25
     # Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
