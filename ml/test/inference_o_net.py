@@ -314,7 +314,7 @@ class ViscosityPredictorCNP:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model_dir = model_dir
 
-        # Load Preprocessor & Model (Same as before)
+        # Load Preprocessor
         self.preprocessor_path = os.path.join(model_dir, "preprocessor.pkl")
         if not os.path.exists(self.preprocessor_path):
             raise FileNotFoundError(
@@ -322,6 +322,7 @@ class ViscosityPredictorCNP:
             )
         self.preprocessor = joblib.load(self.preprocessor_path)
 
+        # Load Model
         self.model_path = os.path.join(model_dir, "best_model.pth")
         if not os.path.exists(self.model_path):
             raise FileNotFoundError(f"Model checkpoint not found at {self.model_path}")
@@ -341,14 +342,6 @@ class ViscosityPredictorCNP:
         self.model.eval()
         self.cached_memory = None
 
-        # =========================================================
-        # NEW: Affine Adapter Parameters (Scale & Shift)
-        # initialized to Identity (Scale=1.0, Shift=0.0)
-        # =========================================================
-        self.adapter_scale = torch.tensor([1.0], device=self.device, requires_grad=True)
-        self.adapter_shift = torch.tensor([0.0], device=self.device, requires_grad=True)
-        self.is_adapted = False
-
         self.shear_map = {
             "Viscosity_100": 100.0,
             "Viscosity_1000": 1000.0,
@@ -357,6 +350,7 @@ class ViscosityPredictorCNP:
             "Viscosity_15000000": 1.5e7,
         }
 
+        # Categorical columns that need normalization
         self.cat_cols = [
             "Protein_type",
             "Protein_class_type",
@@ -367,7 +361,7 @@ class ViscosityPredictorCNP:
             "Excipient_type",
         ]
 
-        # New Feature Columns
+        # New Feature Columns defined by the update
         self.new_prior_cols = [
             "prior_arginine",
             "prior_lysine",
@@ -572,89 +566,31 @@ class ViscosityPredictorCNP:
         self,
         df: pd.DataFrame,
         fine_tune: bool = True,
-        steps: int = 100,
-        lr: float = 0.05,
+        steps: int = 50,
+        lr: float = 1e-3,
     ):
         """
-        Adapts to new data using a Stability-Constrained Affine Adapter.
-        Uses Model-Centric Pivot to prevent instability at low N.
+        Adapts the model to new data.
+        fine_tune=True (default) updates weights to capture specific effects (e.g. Sucrose sensitivity).
         """
-        # 1. Prepare Data
         static_t, shear_t, visc_t = self._preprocess(df)
         context_t = torch.cat([shear_t, visc_t, static_t], dim=-1)
 
-        # 2. Get Fixed Memory
-        self.model.eval()
+        if fine_tune:
+            self.model.train()
+            # Use a slightly higher LR for fine-tuning to overcome "average" priors
+            optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+
+            for _ in range(steps):
+                pred = self.model(context_t, shear_t, static_t)
+                loss = F.mse_loss(pred, visc_t)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+            self.model.eval()
+
         with torch.no_grad():
             self.cached_memory = self.model.encode_memory(context_t)
-            # Pre-calculate the base prediction for these context points
-            base_pred_context = self.model.decode_from_memory(
-                self.cached_memory, shear_t, static_t
-            )
-
-        # NEW: Calculate Pivot from the MODEL'S prediction, not the data.
-        # This is much more stable because the model is smooth.
-        self.pivot_point = torch.mean(base_pred_context).detach()
-
-        if not fine_tune:
-            self.adapter_scale.data.fill_(1.0)
-            self.adapter_shift.data.fill_(0.0)
-            self.is_adapted = False
-            return
-
-        print(f"Optimizing Adapter on {len(df)} samples...")
-
-        # 3. Strategy
-        trainable_params = []
-        if len(df) < 4:
-            print("  Constraint: Small N. Freezing Scale.")
-            self.adapter_scale.data.fill_(1.0)
-            self.adapter_scale.requires_grad = False
-            trainable_params = [self.adapter_shift]
-        else:
-            print("  Constraint: Sufficient N. Learning Scale & Shift.")
-            self.adapter_scale.requires_grad = True
-            trainable_params = [self.adapter_scale, self.adapter_shift]
-
-        optimizer = torch.optim.Adam(trainable_params, lr=lr)
-
-        for i in range(steps):
-            # A. Base Prediction (Frozen)
-            # We already computed base_pred_context, but we need it in the graph if we weren't detaching
-            # Since we only optimize adapter, we can re-use the detached base_pred_context for speed
-            # BUT: PyTorch graph requires re-computation if we want gradients to flow (though here they don't flow back to model)
-            # For safety, let's re-run decoder or just use the detached tensor if we treat base as constant.
-            # Base model is frozen, so base_pred_log is a constant wrt optimizer.
-            # We can use the pre-calculated tensor.
-
-            # B. Apply Adapter
-            # Pred = Pivot + (Base - Pivot) * Scale + Shift
-            adapted_pred_log = (
-                self.pivot_point
-                + (base_pred_context - self.pivot_point) * self.adapter_scale
-                + self.adapter_shift
-            )
-
-            # C. Loss
-            loss = F.mse_loss(adapted_pred_log, visc_t)
-
-            # D. Regularization
-            # Increased Shift regularization to prevent "chasing noise"
-            reg_scale = 1.0 * torch.abs(self.adapter_scale - 1.0)
-            reg_shift = 0.1 * torch.abs(self.adapter_shift)
-
-            total_loss = loss + reg_scale + reg_shift
-
-            optimizer.zero_grad()
-            total_loss.backward()
-            optimizer.step()
-
-            if i % 20 == 0:
-                print(
-                    f"  Step {i}: Loss {loss.item():.4f} | Scale {self.adapter_scale.item():.3f} | Shift {self.adapter_shift.item():.3f}"
-                )
-
-        self.is_adapted = True
 
     def predict(
         self, df: pd.DataFrame, context_df: Optional[pd.DataFrame] = None
@@ -663,7 +599,6 @@ class ViscosityPredictorCNP:
         memory_vector = self.cached_memory
 
         if context_df is not None:
-            # If context provided explicitly, recalculate memory but KEEP existing adapter
             c_static, c_shear, c_visc = self._preprocess(context_df)
             c_tensor = torch.cat([c_shear, c_visc, c_static], dim=-1)
             with torch.no_grad():
@@ -676,16 +611,7 @@ class ViscosityPredictorCNP:
 
         self.model.eval()
         with torch.no_grad():
-            # 1. Base Prediction
             pred_log = self.model.decode_from_memory(memory_vector, q_shear, q_static)
-
-            # 2. Apply Adapter (if adapted)
-            if self.is_adapted:
-                # Use the stored pivot from the learning phase
-                pivot = getattr(self, "pivot_point", 0.0)
-                pred_log = (
-                    pivot + (pred_log - pivot) * self.adapter_scale + self.adapter_shift
-                )
 
         pred_visc = torch.pow(10, pred_log).cpu().numpy().flatten()
 
@@ -711,8 +637,7 @@ class ViscosityPredictorCNP:
         ci_range: Tuple[float, float] = (2.5, 97.5),
     ) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
         """
-        Runs Monte Carlo Dropout.
-        NOTE: We keep the adapter FIXED during MC sampling.
+        Runs Monte Carlo Dropout and returns format compatible with VisQAI.
         """
         self.model.train()  # Enable Dropout
 
@@ -723,25 +648,11 @@ class ViscosityPredictorCNP:
         q_static, q_shear, _ = self._preprocess(df)
 
         preds_log = []
-
-        # We perform MC dropout on the model, but apply the deterministic adapter
-        # to every sample.
         with torch.no_grad():
             for _ in range(n_samples):
                 out_log = self.model.decode_from_memory(
                     memory_vector, q_shear, q_static
                 )
-
-                # Apply Adapter
-                if self.is_adapted:
-                    # Use the stored pivot from the learning phase
-                    pivot = getattr(self, "pivot_point", 0.0)
-                    pred_log = (
-                        pivot
-                        + (pred_log - pivot) * self.adapter_scale
-                        + self.adapter_shift
-                    )
-
                 preds_log.append(out_log.cpu().numpy())
 
         self.model.eval()
