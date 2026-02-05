@@ -267,9 +267,12 @@ CONC_THRESHOLDS = {
 class CrossSampleCNP(nn.Module):
     def __init__(self, static_dim, hidden_dim=128, latent_dim=128, dropout=0.0):
         super().__init__()
-        # Encoder: (Shear, Visc) + Static -> Latent
+
+        # --- ARCHITECTURE CHANGE ---
+        # Encoder now takes ONLY 2 inputs: (Shear_Rate, Viscosity)
+        # We removed 'static_dim' from here.
         self.encoder = nn.Sequential(
-            nn.Linear(2 + static_dim, hidden_dim),
+            nn.Linear(2, hidden_dim),  # <--- Changed from (2 + static_dim)
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim),
@@ -277,7 +280,7 @@ class CrossSampleCNP(nn.Module):
             nn.Linear(hidden_dim, latent_dim),
         )
 
-        # Decoder: Query + Latent -> Prediction
+        # Decoder remains the same (Integrates Static + Context)
         self.decoder = nn.Sequential(
             nn.Linear(1 + static_dim + latent_dim, hidden_dim),
             nn.ReLU(),
@@ -288,21 +291,32 @@ class CrossSampleCNP(nn.Module):
         )
 
     def forward(self, context_tensor, query_shear, query_static):
-        encoded = self.encoder(context_tensor)
+        # --- INPUT SLICING ---
+        # context_tensor is [Batch, Points, (Shear, Visc, Static...)]
+        # We slice it to keep ONLY the first 2 dimensions (Shear, Visc) for the encoder
+        context_physics = context_tensor[:, :, :2]
+
+        # 1. Encode Physics Only
+        encoded = self.encoder(context_physics)
         r = torch.mean(encoded, dim=1)
+
+        # 2. Decode using Physics Context + Static Identity
         n_queries = query_shear.size(1)
         r_expanded = r.unsqueeze(1).repeat(1, n_queries, 1)
+
         decoder_input = torch.cat([query_shear, query_static, r_expanded], dim=-1)
         return self.decoder(decoder_input)
 
+    # Helper for inference (add this if missing)
     def encode_memory(self, context_tensor):
-        encoded = self.encoder(context_tensor)
+        context_physics = context_tensor[:, :, :2]
+        encoded = self.encoder(context_physics)
         return torch.mean(encoded, dim=1)
 
     def decode_from_memory(self, memory_vector, query_shear, query_static):
         n_queries = query_shear.size(1)
-        mem_expanded = memory_vector.unsqueeze(1).repeat(1, n_queries, 1)
-        decoder_input = torch.cat([query_shear, query_static, mem_expanded], dim=-1)
+        r_expanded = memory_vector.unsqueeze(1).repeat(1, n_queries, 1)
+        decoder_input = torch.cat([query_shear, query_static, r_expanded], dim=-1)
         return self.decoder(decoder_input)
 
 
@@ -595,24 +609,41 @@ class ViscosityPredictorCNP:
     def predict(
         self, df: pd.DataFrame, context_df: Optional[pd.DataFrame] = None
     ) -> pd.DataFrame:
-        """Standard prediction returning DataFrame."""
+        """
+        Predicts viscosity using In-Context Learning.
+
+        CRITICAL: This assumes all rows in 'df' belong to the SAME system/protein
+        as the 'context_df' (or self.cached_memory).
+        """
+        # 1. Resolve Memory (The Context)
         memory_vector = self.cached_memory
 
+        # Allow on-the-fly context override (Stateless prediction)
         if context_df is not None:
             c_static, c_shear, c_visc = self._preprocess(context_df)
             c_tensor = torch.cat([c_shear, c_visc, c_static], dim=-1)
             with torch.no_grad():
                 memory_vector = self.model.encode_memory(c_tensor)
 
+        # Handle Zero-Shot (No context available)
         if memory_vector is None:
+            # Warn if this wasn't intended
+            # print("Warning: Predicting in Zero-Shot mode (No Context).")
             memory_vector = torch.zeros((1, self.config["latent_dim"])).to(self.device)
 
+        # 2. Prepare Query (The Target Conditions)
+        # Ensure _preprocess uses the SAME scalers as training!
         q_static, q_shear, _ = self._preprocess(df)
 
+        # 3. Decode (The Prediction)
         self.model.eval()
         with torch.no_grad():
+            # NOTE: If the model was trained with "Static Dropout", the Decoder
+            # is now robust enough to combine this 'q_static' with 'memory_vector'
+            # effectively.
             pred_log = self.model.decode_from_memory(memory_vector, q_shear, q_static)
 
+        # 4. Format Results
         pred_visc = torch.pow(10, pred_log).cpu().numpy().flatten()
 
         results = df.copy()

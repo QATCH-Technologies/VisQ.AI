@@ -88,7 +88,7 @@ def run_cv_learning_curve(
                 # Initialize & Train
                 predictor = ViscosityPredictorCNP(model_dir)
                 if k > 0:
-                    predictor.learn(current_train_df, fine_tune=True)
+                    predictor.learn(current_train_df, fine_tune=False)
 
                 # --- EVALUATION ---
                 # We define two sets to evaluate:

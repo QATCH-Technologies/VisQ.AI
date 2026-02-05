@@ -21,9 +21,12 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 class CrossSampleCNP(nn.Module):
     def __init__(self, static_dim, hidden_dim=128, latent_dim=128, dropout=0.0):
         super().__init__()
-        # Encoder: (Shear, Visc) + Static -> Latent
+
+        # --- ARCHITECTURE CHANGE ---
+        # Encoder now takes ONLY 2 inputs: (Shear_Rate, Viscosity)
+        # We removed 'static_dim' from here.
         self.encoder = nn.Sequential(
-            nn.Linear(2 + static_dim, hidden_dim),
+            nn.Linear(2, hidden_dim),  # <--- Changed from (2 + static_dim)
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim),
@@ -31,7 +34,7 @@ class CrossSampleCNP(nn.Module):
             nn.Linear(hidden_dim, latent_dim),
         )
 
-        # Decoder: Query + Latent -> Prediction
+        # Decoder remains the same (Integrates Static + Context)
         self.decoder = nn.Sequential(
             nn.Linear(1 + static_dim + latent_dim, hidden_dim),
             nn.ReLU(),
@@ -42,14 +45,31 @@ class CrossSampleCNP(nn.Module):
         )
 
     def forward(self, context_tensor, query_shear, query_static):
-        # 1. Encode Context
-        encoded = self.encoder(context_tensor)
+        # --- INPUT SLICING ---
+        # context_tensor is [Batch, Points, (Shear, Visc, Static...)]
+        # We slice it to keep ONLY the first 2 dimensions (Shear, Visc) for the encoder
+        context_physics = context_tensor[:, :, :2]
+
+        # 1. Encode Physics Only
+        encoded = self.encoder(context_physics)
         r = torch.mean(encoded, dim=1)
 
-        # 2. Decode Query
+        # 2. Decode using Physics Context + Static Identity
         n_queries = query_shear.size(1)
         r_expanded = r.unsqueeze(1).repeat(1, n_queries, 1)
 
+        decoder_input = torch.cat([query_shear, query_static, r_expanded], dim=-1)
+        return self.decoder(decoder_input)
+
+    # Helper for inference (add this if missing)
+    def encode_memory(self, context_tensor):
+        context_physics = context_tensor[:, :, :2]
+        encoded = self.encoder(context_physics)
+        return torch.mean(encoded, dim=1)
+
+    def decode_from_memory(self, memory_vector, query_shear, query_static):
+        n_queries = query_shear.size(1)
+        r_expanded = memory_vector.unsqueeze(1).repeat(1, n_queries, 1)
         decoder_input = torch.cat([query_shear, query_static, r_expanded], dim=-1)
         return self.decoder(decoder_input)
 
@@ -560,43 +580,96 @@ def train_epoch(model, samples, optimizer, device, iterations=100):
     for _ in range(iterations):
         prot = np.random.choice(protein_list)
         task_samples = groups[prot]
-        if len(task_samples) < 2:
+
+        # Need at least 4 samples to create disjoint context sets
+        if len(task_samples) < 4:
             continue
 
-        # Meta-Learning Split (Context vs Targinineet)
-        k = np.random.randint(1, min(6, len(task_samples)))
+        # -----------------------------------------------------------
+        # FIX 1: Context Splitting for Latent Consistency
+        # Split data into Context A, Context B, and Target
+        # -----------------------------------------------------------
         indices = np.random.permutation(len(task_samples))
-        ctx_idx, tgt_idx = indices[:k], indices[k : k + 5]
-        if len(tgt_idx) == 0:
+        n_total = len(indices)
+
+        # Randomly size the splits (ensure at least 1 sample each)
+        n_ctx_a = np.random.randint(1, min(5, n_total - 2))
+        n_ctx_b = np.random.randint(1, min(5, n_total - n_ctx_a - 1))
+        n_tgt = min(5, n_total - n_ctx_a - n_ctx_b)
+
+        idx_a = indices[:n_ctx_a]
+        idx_b = indices[n_ctx_a : n_ctx_a + n_ctx_b]
+        idx_tgt = indices[n_ctx_a + n_ctx_b : n_ctx_a + n_ctx_b + n_tgt]
+
+        # Helper to build batch tensors
+        def build_batch(sample_indices):
+            shear_list, y_list, stat_list, combined_list = [], [], [], []
+            for i in sample_indices:
+                s = task_samples[i]
+                stat = s["static"].unsqueeze(0).repeat(s["points"].shape[0], 1)
+
+                shear_list.append(s["points"][:, [0]])
+                y_list.append(s["points"][:, [1]])
+                stat_list.append(stat)
+                combined_list.append(torch.cat([s["points"], stat], dim=1))
+
+            # Cat and move to device
+            if not combined_list:
+                return None, None, None, None
+            return (
+                torch.cat(combined_list, dim=0).unsqueeze(0).to(device),
+                torch.cat(shear_list, dim=0).unsqueeze(0).to(device),
+                torch.cat(stat_list, dim=0).unsqueeze(0).to(device),
+                torch.cat(y_list, dim=0).unsqueeze(0).to(device),
+            )
+
+        ctx_a_tensor, _, _, _ = build_batch(idx_a)
+        ctx_b_tensor, _, _, _ = build_batch(idx_b)
+        _, tgt_x, tgt_stat, tgt_y = build_batch(idx_tgt)
+
+        if tgt_x is None:
             continue
 
-        # Build Tensors
-        ctx_list = []
-        for i in ctx_idx:
-            s = task_samples[i]
-            stat = s["static"].unsqueeze(0).repeat(s["points"].shape[0], 1)
-            ctx_list.append(torch.cat([s["points"], stat], dim=1))
-        ctx_tensor = torch.cat(ctx_list, dim=0).unsqueeze(0).to(device)
+        # -----------------------------------------------------------
+        # FIX 2: Static Dropout ("Blindfolding")
+        # 50% of the time, zero out static features in the DECODER.
+        # This forces the model to look at Context A to identify the protein.
+        # -----------------------------------------------------------
+        if np.random.random() < 0.5:
+            tgt_stat_input = torch.zeros_like(tgt_stat)
+        else:
+            tgt_stat_input = tgt_stat
 
-        tgt_shear, tgt_y, tgt_stat = [], [], []
-        for i in tgt_idx:
-            s = task_samples[i]
-            tgt_shear.append(s["points"][:, [0]])
-            tgt_y.append(s["points"][:, [1]])
-            tgt_stat.append(s["static"].unsqueeze(0).repeat(s["points"].shape[0], 1))
+        # Forward Pass
+        pred_y = model(ctx_a_tensor, tgt_x, tgt_stat_input)
+        mse_loss = F.mse_loss(pred_y, tgt_y)
 
-        q_x = torch.cat(tgt_shear, dim=0).unsqueeze(0).to(device)
-        q_stat = torch.cat(tgt_stat, dim=0).unsqueeze(0).to(device)
-        true_y = torch.cat(tgt_y, dim=0).unsqueeze(0).to(device)
+        # -----------------------------------------------------------
+        # FIX 3: Consistency Loss
+        # Enforce that Context A and Context B produce the same latent 'r'
+        # -----------------------------------------------------------
+        encoded_a = model.encoder(ctx_a_tensor[:, :, :2])
+        r_a = torch.mean(encoded_a, dim=1)
 
-        # Optimization
-        pred_y = model(ctx_tensor, q_x, q_stat)
-        loss = F.mse_loss(pred_y, true_y)
+        encoded_b = model.encoder(ctx_b_tensor[:, :, :2])
+        r_b = torch.mean(encoded_b, dim=1)
+
+        # 2. Consistency Loss (Keep contexts similar)
+        consistency_loss = F.mse_loss(r_a, r_b)
+
+        # 3. NEW: Latent Regularization (Keep r small/sparse)
+        # This aligns the "Learned" r with the "Zero-Shot" r
+        latent_reg = torch.mean(r_a**2) + torch.mean(r_b**2)
+
+        # Combined Loss
+        # mse_loss: fit the data
+        # 0.1 * consistency: be consistent across samples
+        # 0.01 * latent_reg: stay close to zero (prior)
+        loss = mse_loss + (0.1 * consistency_loss) + (0.01 * latent_reg)
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-
         total_loss += loss.item()
 
     return total_loss / iterations
@@ -656,9 +729,9 @@ def validate(model, samples, device):
 # ==========================================
 def objective(trial, train_samples, val_samples, static_dim, device):
     # Hyperparameters
-    hidden_dim = trial.suggest_int("hidden_dim", 64, 512, step=64)
-    latent_dim = trial.suggest_int("latent_dim", 32, 256, step=32)
-    dropout = trial.suggest_float("dropout", 0.0, 0.5)
+    hidden_dim = trial.suggest_int("hidden_dim", 128, 512, step=32)
+    latent_dim = trial.suggest_int("latent_dim", 16, 64, step=16)
+    dropout = trial.suggest_float("dropout", 0.0, 0.2)
     lr = trial.suggest_float("lr", 1e-5, 1e-2, log=True)
 
     model = CrossSampleCNP(static_dim, hidden_dim, latent_dim, dropout).to(device)
@@ -687,8 +760,8 @@ def objective(trial, train_samples, val_samples, static_dim, device):
 # ==========================================
 if __name__ == "__main__":
 
-    data = "data/processed/formulation_data_augmented_no_eta.csv"
-    out = "./models/experiments/o_net_no_eta"
+    data = "data/processed/formulation_data_augmented_no_trast.csv"
+    out = "./models/experiments/o_net_no_trast"
     trials = 25
     # Setup
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
