@@ -326,7 +326,7 @@ PRIOR_TABLE = {
 def load_and_preprocess(csv_path, save_dir=None):
     print(f"Loading data from {csv_path}...")
     df = pd.read_csv(csv_path)
-
+    df.to_csv("pembro_data.csv")
     # Feature Config
     cat_cols = [
         "Protein_type",
