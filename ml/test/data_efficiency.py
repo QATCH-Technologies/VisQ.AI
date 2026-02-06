@@ -17,15 +17,24 @@ from inference_o_net import ViscosityPredictorCNP
 def calculate_metrics(y_true, y_pred):
     y_true = np.array(y_true, dtype=float)
     y_pred = np.array(y_pred, dtype=float)
-    mask = np.isfinite(y_true) & np.isfinite(y_pred)
+
+    # Filter for finite and POSITIVE values (since we need log)
+    mask = np.isfinite(y_true) & np.isfinite(y_pred) & (y_true > 0) & (y_pred > 0)
     y_true_c, y_pred_c = y_true[mask], y_pred[mask]
 
     if len(y_true_c) < 2:
         return np.nan, np.nan, np.nan
 
-    r2 = metrics.r2_score(y_true_c, y_pred_c)
+    # --- CHANGE: Calculate R2 in Log10 Space ---
+    # This stabilizes the metric for low-viscosity proteins where variance is small.
+    # It effectively measures: "How well did we predict the order of magnitude?"
+    r2 = metrics.r2_score(np.log10(y_true_c), np.log10(y_pred_c))
+
+    # --- KEEP: RMSE and MAE in Linear Space ---
+    # We still want these in cP (physical units) for interpretability.
     mae = metrics.mean_absolute_error(y_true_c, y_pred_c)
     rmse = np.sqrt(metrics.mean_squared_error(y_true_c, y_pred_c))
+
     return r2, mae, rmse
 
 
@@ -51,6 +60,8 @@ def run_cv_learning_curve(
 
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
     metrics_log = []
+    raw_predictions_log = []  # <--- NEW: Store raw dataframes here
+
     shear_rates = [
         "Viscosity_100",
         "Viscosity_1000",
@@ -88,22 +99,23 @@ def run_cv_learning_curve(
                 # Initialize & Train
                 predictor = ViscosityPredictorCNP(model_dir)
                 if k > 0:
-                    predictor.learn(current_train_df, fine_tune=False)
+                    # fine_tune=False is usually preferred for learning curves
+                    # to test pure ICL, but can be True if testing adaptation.
+                    predictor.learn(current_train_df, fine_tune=True)
 
                 # --- EVALUATION ---
-                # We define two sets to evaluate:
-                # 1. Unseen (The Fixed Test Fold)
-                # 2. All (The entire Target DF, to check "memorization")
                 eval_sets = {"Unseen": fixed_test_df, "All": target_df}
 
                 for set_name, eval_df in eval_sets.items():
                     preds = predictor.predict(eval_df)
 
+                    # --- A. Metrics Calculation (Existing) ---
                     y_true_all, y_pred_all = [], []
-                    for shear in shear_rates:
-                        if shear in preds.columns:
-                            y_true_all.extend(eval_df[shear].values)
-                            y_pred_all.extend(preds[f"Pred_{shear}"].values)
+                    valid_shears = [s for s in shear_rates if s in preds.columns]
+
+                    for shear in valid_shears:
+                        y_true_all.extend(eval_df[shear].values)
+                        y_pred_all.extend(preds[f"Pred_{shear}"].values)
 
                     r2, mae, rmse = calculate_metrics(y_true_all, y_pred_all)
 
@@ -118,18 +130,62 @@ def run_cv_learning_curve(
                         }
                     )
 
-    # 4. Aggregation
-    df_res = pd.DataFrame(metrics_log)
+                    # --- B. Raw Prediction Logging (NEW) ---
+                    if valid_shears:
+                        # Select ID, Actuals, and Predictions
+                        # Ensure ID exists; if not, use index
+                        temp_df = preds.copy()
+                        if "ID" not in temp_df.columns:
+                            temp_df["ID"] = temp_df.index
 
-    # Group by (n_train_samples, Set) -> Mean/Std
+                        pred_cols = [f"Pred_{s}" for s in valid_shears]
+                        cols_to_keep = ["ID"] + valid_shears + pred_cols
+                        subset = temp_df[cols_to_keep]
+
+                        # Melt Actuals
+                        melt_act = subset.melt(
+                            id_vars=["ID"],
+                            value_vars=valid_shears,
+                            var_name="Shear_Rate",
+                            value_name="Actual",
+                        )
+
+                        # Melt Predictions
+                        melt_pred = subset.melt(
+                            id_vars=["ID"],
+                            value_vars=pred_cols,
+                            var_name="Pred_Key",
+                            value_name="Predicted",
+                        )
+                        # Clean Pred_Key to match Shear_Rate (remove 'Pred_')
+                        melt_pred["Shear_Rate"] = melt_pred["Pred_Key"].str.replace(
+                            "Pred_", "", regex=False
+                        )
+
+                        # Merge on ID and Shear_Rate
+                        raw_merged = pd.merge(
+                            melt_act,
+                            melt_pred[["ID", "Shear_Rate", "Predicted"]],
+                            on=["ID", "Shear_Rate"],
+                        )
+
+                        # Add Metadata
+                        raw_merged["Fold"] = fold_idx
+                        raw_merged["n_train_samples"] = k
+                        raw_merged["Set"] = set_name
+
+                        raw_predictions_log.append(raw_merged)
+
+    # 4. Aggregation & Saving
+
+    # Save Metrics
+    df_res = pd.DataFrame(metrics_log)
     agg_res = (
         df_res.groupby(["n_train_samples", "Set"])[["R2", "RMSE", "MAE"]]
         .agg(["mean", "std"])
         .reset_index()
     )
 
-    # Flatten columns
-    # Result cols will be: n_train_samples, Set, R2_mean, R2_std, RMSE_mean, ...
     new_cols = []
     for col in agg_res.columns.values:
         if col[0] in ["n_train_samples", "Set"]:
@@ -140,9 +196,16 @@ def run_cv_learning_curve(
 
     csv_path = os.path.join(output_dir, "cv_learning_curve_metrics.csv")
     agg_res.to_csv(csv_path, index=False)
-    print(f"Saved metrics to {csv_path}")
+    print(f"Saved aggregated metrics to {csv_path}")
 
-    # 5. Plotting (Separate Figures)
+    # Save Raw Predictions
+    if raw_predictions_log:
+        df_raw_all = pd.concat(raw_predictions_log, ignore_index=True)
+        raw_csv_path = os.path.join(output_dir, "cv_learning_curve_raw_predictions.csv")
+        df_raw_all.to_csv(raw_csv_path, index=False)
+        print(f"Saved raw predictions to {raw_csv_path}")
+
+    # 5. Plotting
     plot_cv_results_separated(agg_res, target_protein, output_dir)
 
 
@@ -151,7 +214,7 @@ def plot_cv_results_separated(df, protein, output_dir):
 
     # Helper to plot one metric for one set
     def create_single_plot(
-        subset_df, metric_col, std_col, color, title, filename, ylabel
+        subset_df, metric_col, std_col, color, title, filename, ylabel, ylim=None
     ):
         plt.figure(figsize=(10, 6))
 
@@ -172,14 +235,13 @@ def plot_cv_results_separated(df, protein, output_dir):
             color=color,
         )
 
-        plt.axhline(0, color="black", lw=1, ls="--")
-
-        # Consistent Y-limits for R2 helps comparison
         if "R2" in metric_col:
-            plt.ylim(-0.5, 1.05)
+            plt.axhline(0, color="black", lw=1, ls="--")
+            # Adjust limits if needed, e.g., for Log R2
+            # plt.ylim(-1.0, 1.05)
 
-        # NO LOG SCALE for RMSE
-        # (Default is linear, so we just don't add plt.yscale('log'))
+        if ylim:
+            plt.ylim(ylim)
 
         plt.title(f"Data Efficiency: {protein} - {title}")
         plt.xlabel("Number of Training Samples")
@@ -192,7 +254,7 @@ def plot_cv_results_separated(df, protein, output_dir):
         plt.close()
         print(f"Saved plot: {filename}")
 
-    # --- Generate 4 Plots ---
+    # --- Generate Plots ---
 
     # 1. Unseen - R2
     create_single_plot(
@@ -238,12 +300,38 @@ def plot_cv_results_separated(df, protein, output_dir):
         "RMSE (Linear Scale)",
     )
 
+    # 5. Unseen - MAE (NEW)
+    create_single_plot(
+        df[df["Set"] == "Unseen"],
+        "MAE_mean",
+        "MAE_std",
+        "tab:orange",
+        "Unseen Data MAE",
+        "unseen_mae.png",
+        "MAE (cP)",
+    )
+
+    # 6. All - MAE (NEW)
+    create_single_plot(
+        df[df["Set"] == "All"],
+        "MAE_mean",
+        "MAE_std",
+        "tab:blue",
+        "All Data MAE (Memory)",
+        "all_mae.png",
+        "MAE (cP)",
+    )
+
 
 if __name__ == "__main__":
     # --- CONFIG ---
     DATA_PATH = "data/raw/formulation_data_01092026.csv"
-    MODEL_DIR = "models/experiments/o_net_no_trast"
+    MODEL_DIR = "models/experiments/o_net_no_eta"
 
     run_cv_learning_curve(
-        DATA_PATH, MODEL_DIR, target_protein="Trastuzumab", n_splits=4
+        DATA_PATH,
+        MODEL_DIR,
+        target_protein="Etanercept",
+        output_dir="models/experiments/o_net_no_eta/benchmarks",
+        n_splits=4,
     )

@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from matplotlib.pyplot import hist
+from train_o_net import CrossSampleCNP
 
 # ==========================================
 # 1. Physics Prior Configuration
@@ -262,65 +263,6 @@ CONC_THRESHOLDS = {
 
 
 # ==========================================
-# 2. Model Definition
-# ==========================================
-class CrossSampleCNP(nn.Module):
-    def __init__(self, static_dim, hidden_dim=128, latent_dim=128, dropout=0.0):
-        super().__init__()
-
-        # --- ARCHITECTURE CHANGE ---
-        # Encoder now takes ONLY 2 inputs: (Shear_Rate, Viscosity)
-        # We removed 'static_dim' from here.
-        self.encoder = nn.Sequential(
-            nn.Linear(2, hidden_dim),  # <--- Changed from (2 + static_dim)
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, latent_dim),
-        )
-
-        # Decoder remains the same (Integrates Static + Context)
-        self.decoder = nn.Sequential(
-            nn.Linear(1 + static_dim + latent_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1),
-        )
-
-    def forward(self, context_tensor, query_shear, query_static):
-        # --- INPUT SLICING ---
-        # context_tensor is [Batch, Points, (Shear, Visc, Static...)]
-        # We slice it to keep ONLY the first 2 dimensions (Shear, Visc) for the encoder
-        context_physics = context_tensor[:, :, :2]
-
-        # 1. Encode Physics Only
-        encoded = self.encoder(context_physics)
-        r = torch.mean(encoded, dim=1)
-
-        # 2. Decode using Physics Context + Static Identity
-        n_queries = query_shear.size(1)
-        r_expanded = r.unsqueeze(1).repeat(1, n_queries, 1)
-
-        decoder_input = torch.cat([query_shear, query_static, r_expanded], dim=-1)
-        return self.decoder(decoder_input)
-
-    # Helper for inference (add this if missing)
-    def encode_memory(self, context_tensor):
-        context_physics = context_tensor[:, :, :2]
-        encoded = self.encoder(context_physics)
-        return torch.mean(encoded, dim=1)
-
-    def decode_from_memory(self, memory_vector, query_shear, query_static):
-        n_queries = query_shear.size(1)
-        r_expanded = memory_vector.unsqueeze(1).repeat(1, n_queries, 1)
-        decoder_input = torch.cat([query_shear, query_static, r_expanded], dim=-1)
-        return self.decoder(decoder_input)
-
-
-# ==========================================
 # 3. The Predictor Class
 # ==========================================
 class ViscosityPredictorCNP:
@@ -328,15 +270,21 @@ class ViscosityPredictorCNP:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model_dir = model_dir
 
-        # Load Preprocessor
+        # 1. Load Preprocessors
         self.preprocessor_path = os.path.join(model_dir, "preprocessor.pkl")
+        self.scaler_path = os.path.join(model_dir, "physics_scaler.pkl")
+
         if not os.path.exists(self.preprocessor_path):
             raise FileNotFoundError(
                 f"Preprocessor not found at {self.preprocessor_path}"
             )
-        self.preprocessor = joblib.load(self.preprocessor_path)
+        if not os.path.exists(self.scaler_path):
+            raise FileNotFoundError(f"Physics Scaler not found at {self.scaler_path}")
 
-        # Load Model
+        self.preprocessor = joblib.load(self.preprocessor_path)
+        self.physics_scaler = joblib.load(self.scaler_path)  # <--- NEW LOAD
+
+        # 2. Load Model
         self.model_path = os.path.join(model_dir, "best_model.pth")
         if not os.path.exists(self.model_path):
             raise FileNotFoundError(f"Model checkpoint not found at {self.model_path}")
@@ -356,6 +304,7 @@ class ViscosityPredictorCNP:
         self.model.eval()
         self.cached_memory = None
 
+        # Shear Mapping
         self.shear_map = {
             "Viscosity_100": 100.0,
             "Viscosity_1000": 1000.0,
@@ -364,7 +313,7 @@ class ViscosityPredictorCNP:
             "Viscosity_15000000": 1.5e7,
         }
 
-        # Categorical columns that need normalization
+        # Categorical columns (Same as training)
         self.cat_cols = [
             "Protein_type",
             "Protein_class_type",
@@ -375,7 +324,7 @@ class ViscosityPredictorCNP:
             "Excipient_type",
         ]
 
-        # New Feature Columns defined by the update
+        # New Feature Columns (Same as training)
         self.new_prior_cols = [
             "prior_arginine",
             "prior_lysine",
@@ -507,58 +456,54 @@ class ViscosityPredictorCNP:
         self, df: pd.DataFrame
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Full preprocessing pipeline including Physics Prior calculation.
+        Preprocessing now uses the Fitted Physics Scaler.
         """
         df_proc = df.copy()
 
-        # 1. Normalize Categories to Lowercase
+        # 1. Normalize Categories
         for c in self.cat_cols:
             if c in df_proc.columns:
                 df_proc[c] = df_proc[c].astype(str).str.lower()
             else:
                 df_proc[c] = "unknown"
 
-        # 2. Compute New Features (Row-wise)
-        # Apply logic and expand dictionary to new columns
+        # 2. Compute New Features
         new_features = df_proc.apply(
             self._calculate_physics_features, axis=1, result_type="expand"
         )
         df_proc = pd.concat([df_proc, new_features], axis=1)
 
-        # 3. Run Scikit-Learn Pipeline
-        # Ensure all columns expected by the preprocessor exist (fill 0.0 if not)
+        # 3. Static Features Transformation
         feature_names = (
             self.preprocessor.feature_names_in_
             if hasattr(self.preprocessor, "feature_names_in_")
             else []
         )
-
         for col in feature_names:
             if col not in df_proc.columns:
                 df_proc[col] = 0.0
 
-        try:
-            X_static = self.preprocessor.transform(df_proc)
-        except ValueError as e:
-            # Fallback if transformation fails due to schema mismatch
-            print(f"Warning: Preprocessing schema mismatch: {e}")
-            X_static = self.preprocessor.transform(df_proc)
+        X_static = self.preprocessor.transform(df_proc)
 
-        # 4. Flatten to Tensors
+        # 4. Physics Flattening & Scaling
         points_list = []
         static_list = []
 
         for i in range(len(df_proc)):
             for col, shear_val in self.shear_map.items():
                 val = 1.0
+                # Use value if present (for context), else placeholder (for query)
                 if col in df_proc.columns and pd.notna(df_proc.iloc[i][col]):
                     val = df_proc.iloc[i][col]
 
-                # Physical constraint check
                 if val <= 0:
                     val = 1e-6
 
-                points_list.append([np.log10(shear_val), np.log10(val)])
+                # Transform using the scaler: [log_shear, log_visc] -> [scaled_shear, scaled_visc]
+                raw_point = np.array([[np.log10(shear_val), np.log10(val)]])
+                scaled_point = self.physics_scaler.transform(raw_point)[0]
+
+                points_list.append(scaled_point)
                 static_list.append(X_static[i])
 
         static_t = (
@@ -574,6 +519,7 @@ class ViscosityPredictorCNP:
 
         shear_t = points_t[:, :, [0]]
         visc_t = points_t[:, :, [1]]
+
         return static_t, shear_t, visc_t
 
     def learn(
@@ -585,18 +531,27 @@ class ViscosityPredictorCNP:
     ):
         """
         Adapts the model to new data.
-        fine_tune=True (default) updates weights to capture specific effects (e.g. Sucrose sensitivity).
+        fine_tune=True (default) updates weights to capture specific effects.
         """
+        # 1. Preprocess Data
         static_t, shear_t, visc_t = self._preprocess(df)
+
+        # 2. Build Context Tensor: [Shear, Visc, Static...]
+        # This matches the 'CrossSampleCNP' architecture we fixed.
         context_t = torch.cat([shear_t, visc_t, static_t], dim=-1)
 
         if fine_tune:
             self.model.train()
-            # Use a slightly higher LR for fine-tuning to overcome "average" priors
             optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
 
             for _ in range(steps):
+                # FORWARD PASS FIX:
+                # The model expects (context_tensor, query_shear, query_static)
+                # Here, the 'context' IS the training data itself.
+                # So we pass 'context_t' as context, and 'shear_t'/'static_t' as query.
+
                 pred = self.model(context_t, shear_t, static_t)
+
                 loss = F.mse_loss(pred, visc_t)
                 optimizer.zero_grad()
                 loss.backward()
@@ -609,43 +564,50 @@ class ViscosityPredictorCNP:
     def predict(
         self, df: pd.DataFrame, context_df: Optional[pd.DataFrame] = None
     ) -> pd.DataFrame:
-        """
-        Predicts viscosity using In-Context Learning.
-
-        CRITICAL: This assumes all rows in 'df' belong to the SAME system/protein
-        as the 'context_df' (or self.cached_memory).
-        """
-        # 1. Resolve Memory (The Context)
+        # 1. Context Resolution
         memory_vector = self.cached_memory
 
-        # Allow on-the-fly context override (Stateless prediction)
+        # Allow on-the-fly context override
         if context_df is not None:
             c_static, c_shear, c_visc = self._preprocess(context_df)
             c_tensor = torch.cat([c_shear, c_visc, c_static], dim=-1)
             with torch.no_grad():
                 memory_vector = self.model.encode_memory(c_tensor)
 
-        # Handle Zero-Shot (No context available)
+        # Handle Zero-Shot
         if memory_vector is None:
-            # Warn if this wasn't intended
-            # print("Warning: Predicting in Zero-Shot mode (No Context).")
             memory_vector = torch.zeros((1, self.config["latent_dim"])).to(self.device)
 
-        # 2. Prepare Query (The Target Conditions)
-        # Ensure _preprocess uses the SAME scalers as training!
+        # 2. Prepare Query
+        # Note: 'q_visc' is a placeholder here (we are predicting it)
         q_static, q_shear, _ = self._preprocess(df)
 
-        # 3. Decode (The Prediction)
+        # 3. Decode
         self.model.eval()
         with torch.no_grad():
-            # NOTE: If the model was trained with "Static Dropout", the Decoder
-            # is now robust enough to combine this 'q_static' with 'memory_vector'
-            # effectively.
-            pred_log = self.model.decode_from_memory(memory_vector, q_shear, q_static)
+            pred_scaled_visc = self.model.decode_from_memory(
+                memory_vector, q_shear, q_static
+            )
 
-        # 4. Format Results
-        pred_visc = torch.pow(10, pred_log).cpu().numpy().flatten()
+        # =========================================================
+        # FIX: INVERSE TRANSFORM TO GET LINEAR cP
+        # =========================================================
 
+        # Move to CPU/Numpy for Scikit-Learn transform
+        q_shear_np = q_shear.cpu().numpy().reshape(-1, 1)
+        pred_visc_np = pred_scaled_visc.cpu().numpy().reshape(-1, 1)
+
+        # Stack [Scaled_Shear, Scaled_Visc] because the scaler expects 2 features
+        combined_scaled = np.hstack([q_shear_np, pred_visc_np])
+
+        # Inverse Transform -> [Log10_Shear, Log10_Viscosity]
+        combined_log = self.physics_scaler.inverse_transform(combined_scaled)
+
+        # Extract Viscosity column (index 1) and Delog: 10^log_visc -> Linear cP
+        log_visc = combined_log[:, 1]
+        pred_visc_cp = np.power(10, log_visc)
+
+        # 4. Format Results (Map flat predictions back to dataframe rows)
         results = df.copy()
         n_shears = len(self.shear_map)
         shear_keys = list(self.shear_map.keys())
@@ -653,12 +615,15 @@ class ViscosityPredictorCNP:
 
         for i in range(len(df)):
             start = i * n_shears
-            sample_preds = pred_visc[start : start + n_shears]
+            # Slice the flat array for this specific sample's shear rates
+            sample_preds = pred_visc_cp[start : start + n_shears]
+
             for j, key in enumerate(shear_keys):
                 new_cols[key].append(sample_preds[j])
 
         for k, v in new_cols.items():
             results[f"Pred_{k}"] = v
+
         return results
 
     def predict_with_uncertainty(
