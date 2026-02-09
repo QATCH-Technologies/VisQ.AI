@@ -21,9 +21,11 @@ SCALER_PATH = "models/experiments/o_net/physics_scaler.pkl"
 TRAIN_DATA_PATH = "data/raw/formulation_data_02052026.csv"
 OUTPUT_DIR = "models/experiments/o_net/scenarios_calibrated"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 # Target Shear Rates (1/s)
 SHEAR_RATES = [100.0, 1000.0, 10000.0, 100000.0, 15000000.0]
 TARGET_PROTEIN_NAME = "pembrolizumab"
+
 # Base Constants for Pembrolizumab
 CONSTANTS = {
     "Protein_type": "Pembrolizumab",
@@ -40,16 +42,26 @@ CONSTANTS = {
     "HCI": 1.1,
 }
 
-# Formulation Scenarios
-SCENARIOS = [
-    ("Control (Buffer Only)", {}),
-    ("Arginine (25mM)", {"Excipient_type": "Arginine", "Excipient_conc": 25.0}),
-    ("Proline (25mM)", {"Excipient_type": "Proline", "Excipient_conc": 25.0}),
-    ("Lysine (25mM)", {"Excipient_type": "Lysine", "Excipient_conc": 25.0}),
-    ("Sucrose (0.2M)", {"Stabilizer_type": "Sucrose", "Stabilizer_conc": 0.2}),
+# --- UPDATED SCENARIOS (Control + Arginine 1-100mM) ---
+ARG_CONCS = [1.0, 25.0, 50.0, 75.0, 100.0]
+
+# 1. Baseline Control
+control_scenario = [("Control (Buffer Only)", {})]
+
+# 2. Arginine Scenarios
+arg_scenarios = [
+    (
+        f"Arginine ({int(c)}mM)",
+        {"Excipient_type": "Arginine", "Excipient_conc": float(c)},
+    )
+    for c in ARG_CONCS
 ]
 
-CONCENTRATIONS = [130.0, 200.0]
+# Combine: Control first, then increasing amounts of Arginine
+SCENARIOS = control_scenario + arg_scenarios
+
+# --- CONCENTRATIONS (4 Levels) ---
+CONCENTRATIONS = [120.0, 150.0, 180.0, 210.0]
 
 # Physics Config (Must match training)
 CONC_THRESHOLDS = {
@@ -510,7 +522,7 @@ def run():
     calibrator.learn(calibration_samples, steps=100, lr=5e-4)
 
     # 3. Build Scenarios
-    print("Constructing scenarios...")
+    print("Constructing Arginine scan scenarios (with Baseline)...")
     rows = []
     for conc in CONCENTRATIONS:
         for name, changes in SCENARIOS:
@@ -565,28 +577,48 @@ def run():
     # 5. Save & Plot
     res_df = pd.DataFrame(results)
     res_df.to_csv(
-        os.path.join(OUTPUT_DIR, "pembrolizumab_calibrated_predictions.csv"),
+        os.path.join(OUTPUT_DIR, "pembrolizumab_arginine_scan.csv"),
         index=False,
     )
 
     sns.set_context("talk")
     sns.set_style("ticks")
 
+    print("Generating plots with annotations...")
     for conc in CONCENTRATIONS:
         plt.figure(figsize=(10, 7))
         subset = res_df[res_df["Protein_conc"] == conc]
-        colors = sns.color_palette("husl", len(subset))
+        # Use viridis for sequential formulation changes
+        # Control will be mapped to the first color (dark), High Arginine to last (light)
+        colors = sns.color_palette("viridis", len(subset))
 
         for idx, (_, row) in enumerate(subset.iterrows()):
             y = [row[f"Pred_Visc_{int(sr)}"] for sr in SHEAR_RATES]
+
+            # Plot line
             plt.plot(
                 SHEAR_RATES,
                 y,
                 marker="o",
-                markersize=8,
+                markersize=6,
                 linewidth=2.5,
                 label=row["Scenario_Name"],
                 color=colors[idx],
+            )
+
+            # Annotate the final point (High Shear Viscosity)
+            final_x = SHEAR_RATES[-1]
+            final_y = y[-1]
+            plt.annotate(
+                f"{final_y:.1f} cP",
+                xy=(final_x, final_y),
+                xytext=(5, 0),
+                textcoords="offset points",
+                ha="left",
+                va="center",
+                fontsize=9,
+                color=colors[idx],
+                fontweight="bold",
             )
 
         ax = plt.gca()
@@ -606,7 +638,7 @@ def run():
         plt.xlabel("Shear Rate (1/s)", fontweight="bold")
         plt.ylabel("Viscosity (cP)", fontweight="bold")
         plt.title(
-            f"Pembrolizumab (Calibrated) @ {int(conc)} mg/mL\nFormulation Screen",
+            f"Pembrolizumab (Calibrated) @ {int(conc)} mg/mL\nArginine Scan (0-100 mM)",
             fontsize=14,
             pad=15,
         )
@@ -614,10 +646,10 @@ def run():
         plt.grid(True, which="major", ls="-", alpha=0.5)
         plt.grid(True, which="minor", ls=":", alpha=0.2)
 
-        plt.legend(bbox_to_anchor=(1.02, 1), loc="upper left", frameon=True)
+        plt.legend(bbox_to_anchor=(1.10, 1), loc="upper left", frameon=True)
         plt.tight_layout()
 
-        save_path = os.path.join(OUTPUT_DIR, f"calibrated_plot_{int(conc)}mg_ml.png")
+        save_path = os.path.join(OUTPUT_DIR, f"arginine_scan_{int(conc)}mg_ml.png")
         plt.savefig(save_path, dpi=300)
         print(f"Saved plot: {save_path}")
 
