@@ -80,10 +80,11 @@ class CNPModelPackager:
 
         print(f"Packaging {final_name}...")
 
-        # 1. Identify Assets
+        # 1. Identify Assets (UPDATED to include physics_scaler)
         assets = {
             "model_checkpoint": self.model_dir / "best_model.pth",
             "preprocessor": self.model_dir / "preprocessor.pkl",
+            "physics_scaler": self.model_dir / "physics_scaler.pkl",  # <--- NEW
             "inference_code": self.code_file,
         }
 
@@ -99,10 +100,12 @@ class CNPModelPackager:
             with open(path, "rb") as f:
                 content = f.read()
 
+            # Hash (SHA256)
             file_hash = hashes.Hash(hashes.SHA256(), backend=default_backend())
             file_hash.update(content)
             digest = file_hash.finalize().hex()
 
+            # Signature (RSA-PSS)
             signature = self.signer.sign_bytes(content)
 
             # Use just the filename in the archive
@@ -149,8 +152,9 @@ class CNPModelPackager:
 # ==========================================
 def main():
     # Configuration
-    MODEL_DIR = "models/experiments/o_net"  # Where train_visq.py saved outputs
-    CODE_FILE = "ml/test/inference_o_net.py"  # The inference script we just wrote
+    MODEL_DIR = "models/experiments/o_net"  # Where train_o_net.py saved outputs
+    # Ensure this points to the standalone inference script
+    CODE_FILE = "ml/test/inference_o_net.py"
     OUTPUT_DIR = "models/production"  # Where to put the .visq package
 
     # Check if files exist before running
@@ -172,8 +176,8 @@ def main():
     # Run
     packager.package(
         package_name="VisQ-ICL",
-        version="1.0.0",
-        notes="Initial release of Cross-Sample CNP model with memory caching.",
+        version="1.0.1",
+        notes="Updated release including physics scaler for log-log inverse transformation.",
     )
 
 

@@ -1,6 +1,6 @@
 import io
 import os
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import joblib
 import numpy as np
@@ -8,14 +8,94 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from matplotlib.pyplot import hist
-from train_o_net import CrossSampleCNP
+
 
 # ==========================================
-# 1. Physics Prior Configuration
+# 1. Model Architecture (Embedded for Standalone Use)
 # ==========================================
+class CrossSampleCNP(nn.Module):
+    """
+    Conditional Neural Process for Viscosity Prediction.
+    Matches the architecture defined in train_o_net.py.
+    """
+
+    def __init__(self, static_dim, hidden_dim=128, latent_dim=128, dropout=0.0):
+        super().__init__()
+
+        # Encoder: Takes [Shear, Viscosity, Static_Features] -> Latent Representation
+        self.encoder = nn.Sequential(
+            nn.Linear(2 + static_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, latent_dim),
+        )
+
+        # Decoder: Takes [Query_Shear, Query_Static, Latent_Rep] -> Predicted Viscosity
+        self.decoder = nn.Sequential(
+            nn.Linear(1 + static_dim + latent_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    def forward(self, context_tensor, query_shear, query_static):
+        # 1. Encode Context
+        encoded = self.encoder(context_tensor)
+        r = torch.mean(encoded, dim=1)  # Aggregate context into single vector
+
+        # 2. Decode
+        n_queries = query_shear.size(1)
+        # Expand latent vector r to match the number of query points
+        r_expanded = r.unsqueeze(1).repeat(1, n_queries, 1)
+
+        # Concatenate: [Shear, Static, Latent]
+        decoder_input = torch.cat([query_shear, query_static, r_expanded], dim=-1)
+        return self.decoder(decoder_input)
+
+    def encode_memory(self, context_tensor):
+        """
+        Encodes the context into a single latent vector (memory).
+        Used during the 'learn' phase to cache knowledge.
+        """
+        encoded = self.encoder(context_tensor)
+        return torch.mean(encoded, dim=1)
+
+    def decode_from_memory(self, memory_vector, query_shear, query_static):
+        """
+        Decodes targets using a pre-computed latent vector.
+        Used during the 'predict' phase for fast inference.
+        """
+        n_queries = query_shear.size(1)
+        # Handle batch dimension if necessary, though usually memory_vector is [1, latent]
+        if memory_vector.dim() == 2 and memory_vector.size(0) == 1:
+            r_expanded = memory_vector.unsqueeze(1).repeat(1, n_queries, 1)
+        else:
+            r_expanded = memory_vector.unsqueeze(1).repeat(1, n_queries, 1)
+
+        decoder_input = torch.cat([query_shear, query_static, r_expanded], dim=-1)
+        return self.decoder(decoder_input)
+
+
+# ==========================================
+# 2. Configuration & Physics Priors
+# ==========================================
+CONC_THRESHOLDS = {
+    "arginine": 150.0,
+    "lysine": 100.0,
+    "proline": 200.0,
+    "nacl": 150.0,
+    "tween-20": 0.01,
+    "tween-80": 0.01,
+    "stabilizer": 0.2,
+    "trehalose": 0.2,
+}
+
 PRIOR_TABLE = {
-    "igg1": {
+    "mab_igg1": {
         "Near-pI": {
             "arginine": -2,
             "lysine": -1,
@@ -44,7 +124,7 @@ PRIOR_TABLE = {
             "tween-80": -1,
         },
     },
-    "igg4": {
+    "mab_igg4": {
         "Near-pI": {
             "arginine": -2,
             "lysine": -1,
@@ -249,18 +329,6 @@ PRIOR_TABLE = {
     },
 }
 
-# Split Thresholds (E_low vs E_high)
-CONC_THRESHOLDS = {
-    "arginine": 150.0,
-    "lysine": 100.0,
-    "proline": 200.0,
-    "nacl": 150.0,
-    "tween-20": 0.01,
-    "tween-80": 0.01,
-    "sucrose": 0.2,
-    "trehalose": 0.2,
-}
-
 
 # ==========================================
 # 3. The Predictor Class
@@ -269,6 +337,7 @@ class ViscosityPredictorCNP:
     def __init__(self, model_dir: str):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model_dir = model_dir
+        self.memory_vector = None  # Stores the calibrated context
 
         # 1. Load Preprocessors
         self.preprocessor_path = os.path.join(model_dir, "preprocessor.pkl")
@@ -282,7 +351,7 @@ class ViscosityPredictorCNP:
             raise FileNotFoundError(f"Physics Scaler not found at {self.scaler_path}")
 
         self.preprocessor = joblib.load(self.preprocessor_path)
-        self.physics_scaler = joblib.load(self.scaler_path)  # <--- NEW LOAD
+        self.physics_scaler = joblib.load(self.scaler_path)
 
         # 2. Load Model
         self.model_path = os.path.join(model_dir, "best_model.pth")
@@ -293,6 +362,7 @@ class ViscosityPredictorCNP:
         self.config = checkpoint["config"]
         self.static_dim = checkpoint["static_dim"]
 
+        # Initialize the standalone model class
         self.model = CrossSampleCNP(
             static_dim=self.static_dim,
             hidden_dim=self.config["hidden_dim"],
@@ -302,9 +372,8 @@ class ViscosityPredictorCNP:
 
         self.model.load_state_dict(checkpoint["state_dict"])
         self.model.eval()
-        self.cached_memory = None
 
-        # Shear Mapping
+        # Shear Mapping (Log-Log scaling logic)
         self.shear_map = {
             "Viscosity_100": 100.0,
             "Viscosity_1000": 1000.0,
@@ -313,7 +382,7 @@ class ViscosityPredictorCNP:
             "Viscosity_15000000": 1.5e7,
         }
 
-        # Categorical columns (Same as training)
+        # Categorical columns
         self.cat_cols = [
             "Protein_type",
             "Protein_class_type",
@@ -324,7 +393,7 @@ class ViscosityPredictorCNP:
             "Excipient_type",
         ]
 
-        # New Feature Columns (Same as training)
+        # Physics Features
         self.new_prior_cols = [
             "prior_arginine",
             "prior_lysine",
@@ -344,9 +413,14 @@ class ViscosityPredictorCNP:
     # ------------------------------------------------------------------
     def _calculate_cci(self, row):
         c_class = row.get("C_Class", 1.0)
-        # Assuming missing defaults
         ph = row.get("Buffer_pH", 7.0)
         pi = row.get("PI_mean", 7.0)
+        # Handle potential NaNs
+        if pd.isna(ph):
+            ph = 7.0
+        if pd.isna(pi):
+            pi = 7.0
+
         delta_ph = abs(ph - pi)
         tau = 1.5
         return c_class * np.exp(-delta_ph / tau)
@@ -354,55 +428,35 @@ class ViscosityPredictorCNP:
     def _calculate_physics_features(self, row):
         """
         Computes separate Prior scores and split-concentration features.
-        Returns a dictionary mapping {feature_name: value}.
+        Matches train_o_net.py logic exactly.
         """
-        # [cite_start]--- A. Determine Regime [cite: 9] ---
         cci = self._calculate_cci(row)
         p_type = str(row.get("Protein_class_type", "default")).lower()
+
+        # Determine Regime
         regime = "Far"
-
-        if "igg1" in p_type:
-            if cci >= 0.90:
-                regime = "Near-pI"
-            elif cci >= 0.50:
-                regime = "Mixed"
-        elif "igg4" in p_type:
-            if cci >= 0.80:
-                regime = "Near-pI"
-            elif cci >= 0.40:
-                regime = "Mixed"
+        if "mab_igg1" in p_type:
+            regime = "Near-pI" if cci >= 0.90 else ("Mixed" if cci >= 0.50 else "Far")
+        elif "mab_igg4" in p_type:
+            regime = "Near-pI" if cci >= 0.80 else ("Mixed" if cci >= 0.40 else "Far")
         elif any(x in p_type for x in ["fc-fusion", "trispecific"]):
-            if cci >= 0.70:
-                regime = "Near-pI"
-            elif cci >= 0.40:
-                regime = "Mixed"
+            regime = "Near-pI" if cci >= 0.70 else ("Mixed" if cci >= 0.40 else "Far")
         elif any(x in p_type for x in ["bispecific", "adc"]):
-            if cci >= 0.80:
-                regime = "Near-pI"
-            elif cci >= 0.45:
-                regime = "Mixed"
+            regime = "Near-pI" if cci >= 0.80 else ("Mixed" if cci >= 0.45 else "Far")
         elif any(x in p_type for x in ["bsa", "polyclonal"]):
-            if cci >= 0.70:
-                regime = "Near-pI"
-            elif cci >= 0.40:
-                regime = "Mixed"
+            regime = "Near-pI" if cci >= 0.70 else ("Mixed" if cci >= 0.40 else "Far")
         else:
-            if cci >= 0.70:
-                regime = "Near-pI"
-            elif cci >= 0.40:
-                regime = "Mixed"
+            regime = "Near-pI" if cci >= 0.70 else ("Mixed" if cci >= 0.40 else "Far")
 
-        # [cite_start]--- B. Get Prior Table [cite: 10, 27] ---
+        # Get Prior Table
         lookup_key = "default"
         for key in PRIOR_TABLE.keys():
             if key != "default" and key in p_type:
                 lookup_key = key
                 break
-
         table = PRIOR_TABLE[lookup_key]
         regime_dict = table.get(regime, table["Far"])
 
-        # [cite_start]--- C. Calculate Priors & Split Concentrations [cite: 12] ---
         priors = {k: 0.0 for k in self.new_prior_cols}
         concs = {k: 0.0 for k in self.new_conc_cols}
 
@@ -420,7 +474,7 @@ class ViscosityPredictorCNP:
             if ing_name in ["none", "unknown", "nan"] or ing_conc <= 0:
                 continue
 
-            # 1. Map to Priors
+            # Map to Priors
             if "arginine" in ing_name or "arg" in ing_name:
                 priors["prior_arginine"] = regime_dict.get("arginine", 0)
             elif "lysine" in ing_name or "lys" in ing_name:
@@ -430,40 +484,32 @@ class ViscosityPredictorCNP:
             elif "nacl" in ing_name:
                 priors["prior_nacl"] = regime_dict.get("nacl", 0)
             elif type_col == "Stabilizer_type":
-                # General Stabilizer bucket
                 priors["prior_stabilizer"] = regime_dict.get("stabilizer", 0)
             elif "tween" in ing_name or "polysorbate" in ing_name:
                 t_key = "tween-20" if "20" in ing_name else "tween-80"
                 priors[f"prior_{t_key}"] = regime_dict.get(t_key, 0)
 
-            # 2. Map to Concentration Splits
+            # Map to Concentration Splits
             for target_ing, threshold in CONC_THRESHOLDS.items():
-                match = False
-                if target_ing in ing_name:
-                    match = True
-                elif target_ing == "arginine" and "arg" in ing_name:
-                    match = True
-
+                match = (target_ing in ing_name) or (
+                    target_ing == "arginine" and "arg" in ing_name
+                )
                 if match:
-                    e_low = min(ing_conc, threshold)
-                    e_high = max(ing_conc - threshold, 0)
-                    concs[f"{target_ing}_low"] = e_low
-                    concs[f"{target_ing}_high"] = e_high
+                    concs[f"{target_ing}_low"] = min(ing_conc, threshold)
+                    concs[f"{target_ing}_high"] = max(ing_conc - threshold, 0)
 
         return {**priors, **concs}
 
     def _preprocess(
         self, df: pd.DataFrame
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Preprocessing now uses the Fitted Physics Scaler.
-        """
         df_proc = df.copy()
 
         # 1. Normalize Categories
         for c in self.cat_cols:
             if c in df_proc.columns:
                 df_proc[c] = df_proc[c].astype(str).str.lower()
+                df_proc[c] = df_proc[c].replace("nan", "unknown")
             else:
                 df_proc[c] = "unknown"
 
@@ -485,7 +531,7 @@ class ViscosityPredictorCNP:
 
         X_static = self.preprocessor.transform(df_proc)
 
-        # 4. Physics Flattening & Scaling
+        # 4. Physics Flattening & Scaling (Log-Log)
         points_list = []
         static_list = []
 
@@ -525,89 +571,78 @@ class ViscosityPredictorCNP:
     def learn(
         self,
         df: pd.DataFrame,
-        fine_tune: bool = True,
         steps: int = 50,
         lr: float = 1e-3,
     ):
         """
-        Adapts the model to new data.
-        fine_tune=True (default) updates weights to capture specific effects.
+        Fine-tunes the model on the provided samples (Calibrator Logic).
         """
-        # 1. Preprocess Data
+        if df.empty:
+            print("Warning: Context DataFrame is empty. Skipping learning.")
+            return
+
+        print(f" > Calibrating on {len(df)} samples for {steps} steps...")
+
+        # 1. Preprocess Data to get Tensors
+        # _preprocess effectively does the "stacking" of all points from all samples
+        # into a single batch [1, Total_Points, Dim]
         static_t, shear_t, visc_t = self._preprocess(df)
 
-        # 2. Build Context Tensor: [Shear, Visc, Static...]
-        # This matches the 'CrossSampleCNP' architecture we fixed.
+        # 2. Build Context Tensor: [Shear, Visc, Static]
         context_t = torch.cat([shear_t, visc_t, static_t], dim=-1)
 
-        if fine_tune:
-            self.model.train()
-            optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
+        self.model.train()
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
 
-            for _ in range(steps):
-                # FORWARD PASS FIX:
-                # The model expects (context_tensor, query_shear, query_static)
-                # Here, the 'context' IS the training data itself.
-                # So we pass 'context_t' as context, and 'shear_t'/'static_t' as query.
+        for i in range(steps):
+            # Forward: Model predicts based on context (Self-Consistency)
+            # We predict the same points we are looking at to learn their physics
+            pred = self.model(context_t, shear_t, static_t)
 
-                pred = self.model(context_t, shear_t, static_t)
+            loss = F.mse_loss(pred, visc_t)
 
-                loss = F.mse_loss(pred, visc_t)
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-            self.model.eval()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
+        print(f" > Calibration complete. Final MSE: {loss.item():.5f}")
+
+        self.model.eval()
         with torch.no_grad():
-            self.cached_memory = self.model.encode_memory(context_t)
+            self.memory_vector = self.model.encode_memory(context_t)
 
-    def predict(
-        self, df: pd.DataFrame, context_df: Optional[pd.DataFrame] = None
-    ) -> pd.DataFrame:
+    def predict(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Predicts using the cached memory (calibrated state).
+        """
         # 1. Context Resolution
-        memory_vector = self.cached_memory
+        memory_vector = self.memory_vector
 
-        # Allow on-the-fly context override
-        if context_df is not None:
-            c_static, c_shear, c_visc = self._preprocess(context_df)
-            c_tensor = torch.cat([c_shear, c_visc, c_static], dim=-1)
-            with torch.no_grad():
-                memory_vector = self.model.encode_memory(c_tensor)
-
-        # Handle Zero-Shot
+        # Handle Zero-Shot (if learn was never called)
         if memory_vector is None:
             memory_vector = torch.zeros((1, self.config["latent_dim"])).to(self.device)
 
         # 2. Prepare Query
-        # Note: 'q_visc' is a placeholder here (we are predicting it)
+        # _preprocess handles expanding the static vector for the query shear rates
         q_static, q_shear, _ = self._preprocess(df)
 
-        # 3. Decode
+        # 3. Decode from Memory (using cached vector)
         self.model.eval()
         with torch.no_grad():
-            pred_scaled_visc = self.model.decode_from_memory(
-                memory_vector, q_shear, q_static
-            )
+            y_scaled = self.model.decode_from_memory(memory_vector, q_shear, q_static)
 
-        # =========================================================
-        # FIX: INVERSE TRANSFORM TO GET LINEAR cP
-        # =========================================================
-
-        # Move to CPU/Numpy for Scikit-Learn transform
+        # 4. Inverse Scaling (StandardScaler -> Log10 -> Linear cP)
         q_shear_np = q_shear.cpu().numpy().reshape(-1, 1)
-        pred_visc_np = pred_scaled_visc.cpu().numpy().reshape(-1, 1)
+        pred_visc_np = y_scaled.cpu().numpy().reshape(-1, 1)
 
-        # Stack [Scaled_Shear, Scaled_Visc] because the scaler expects 2 features
+        # The scaler expects [shear, viscosity], so we stack them
         combined_scaled = np.hstack([q_shear_np, pred_visc_np])
-
-        # Inverse Transform -> [Log10_Shear, Log10_Viscosity]
         combined_log = self.physics_scaler.inverse_transform(combined_scaled)
 
-        # Extract Viscosity column (index 1) and Delog: 10^log_visc -> Linear cP
-        log_visc = combined_log[:, 1]
-        pred_visc_cp = np.power(10, log_visc)
+        # Extract viscosity (index 1) and delog (10^x)
+        pred_visc_cp = np.power(10, combined_log[:, 1])
 
-        # 4. Format Results (Map flat predictions back to dataframe rows)
+        # 5. Format Results
         results = df.copy()
         n_shears = len(self.shear_map)
         shear_keys = list(self.shear_map.keys())
@@ -615,9 +650,7 @@ class ViscosityPredictorCNP:
 
         for i in range(len(df)):
             start = i * n_shears
-            # Slice the flat array for this specific sample's shear rates
             sample_preds = pred_visc_cp[start : start + n_shears]
-
             for j, key in enumerate(shear_keys):
                 new_cols[key].append(sample_preds[j])
 
@@ -631,13 +664,10 @@ class ViscosityPredictorCNP:
         df: pd.DataFrame,
         n_samples: int = 20,
         ci_range: Tuple[float, float] = (2.5, 97.5),
-    ) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
-        """
-        Runs Monte Carlo Dropout and returns format compatible with VisQAI.
-        """
+    ):
         self.model.train()  # Enable Dropout
 
-        memory_vector = self.cached_memory
+        memory_vector = self.memory_vector
         if memory_vector is None:
             memory_vector = torch.zeros((1, self.config["latent_dim"])).to(self.device)
 
@@ -646,76 +676,76 @@ class ViscosityPredictorCNP:
         preds_log = []
         with torch.no_grad():
             for _ in range(n_samples):
-                out_log = self.model.decode_from_memory(
+                # Use decode_from_memory loop
+                out_scaled = self.model.decode_from_memory(
                     memory_vector, q_shear, q_static
                 )
-                preds_log.append(out_log.cpu().numpy())
+
+                # Inverse Transform per sample
+                q_shear_np = q_shear.cpu().numpy().reshape(-1, 1)
+                out_np = out_scaled.cpu().numpy().reshape(-1, 1)
+                combined = np.hstack([q_shear_np, out_np])
+
+                # Inverse to Log10 space
+                log_vals = self.physics_scaler.inverse_transform(combined)[:, 1]
+                preds_log.append(log_vals)
 
         self.model.eval()
 
+        # Convert Log10 -> Linear
         stack_log = np.stack(preds_log)
-        stack_linear = np.power(10, stack_log).squeeze()
-        if stack_linear.ndim == 1:
-            stack_linear = stack_linear[:, None]
+        stack_linear = np.power(10, stack_log)
 
         mean_pred = np.mean(stack_linear, axis=0)
         std_pred = np.std(stack_linear, axis=0)
-
         lower_ci = np.percentile(stack_linear, ci_range[0], axis=0)
         upper_ci = np.percentile(stack_linear, ci_range[1], axis=0)
 
         stats = {"std": std_pred, "lower_ci": lower_ci, "upper_ci": upper_ci}
-
         return mean_pred, stats
 
-    def save(self, output_dir: str = None):
-        if output_dir is None:
-            output_dir = self.model_dir
-        save_path = os.path.join(output_dir, "best_model.pth")
-        checkpoint = {
-            "state_dict": self.model.state_dict(),
-            "config": self.config,
-            "static_dim": self.static_dim,
-        }
-        torch.save(checkpoint, save_path)
 
-
+# ==========================================
+# 4. Main Execution (Test)
+# ==========================================
 if __name__ == "__main__":
-    import io
-    import os
+    # Test Configuration
+    model_dir = "models/experiments/o_net"
+    training_file = "data/raw/formulation_data_02052026.csv"
 
-    import pandas as pd
+    # 1. Initialize
+    try:
+        predictor = ViscosityPredictorCNP(model_dir)
+        print("Model loaded successfully.")
+    except Exception as e:
+        print(f"Failed to load model: {e}")
+        exit()
 
-    # Configuration
-    model_dir = r"models/experiments/o_net"
-    training_file = "data/processed/formulation_data_augmented.csv"
+    # 2. Simulate Context Loading (Optional)
+    if os.path.exists(training_file):
+        print(f"Loading context from {training_file}...")
+        full_train_df = pd.read_csv(training_file)
+        # Filter for a specific protein to simulate "learning" a molecule
+        molecule_name = "Vudalimab"
+        history_df = full_train_df[
+            full_train_df["Protein_type"] == molecule_name
+        ].copy()
 
-    print(f"Loading training data from {training_file}...")
-    if not os.path.exists(training_file):
-        raise FileNotFoundError(f"Could not find training file: {training_file}")
-    hisorical_type = "Pembrolizumab"
-    full_train_df = pd.read_csv(training_file)
-    history_df = full_train_df[full_train_df["Protein_type"] == hisorical_type].copy()
-    print(f"Found {len(history_df)} historical '{hisorical_type}' samples.")
+        if not history_df.empty:
+            print(f"Adapting to {molecule_name} ({len(history_df)} samples)...")
+            # Using the new Calibrator-style learn loop
+            predictor.learn(history_df, steps=50, lr=1e-3)
+
+    # 3. Simulate Prediction
     target_data = """ID,Protein_type,Protein_class_type,kP,MW,PI_mean,PI_range,Protein_conc,Temperature,Buffer_type,Buffer_pH,Buffer_conc,Salt_type,Salt_conc,Stabilizer_type,Stabilizer_conc,Surfactant_type,Surfactant_conc,Excipient_type,Excipient_conc,C_Class,HCI,Viscosity_100,Viscosity_1000,Viscosity_10000,Viscosity_100000,Viscosity_15000000
-F426,Random,mAb_IgG4,3.5,149.0,7.57,0.3,135.0,25.0,Histidine,6.0,15,none,0,none,0.0,none,0.0,Arginine,100,1.3,1.1,21.6,16.1,12.7,9.4,2.2"""
+    F471,Vudalimab,Bispecific,5,152,8.1,0.3,100,25,Histidine,6,15,none,0,none,0,tween-80,0.05,none,0,1.5,1.3,2.63,2.63,2.5,2.19,1.9"""
 
     target_df = pd.read_csv(io.StringIO(target_data))
 
-    predictor = ViscosityPredictorCNP(model_dir)
-    if len(history_df) > 0:
-        print("\nAdapting model to class behavior...")
-        predictor.learn(history_df, fine_tune=True, steps=50, lr=1e-3)
+    print("\nRunning Prediction...")
+    # Uses the cached memory vector
+    results = predictor.predict(target_df)
 
-    print("\nPredicting Sample based on adapted knowledge...")
-    out = predictor.predict(target_df)
-
-    cols_actual = ["Viscosity_100", "Viscosity_1000", "Viscosity_15000000"]
-    cols_pred = ["Pred_Viscosity_100", "Pred_Viscosity_1000", "Pred_Viscosity_15000000"]
-
-    print("\n--- RESULTS ---")
-    print("Actual (Ground Truth):")
-    print(out[cols_actual].to_string(index=False))
-
-    print("\nPredicted (After Class Fine-Tuning):")
-    print(out[cols_pred].to_string(index=False))
+    print("\n--- Results ---")
+    cols_pred = [c for c in results.columns if "Pred_" in c]
+    print(results[cols_pred].to_string(index=False))
