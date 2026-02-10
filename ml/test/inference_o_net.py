@@ -726,7 +726,7 @@ if __name__ == "__main__":
         print(f"Loading context from {training_file}...")
         full_train_df = pd.read_csv(training_file)
         # Filter for a specific protein to simulate "learning" a molecule
-        molecule_name = "Vudalimab"
+        molecule_name = "Nivolumab"
         history_df = full_train_df[
             full_train_df["Protein_type"] == molecule_name
         ].copy()
@@ -738,7 +738,7 @@ if __name__ == "__main__":
 
     # 3. Simulate Prediction
     target_data = """ID,Protein_type,Protein_class_type,kP,MW,PI_mean,PI_range,Protein_conc,Temperature,Buffer_type,Buffer_pH,Buffer_conc,Salt_type,Salt_conc,Stabilizer_type,Stabilizer_conc,Surfactant_type,Surfactant_conc,Excipient_type,Excipient_conc,C_Class,HCI,Viscosity_100,Viscosity_1000,Viscosity_10000,Viscosity_100000,Viscosity_15000000
-    F471,Vudalimab,Bispecific,5,152,8.1,0.3,100,25,Histidine,6,15,none,0,none,0,tween-80,0.05,none,0,1.5,1.3,2.63,2.63,2.5,2.19,1.9"""
+    T1,Nivolumab,mAb_IgG4,3.5,146,8.8,0.3,240,25,Histidine,6,15,none,0,none,0,none,0.0,none,0,1.3,1.1,26.9,23.2,21.3,17.1,6.1"""
 
     target_df = pd.read_csv(io.StringIO(target_data))
 
