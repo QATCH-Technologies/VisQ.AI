@@ -1,6 +1,9 @@
+import datetime
 import io
+import logging
 import os
-from typing import Dict, List, Optional, Tuple
+import sys
+from typing import Tuple
 
 import joblib
 import numpy as np
@@ -8,6 +11,24 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+# ==========================================
+# 0. Logging Configuration
+# ==========================================
+# Create a timestamped log file
+log_filename = (
+    f"debug_inference_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+)
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler(log_filename),
+        logging.StreamHandler(sys.stdout),  # Also print to console
+    ],
+)
+logger = logging.getLogger("VisQ_Inference")
 
 
 # ==========================================
@@ -335,7 +356,9 @@ PRIOR_TABLE = {
 # ==========================================
 class ViscosityPredictorCNP:
     def __init__(self, model_dir: str):
+        logger.info(f"Initializing ViscosityPredictorCNP with model_dir: {model_dir}")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        logger.info(f"Using device: {self.device}")
         self.model_dir = model_dir
         self.memory_vector = None  # Stores the calibrated context
 
@@ -344,23 +367,30 @@ class ViscosityPredictorCNP:
         self.scaler_path = os.path.join(model_dir, "physics_scaler.pkl")
 
         if not os.path.exists(self.preprocessor_path):
+            logger.error(f"Preprocessor not found at {self.preprocessor_path}")
             raise FileNotFoundError(
                 f"Preprocessor not found at {self.preprocessor_path}"
             )
         if not os.path.exists(self.scaler_path):
+            logger.error(f"Physics Scaler not found at {self.scaler_path}")
             raise FileNotFoundError(f"Physics Scaler not found at {self.scaler_path}")
 
+        logger.debug("Loading preprocessor and scaler...")
         self.preprocessor = joblib.load(self.preprocessor_path)
         self.physics_scaler = joblib.load(self.scaler_path)
 
         # 2. Load Model
         self.model_path = os.path.join(model_dir, "best_model.pth")
         if not os.path.exists(self.model_path):
+            logger.error(f"Model checkpoint not found at {self.model_path}")
             raise FileNotFoundError(f"Model checkpoint not found at {self.model_path}")
 
+        logger.debug(f"Loading model checkpoint from {self.model_path}")
         checkpoint = torch.load(self.model_path, map_location=self.device)
         self.config = checkpoint["config"]
         self.static_dim = checkpoint["static_dim"]
+        logger.debug(f"Model config: {self.config}")
+        logger.debug(f"Static dimension: {self.static_dim}")
 
         # Initialize the standalone model class
         self.model = CrossSampleCNP(
@@ -412,10 +442,16 @@ class ViscosityPredictorCNP:
     # Physics Helpers (Internal)
     # ------------------------------------------------------------------
     def _calculate_cci(self, row):
-        c_class = row.get("C_Class", 1.0)
-        ph = row.get("Buffer_pH", 7.0)
-        pi = row.get("PI_mean", 7.0)
-        # Handle potential NaNs
+        try:
+            c_class = float(row.get("C_Class", 1.0))
+            ph = float(row.get("Buffer_pH", 7.0))
+            pi = float(row.get("PI_mean", 7.0))
+        except ValueError as e:
+            logger.warning(
+                f"Error converting CCI inputs to float: {e}. Row: {row.to_dict()}"
+            )
+            c_class, ph, pi = 1.0, 7.0, 7.0
+
         if pd.isna(ph):
             ph = 7.0
         if pd.isna(pi):
@@ -469,7 +505,10 @@ class ViscosityPredictorCNP:
 
         for type_col, conc_col in scan_cols:
             ing_name = str(row.get(type_col, "none")).lower()
-            ing_conc = float(row.get(conc_col, 0.0))
+            try:
+                ing_conc = float(row.get(conc_col, 0.0))
+            except Exception:
+                ing_conc = 0.0
 
             if ing_name in ["none", "unknown", "nan"] or ing_conc <= 0:
                 continue
@@ -503,9 +542,34 @@ class ViscosityPredictorCNP:
     def _preprocess(
         self, df: pd.DataFrame
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        df_proc = df.copy()
+        logger.debug(f"--- PREPROCESSING START ---")
+        logger.debug(f"Input DataFrame Shape: {df.shape}")
+        logger.debug(f"Input DataFrame Columns: {df.columns.tolist()}")
 
+        # Log critical data types and stats to catch data mismatch
+        if "Protein_conc" in df.columns:
+            logger.debug(
+                f"Protein_conc stats - Min: {df['Protein_conc'].min()}, Max: {df['Protein_conc'].max()}, Dtype: {df['Protein_conc'].dtype}"
+            )
+        else:
+            logger.warning("Protein_conc column MISSING!")
+
+        if "Protein_class_type" in df.columns:
+            logger.debug(
+                f"Protein_class_type sample: {df['Protein_class_type'].unique()[:5]}"
+            )
+        else:
+            logger.warning("Protein_class_type column MISSING!")
+
+        df_proc = df.copy()
+        for col in df_proc.select_dtypes(include=["object"]):
+            df_proc[col] = df_proc[col].apply(
+                lambda x: x.value if hasattr(x, "value") else x
+            )
         # 1. Normalize Categories
+        if "ID" in df_proc.columns:
+            df_proc.drop(columns=["ID"], inplace=True)
+
         for c in self.cat_cols:
             if c in df_proc.columns:
                 df_proc[c] = df_proc[c].astype(str).str.lower()
@@ -514,6 +578,7 @@ class ViscosityPredictorCNP:
                 df_proc[c] = "unknown"
 
         # 2. Compute New Features
+        logger.debug("Computing physics features...")
         new_features = df_proc.apply(
             self._calculate_physics_features, axis=1, result_type="expand"
         )
@@ -525,11 +590,17 @@ class ViscosityPredictorCNP:
             if hasattr(self.preprocessor, "feature_names_in_")
             else []
         )
+        # Log expected features vs present features
+        missing_feats = [col for col in feature_names if col not in df_proc.columns]
+        if missing_feats:
+            logger.warning(f"Missing features filled with 0.0: {missing_feats}")
+
         for col in feature_names:
             if col not in df_proc.columns:
                 df_proc[col] = 0.0
 
         X_static = self.preprocessor.transform(df_proc)
+        logger.debug(f"Static features transformed shape: {X_static.shape}")
 
         # 4. Physics Flattening & Scaling (Log-Log)
         points_list = []
@@ -566,6 +637,9 @@ class ViscosityPredictorCNP:
         shear_t = points_t[:, :, [0]]
         visc_t = points_t[:, :, [1]]
 
+        logger.debug(
+            f"Final Tensor Shapes -> Static: {static_t.shape}, Shear: {shear_t.shape}, Visc: {visc_t.shape}"
+        )
         return static_t, shear_t, visc_t
 
     def learn(
@@ -578,14 +652,14 @@ class ViscosityPredictorCNP:
         Fine-tunes the model on the provided samples (Calibrator Logic).
         """
         if df.empty:
+            logger.warning("Context DataFrame is empty. Skipping learning.")
             print("Warning: Context DataFrame is empty. Skipping learning.")
             return
 
+        logger.info(f" > Learn triggered on {len(df)} samples for {steps} steps.")
         print(f" > Calibrating on {len(df)} samples for {steps} steps...")
 
         # 1. Preprocess Data to get Tensors
-        # _preprocess effectively does the "stacking" of all points from all samples
-        # into a single batch [1, Total_Points, Dim]
         static_t, shear_t, visc_t = self._preprocess(df)
 
         # 2. Build Context Tensor: [Shear, Visc, Static]
@@ -605,25 +679,34 @@ class ViscosityPredictorCNP:
             loss.backward()
             optimizer.step()
 
+            if i % 10 == 0:
+                logger.debug(f"Step {i}/{steps} Loss: {loss.item():.5f}")
+
+        logger.info(f" > Calibration complete. Final MSE: {loss.item():.5f}")
         print(f" > Calibration complete. Final MSE: {loss.item():.5f}")
 
         self.model.eval()
         with torch.no_grad():
             self.memory_vector = self.model.encode_memory(context_t)
+            logger.debug(f"Memory vector encoded. Shape: {self.memory_vector.shape}")
 
     def predict(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Predicts using the cached memory (calibrated state).
         """
+        logger.info(f"Predict triggered on {len(df)} samples.")
+
         # 1. Context Resolution
         memory_vector = self.memory_vector
 
         # Handle Zero-Shot (if learn was never called)
         if memory_vector is None:
+            logger.warning(
+                "Memory vector is None. Performing Zero-Shot prediction (using zero tensor)."
+            )
             memory_vector = torch.zeros((1, self.config["latent_dim"])).to(self.device)
 
         # 2. Prepare Query
-        # _preprocess handles expanding the static vector for the query shear rates
         q_static, q_shear, _ = self._preprocess(df)
 
         # 3. Decode from Memory (using cached vector)
@@ -657,6 +740,7 @@ class ViscosityPredictorCNP:
         for k, v in new_cols.items():
             results[f"Pred_{k}"] = v
 
+        logger.info("Prediction complete.")
         return results
 
     def predict_with_uncertainty(
@@ -665,6 +749,7 @@ class ViscosityPredictorCNP:
         n_samples: int = 20,
         ci_range: Tuple[float, float] = (2.5, 97.5),
     ):
+        logger.info(f"Predict with Uncertainty triggered. n_samples={n_samples}")
         self.model.train()  # Enable Dropout
 
         memory_vector = self.memory_vector
@@ -675,7 +760,7 @@ class ViscosityPredictorCNP:
 
         preds_log = []
         with torch.no_grad():
-            for _ in range(n_samples):
+            for i in range(n_samples):
                 # Use decode_from_memory loop
                 out_scaled = self.model.decode_from_memory(
                     memory_vector, q_shear, q_static
@@ -702,6 +787,7 @@ class ViscosityPredictorCNP:
         upper_ci = np.percentile(stack_linear, ci_range[1], axis=0)
 
         stats = {"std": std_pred, "lower_ci": lower_ci, "upper_ci": upper_ci}
+        logger.info("Uncertainty calculation complete.")
         return mean_pred, stats
 
 
@@ -711,7 +797,7 @@ class ViscosityPredictorCNP:
 if __name__ == "__main__":
     # Test Configuration
     model_dir = "models/experiments/o_net"
-    training_file = "data/raw/formulation_data_02052026.csv"
+    training_file = "data/raw/formulation_data_02122026.csv"
 
     # 1. Initialize
     try:
@@ -721,11 +807,48 @@ if __name__ == "__main__":
         print(f"Failed to load model: {e}")
         exit()
 
-    # 2. Simulate Context Loading (Optional)
     if os.path.exists(training_file):
         print(f"Loading context from {training_file}...")
         full_train_df = pd.read_csv(training_file)
-        # Filter for a specific protein to simulate "learning" a molecule
+        int_cols = full_train_df.select_dtypes(
+            include=["int", "int64", "int32"]
+        ).columns
+
+        # Convert them to float
+        for col in int_cols:
+            if (
+                col != "ID"
+            ):  # specific exception for ID if you want to keep it as int/string
+                full_train_df[col] = full_train_df[col].astype(float)
+
+        # Check if ID should be string to avoid issues
+        full_train_df["ID"] = full_train_df["ID"].astype(str)
+        molecule_name = "Ibalizumab"
+        history_df = full_train_df[
+            full_train_df["Protein_type"] == molecule_name
+        ].copy()
+
+        if not history_df.empty:
+            print(f"Adapting to {molecule_name} ({len(history_df)} samples)...")
+            # Using the new Calibrator-style learn loop
+            predictor.learn(history_df, steps=50, lr=1e-3)
+            history_df.to_csv("debug.csv")
+    if os.path.exists(training_file):
+        print(f"Loading context from {training_file}...")
+        full_train_df = pd.read_csv(training_file)
+        int_cols = full_train_df.select_dtypes(
+            include=["int", "int64", "int32"]
+        ).columns
+
+        # Convert them to float
+        for col in int_cols:
+            if (
+                col != "ID"
+            ):  # specific exception for ID if you want to keep it as int/string
+                full_train_df[col] = full_train_df[col].astype(float)
+
+        # Check if ID should be string to avoid issues
+        full_train_df["ID"] = full_train_df["ID"].astype(str)
         molecule_name = "Nivolumab"
         history_df = full_train_df[
             full_train_df["Protein_type"] == molecule_name
@@ -735,17 +858,17 @@ if __name__ == "__main__":
             print(f"Adapting to {molecule_name} ({len(history_df)} samples)...")
             # Using the new Calibrator-style learn loop
             predictor.learn(history_df, steps=50, lr=1e-3)
+            history_df.to_csv("debug.csv")
 
     # 3. Simulate Prediction
     target_data = """ID,Protein_type,Protein_class_type,kP,MW,PI_mean,PI_range,Protein_conc,Temperature,Buffer_type,Buffer_pH,Buffer_conc,Salt_type,Salt_conc,Stabilizer_type,Stabilizer_conc,Surfactant_type,Surfactant_conc,Excipient_type,Excipient_conc,C_Class,HCI,Viscosity_100,Viscosity_1000,Viscosity_10000,Viscosity_100000,Viscosity_15000000
-    T1,Nivolumab,mAb_IgG4,3.5,146,8.8,0.3,240,25,Histidine,6,15,none,0,none,0,none,0.0,none,0,1.3,1.1,26.9,23.2,21.3,17.1,6.1"""
-
+   F494,Nivolumab,mAb_IgG4,3.5,146,8.8,0.3,300,25.21,Histidine,6,15,none,0,none,0,none,0,none,0,1.3,1.1,108.62763247668865,110.48915866313887,113.44864108990167,112.93919802120153,28.598067758622932"""
     target_df = pd.read_csv(io.StringIO(target_data))
-
+    target_df.to_csv("debug_predict.csv")
     print("\nRunning Prediction...")
     # Uses the cached memory vector
-    results = predictor.predict(target_df)
-
-    print("\n--- Results ---")
-    cols_pred = [c for c in results.columns if "Pred_" in c]
-    print(results[cols_pred].to_string(index=False))
+    results = predictor.predict_with_uncertainty(target_df)
+    print(results)
+# print("\n--- Results ---")
+# cols_pred = [c for c in results.columns if "Pred_" in c]
+# print(results[cols_pred].to_string(index=False))
