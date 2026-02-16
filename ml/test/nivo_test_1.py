@@ -10,7 +10,7 @@ from inference_o_net import ViscosityPredictorCNP
 # 1. Configuration
 # ==========================================
 # Update this path to where your model files are located
-MODEL_DIR = "models/experiments/o_net_no_nivo"
+MODEL_DIR = "models/experiments/o_net"
 DATA_FILE = "data/raw/formulation_data_02122026.csv"
 OUTPUT_FILE = "nivolumab_predictions.xlsx"
 
@@ -43,14 +43,14 @@ def create_scenario_df(concs):
                 "Buffer_type": "Histidine",
                 "Buffer_pH": 6.0,
                 "Buffer_conc": 15.0,
-                "Salt_type": "NaCl",
-                "Salt_conc": 70.0,
-                "Surfactant_type": "tween-80",
-                "Surfactant_conc": 0.05,
-                "Stabilizer_type": "Sucrose",
-                "Stabilizer_conc": 0.2,  # 0.2 Molar
-                "Excipient_type": "Lysine",
-                "Excipient_conc": 25.0,
+                "Salt_type": "none",
+                "Salt_conc": 0.0,
+                "Surfactant_type": "none",
+                "Surfactant_conc": 0.0,
+                "Stabilizer_type": "none",
+                "Stabilizer_conc": 0.0,  # 0.2 Molar
+                "Excipient_type": "none",
+                "Excipient_conc": 0.0,
                 "Protein_conc": c,
                 "ID": f"Nivo_{int(c)}mg",
             }
