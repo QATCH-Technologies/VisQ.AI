@@ -43,14 +43,14 @@ def create_scenario_df(concs):
                 "Buffer_type": "Histidine",
                 "Buffer_pH": 6.0,
                 "Buffer_conc": 15.0,
-                "Salt_type": "none",
-                "Salt_conc": 0.0,
-                "Surfactant_type": "none",
-                "Surfactant_conc": 0.0,
-                "Stabilizer_type": "none",
-                "Stabilizer_conc": 0.0,  # 0.2 Molar
-                "Excipient_type": "none",
-                "Excipient_conc": 0.0,
+                "Salt_type": "NaCl",
+                "Salt_conc": 70,
+                "Surfactant_type": "tween-80",
+                "Surfactant_conc": 0.05,
+                "Stabilizer_type": "Sucrose",
+                "Stabilizer_conc": 0.2,  # 0.2 Molar
+                "Excipient_type": "Lysine",
+                "Excipient_conc": 25,
                 "Protein_conc": c,
                 "ID": f"Nivo_{int(c)}mg",
             }
@@ -93,7 +93,6 @@ def run():
             print(
                 f" > Found {len(nivo_train_df)} historical Nivolumab samples. Learning..."
             )
-            input(nivo_train_df)
             predictor.learn(nivo_train_df, steps=50, lr=1e-3)
 
             print(" > Running ICL Prediction...")
