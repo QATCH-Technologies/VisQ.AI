@@ -1,5 +1,5 @@
 """
-train_o_net_v2.py
+train_o_net_v3.py
 =================
 Improved training script for CrossSampleCNP.
 
@@ -82,26 +82,69 @@ from sklearn.model_selection import LeaveOneGroupOut
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 # ==========================================
+# 0. Protein class map for hard negative mining (FIX-A)
+# ==========================================
+# Groups in the same class are "hard negatives" — they share similar static
+# features and are the most important pairs for the contrastive loss to
+# distinguish. We also exclude non-protein (buffer-only) groups from
+# contrastive sampling so their easy protein-vs-buffer signal doesn't dominate.
+
+# Lowercase keys matching the "group" field produced by load_and_preprocess
+PROTEIN_CLASS_MAP = {
+    "adalimumab": "igg1",
+    "bevacizumab": "igg1",
+    "trastuzumab": "igg1",
+    "pembrolizumab": "igg4",
+    "ibalizumab": "igg4",
+    "nivolumab": "igg4",
+    "belatacept": "fc_fusion",
+    "etanercept": "fc_fusion",
+    "vudalimab": "bispecific",
+    "poly-higg": "polyclonal",
+    "bgg": "polyclonal",
+    "bsa": "other",
+}
+# Groups excluded from contrastive/consistency sampling — they don't represent
+# a specific protein type and would produce trivially easy negative examples.
+NON_PROTEIN_GROUPS = {"none"}
+
+
+# ==========================================
 # 1. Model Architecture
 # ==========================================
 
 
+# class AttentionPool(nn.Module):
+#     def __init__(self, latent_dim, n_heads=4):
+#         super().__init__()
+#         self.attn = nn.MultiheadAttention(latent_dim, n_heads, batch_first=True)
+#         self.query = nn.Parameter(torch.randn(1, 1, latent_dim))
+#         # [FIX-1] LayerNorm stabilizes the pooler output scale during training.
+#         # Without this, the latent magnitude drifts and the decoder becomes
+#         # increasingly insensitive to r (since it's dominated by static features
+#         # which are already StandardScaler-normalized).
+#         self.norm = nn.LayerNorm(latent_dim)
+
+
+#     def forward(self, x):
+#         q = self.query.expand(x.size(0), -1, -1)
+#         out, _ = self.attn(q, x, x)
+#         # [FIX-1] Apply LayerNorm before returning
+#         return self.norm(out.squeeze(1))
 class AttentionPool(nn.Module):
     def __init__(self, latent_dim, n_heads=4):
         super().__init__()
         self.attn = nn.MultiheadAttention(latent_dim, n_heads, batch_first=True)
         self.query = nn.Parameter(torch.randn(1, 1, latent_dim))
-        # [FIX-1] LayerNorm stabilizes the pooler output scale during training.
-        # Without this, the latent magnitude drifts and the decoder becomes
-        # increasingly insensitive to r (since it's dominated by static features
-        # which are already StandardScaler-normalized).
-        self.norm = nn.LayerNorm(latent_dim)
+        # [REMOVED FIX-1] LayerNorm was restricting the magnitude of the latent vector,
+        # preventing the model from scaling the viscosity curve for extreme groups.
+        # We remove it to restore the "volume control" capability.
 
     def forward(self, x):
         q = self.query.expand(x.size(0), -1, -1)
         out, _ = self.attn(q, x, x)
-        # [FIX-1] Apply LayerNorm before returning
-        return self.norm(out.squeeze(1))
+        # Return unnormalized output so the magnitude can grow to encode curve intensity
+        return out.squeeze(1)
 
 
 class CrossSampleCNP(nn.Module):
@@ -649,11 +692,12 @@ def train_epoch(
     optimizer,
     device,
     iterations=100,
-    group_weights=None,  # [FIX-6] per-group sampling weights
-    lambda_contrastive=0.05,  # [FIX-3] weight for inter-group repulsion
-    lambda_consistency=0.02,  # [FIX-4] weight for within-group consistency
-    lambda_utility=0.10,  # [FIX-5] weight for context utility
-    contrastive_margin=0.3,  # cosine similarity margin for contrastive loss
+    group_weights=None,
+    lambda_triplet=0.30,
+    lambda_consistency=0.02,
+    # Increased utility penalty slightly to enforce the new unmasked rule
+    lambda_utility=0.75,
+    triplet_margin=3.0,
 ):
     model.train()
     total_loss = 0
@@ -663,38 +707,27 @@ def train_epoch(
     for s in samples:
         groups[s["group"]].append(s)
 
-    # [FIX-6] Build sampling probability distribution from group_weights.
-    # Groups not in group_weights (or None) get uniform weight.
+    all_protein_list = [
+        g for g, sl in groups.items() if len(sl) >= 4 and g not in NON_PROTEIN_GROUPS
+    ]
     protein_list = [g for g, sl in groups.items() if len(sl) >= 4]
+
     if group_weights is not None:
         raw_w = np.array([group_weights.get(g, 1.0) for g in protein_list], dtype=float)
     else:
         raw_w = np.ones(len(protein_list), dtype=float)
     sampling_probs = raw_w / raw_w.sum()
 
-    # Track per-group loss for [FIX-6] weight update after epoch
     group_loss_accum = defaultdict(float)
     group_loss_count = defaultdict(int)
 
     for _ in range(iterations):
-        # [FIX-3] Sample TWO distinct groups each iteration so we can compute
-        # the contrastive loss without an extra forward pass.
         if len(protein_list) < 2:
-            prot_A = np.random.choice(protein_list, p=sampling_probs)
-            prot_B = prot_A
-        else:
-            idx_A = np.random.choice(len(protein_list), p=sampling_probs)
-            prot_A = protein_list[idx_A]
-            # Sample prot_B from everything except prot_A
-            mask = np.ones(len(protein_list))
-            mask[idx_A] = 0
-            mask /= mask.sum()
-            prot_B = protein_list[np.random.choice(len(protein_list), p=mask)]
-
+            continue
+        idx_anchor = np.random.choice(len(protein_list), p=sampling_probs)
+        prot_A = protein_list[idx_anchor]
         task_A = groups[prot_A]
-        task_B = groups[prot_B]
 
-        # ---- Task A: standard CNP loss ----
         idx_A = np.random.permutation(len(task_A))
         n_ctx_A = np.random.randint(1, min(12, len(idx_A) - 1))
         ctx_A = _build_ctx_tensor(task_A, idx_A[:n_ctx_A], device)
@@ -702,9 +735,9 @@ def train_epoch(
         if qx_A is None:
             continue
 
-        # Apply static masking augmentation
-        if np.random.random() < 0.3:
-            mask = torch.bernoulli(torch.full_like(qstat_A, 0.7))
+        # Main forward pass (with masking to force r-dependence)
+        if np.random.random() < 0.60:
+            mask = torch.bernoulli(torch.full_like(qstat_A, 0.5))
             qstat_A_in = qstat_A * mask
         else:
             qstat_A_in = qstat_A
@@ -712,60 +745,69 @@ def train_epoch(
         pred_A = model(ctx_A, qx_A, qstat_A_in)
         mse_loss = F.mse_loss(pred_A, qy_A)
 
-        # ---- [FIX-2] NO latent_reg = torch.mean(r**2) ----
-        # The original L2 penalty was training r → 0. Removed entirely.
-        # The pooler now has LayerNorm [FIX-1] to prevent scale drift instead.
-
-        # ---- [FIX-5] Context utility loss ----
-        # Compute a "null" prediction using a zero context vector (same shape
-        # as ctx_A but filled with zeros). If the model's real context prediction
-        # is not better than the null, penalize. This forces the model to actively
-        # use context rather than ignore r.
-        null_ctx = torch.zeros_like(ctx_A)
+        # ---- [THE FIX] Context utility loss on UNMASKED features ----
+        # Force the model to prove 'r' is useful EVEN WHEN static features are perfect.
         with torch.no_grad():
-            pred_null = model(null_ctx, qx_A, qstat_A_in)
+            # Null prediction with PERFECT static features
+            pred_null = model(torch.zeros_like(ctx_A), qx_A, qstat_A)
         mse_null = F.mse_loss(pred_null, qy_A).detach()
-        mse_ctx = F.mse_loss(pred_A, qy_A)
-        # We want mse_ctx < mse_null, so penalize max(0, mse_ctx - mse_null + eps)
-        # A small epsilon prevents the penalty from disappearing when they're equal.
-        utility_loss = torch.clamp(mse_ctx - mse_null + 1e-3, min=0.0)
 
-        # ---- [FIX-3] Contrastive loss: push r_A and r_B apart ----
-        # Compute latent for group A and a random context from group B.
-        r_A = model.encode_memory(ctx_A)  # [1, latent_dim]
-        idx_B = np.random.permutation(len(task_B))
-        n_ctx_B = np.random.randint(1, min(8, len(idx_B)))
-        ctx_B = _build_ctx_tensor(task_B, idx_B[:n_ctx_B], device)
-        r_B = model.encode_memory(ctx_B)  # [1, latent_dim]
+        # Real prediction with PERFECT static features
+        pred_ctx_unmasked = model(ctx_A, qx_A, qstat_A)
+        mse_ctx_unmasked = F.mse_loss(pred_ctx_unmasked, qy_A)
 
-        # Cosine similarity between r_A and r_B. We want this to be LOW
-        # (different proteins should have different latent representations).
-        cos_AB = F.cosine_similarity(r_A, r_B, dim=-1)  # scalar in [-1, 1]
-        # Hinge: only penalize if similarity exceeds -margin (i.e., they're too similar)
-        contrastive_loss = torch.clamp(cos_AB + contrastive_margin, min=0.0).mean()
+        # Penalize if context doesn't improve upon the perfect static features
+        utility_loss = torch.clamp(mse_ctx_unmasked - mse_null + 1e-3, min=0.0)
 
-        # ---- [FIX-4] Within-group consistency loss ----
-        # Split group A's context into two random halves and compute r for each.
-        # The two r vectors should be similar (same protein, different formulations).
-        # Only do this when group A has enough samples to split.
+        # ---- Triplet loss ----
+        triplet_loss = torch.tensor(0.0, device=device)
         consistency_loss = torch.tensor(0.0, device=device)
-        if len(task_A) >= 4:
-            split = len(idx_A) // 2
-            if split >= 1 and (len(idx_A) - split) >= 1:
-                ctx_A1 = _build_ctx_tensor(task_A, idx_A[:split], device)
-                ctx_A2 = _build_ctx_tensor(task_A, idx_A[split:], device)
-                r_A1 = model.encode_memory(ctx_A1)
-                r_A2 = model.encode_memory(ctx_A2)
-                # We want cosine similarity to be HIGH (close to 1)
-                cos_within = F.cosine_similarity(r_A1, r_A2, dim=-1)
-                # Penalize 1 - similarity (push toward similarity=1)
-                consistency_loss = (1.0 - cos_within).mean()
+
+        if prot_A in all_protein_list and len(all_protein_list) >= 2:
+            perm_full = np.random.permutation(len(task_A))
+            half = max(1, len(perm_full) // 2)
+            r_anchor = model.encode_memory(
+                _build_ctx_tensor(task_A, perm_full[:half], device)
+            )
+            r_pos = model.encode_memory(
+                _build_ctx_tensor(task_A, perm_full[half:], device)
+            )
+
+            cos_within = F.cosine_similarity(r_anchor, r_pos, dim=-1)
+            consistency_loss = (1.0 - cos_within).mean()
+
+            class_A = PROTEIN_CLASS_MAP.get(prot_A, "unknown")
+            same_class_negs = [
+                g
+                for g in all_protein_list
+                if g != prot_A and PROTEIN_CLASS_MAP.get(g, "") == class_A
+            ]
+            diff_class_negs = [g for g in all_protein_list if g != prot_A]
+
+            if same_class_negs and np.random.random() < 0.70:
+                prot_B = np.random.choice(same_class_negs)
+            elif diff_class_negs:
+                prot_B = np.random.choice(diff_class_negs)
+            else:
+                prot_B = prot_A
+
+            task_B = groups[prot_B]
+            idx_B = np.random.permutation(len(task_B))
+            n_ctx_B = np.random.randint(1, min(8, len(idx_B)))
+            r_neg = model.encode_memory(
+                _build_ctx_tensor(task_B, idx_B[:n_ctx_B], device)
+            )
+
+            d_pos = torch.sum((r_anchor - r_pos) ** 2, dim=-1).sqrt()
+            d_neg = torch.sum((r_anchor - r_neg) ** 2, dim=-1).sqrt()
+
+            triplet_loss = torch.clamp(d_pos - d_neg + triplet_margin, min=0.0).mean()
 
         # ---- Combined loss ----
         loss = (
             mse_loss
             + lambda_utility * utility_loss
-            + lambda_contrastive * contrastive_loss
+            + lambda_triplet * triplet_loss
             + lambda_consistency * consistency_loss
         )
 
@@ -781,11 +823,9 @@ def train_epoch(
         total_loss += loss.item()
         count += 1
 
-        # [FIX-6] Accumulate per-group MSE for difficulty weight update
         group_loss_accum[prot_A] += mse_loss.item()
         group_loss_count[prot_A] += 1
 
-    # Return training loss and per-group MSE dict for [FIX-6] weight update
     per_group_mse = {
         g: group_loss_accum[g] / group_loss_count[g]
         for g in group_loss_accum
@@ -854,10 +894,16 @@ def validate(model, samples, device, n_repeats=3):
 
 def log_latent_variance(model, samples, device):
     """
-    [FIX-9] Compute mean inter-group latent L2 distance.
-    If this value stays near zero, context collapse is still occurring and
-    needs further investigation. Should increase as training progresses.
-    Returns a scalar: mean pairwise L2 distance between group latent centroids.
+    [FIX-9 / FIX-B] Compute protein-only inter-group latent L2 distance.
+
+    IMPORTANT: buffer-only groups (e.g. "none") are excluded from this metric.
+    Including them was producing a misleadingly high separation ratio in v2
+    because the protein-vs-buffer distinction is trivially easy and was masking
+    the fact that protein-protein discrimination was near-zero.
+
+    Returns:
+        protein_separation: mean pairwise L2 between protein group centroids
+                            (the number that should be growing during training)
     """
     model.eval()
     groups = defaultdict(list)
@@ -868,6 +914,10 @@ def log_latent_variance(model, samples, device):
     with torch.no_grad():
         for prot, task_samples in groups.items():
             if len(task_samples) < 2:
+                continue
+            # [FIX-B] Skip non-protein groups — their easy separability
+            # was inflating the v2 separation ratio to a false 18×
+            if prot in NON_PROTEIN_GROUPS:
                 continue
             idx = np.random.permutation(len(task_samples))[: min(5, len(task_samples))]
             ctx_items = []
@@ -882,8 +932,7 @@ def log_latent_variance(model, samples, device):
     if len(group_r) < 2:
         return 0.0
 
-    vecs = np.stack(list(group_r.values()))  # [n_groups, latent_dim]
-    # Pairwise L2 distances between group centroid vectors
+    vecs = np.stack(list(group_r.values()))  # [n_protein_groups, latent_dim]
     dists = []
     for i in range(len(vecs)):
         for j in range(i + 1, len(vecs)):
@@ -891,25 +940,20 @@ def log_latent_variance(model, samples, device):
     return float(np.mean(dists))
 
 
-# ==========================================
-# 4. Optuna Objective
-# ==========================================
-
-
 def objective_cv(trial, samples, static_dim, device):
-    hidden_dim = trial.suggest_int("hidden_dim", 64, 256, step=32)
-    latent_dim = trial.suggest_int("latent_dim", 32, 128, step=32)
+    # [KEPT] Force wider bottleneck to prevent latent routing failure.
+    hidden_dim = trial.suggest_int("hidden_dim", 128, 256, step=64)
+    latent_dim = trial.suggest_int("latent_dim", 128, 256, step=64)
     dropout = trial.suggest_float("dropout", 0.05, 0.3)
     lr = trial.suggest_float("lr", 1e-4, 5e-3, log=True)
     weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-2, log=True)
 
-    # [FIX-7] True group-held-out CV using LeaveOneGroupOut.
-    # Each fold holds out ALL samples of one protein type entirely.
-    # With ~14 groups this gives 14 folds. We limit to 6 folds for tuning speed
-    # by randomly selecting a subset of groups to hold out.
-    all_groups = list(set(s["group"] for s in samples))
-    # Use a deterministic subset for speed: every other group
-    held_out_groups = all_groups[::2][:6]
+    hard_groups = ["etanercept", "vudalimab", "pembrolizumab", "ibalizumab"]
+    medium_groups = ["adalimumab", "poly-higg", "nivolumab"]
+    priority_held_out = [
+        g for g in hard_groups + medium_groups if any(s["group"] == g for s in samples)
+    ]
+    held_out_groups = priority_held_out[:6]
 
     fold_scores = []
     for fold_idx, held_out in enumerate(held_out_groups):
@@ -944,7 +988,7 @@ def objective_cv(trial, samples, static_dim, device):
 
 if __name__ == "__main__":
     data = "data/raw/formulation_data_02162026.csv"
-    out = "./models/experiments/o_net_v2"
+    out = "./models/experiments/o_net_v3"
     trials = 50
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -986,12 +1030,20 @@ if __name__ == "__main__":
         weight_decay=best_params["weight_decay"],
     )
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.5, patience=15
+        # [FIX-E] patience=25 (was 15) — allow the 4-term loss more time to
+        # settle before stepping down LR. In v2 the LR had halved twice by
+        # epoch 20, preventing the triplet loss from finding a good equilibrium.
+        optimizer,
+        mode="min",
+        factor=0.5,
+        patience=25,
     )
 
     best_loss = float("inf")
     patience_counter = 0
-    patience_limit = 40
+    # [FIX-E] patience_limit=80 (was 40) — the multi-term loss + triplet loss
+    # needs more epochs to converge, especially after LR reductions.
+    patience_limit = 80
     best_state = None
 
     # Early stopping watchlist: hold out one full protein group
@@ -1047,8 +1099,10 @@ if __name__ == "__main__":
                 f"LR {current_lr:.2e} | LatentVar {latent_var:.3f} | "
                 f"Top hard: [{hard_str}]"
             )
-            # Warning if latent variance stays collapsed
-            if ep >= 30 and latent_var < 0.5:
+            # [FIX-B] Warning threshold updated: metric is now protein-only inter-group
+            # distance. v2 showed 2.9 at init but that was inflated by "none" group.
+            # Protein-only distance will start lower; < 0.2 after epoch 30 = still collapsed.
+            if ep >= 30 and latent_var < 0.2:
                 print(
                     f"  *** WARNING: LatentVar={latent_var:.3f} is very low. "
                     "Context collapse may still be occurring. Consider increasing "

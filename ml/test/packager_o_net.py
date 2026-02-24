@@ -152,7 +152,7 @@ class CNPModelPackager:
 # ==========================================
 def main():
     # Configuration
-    MODEL_DIR = "models/experiments/o_net"  # Where train_o_net.py saved outputs
+    MODEL_DIR = "models/experiments/o_net_dense"  # Where train_o_net.py saved outputs
     # Ensure this points to the standalone inference script
     CODE_FILE = "ml/test/inference_o_net.py"
     OUTPUT_DIR = "models/production"  # Where to put the .visq package
@@ -176,8 +176,8 @@ def main():
     # Run
     packager.package(
         package_name="VisQ-ICL",
-        version="1.0.1",
-        notes="Updated release including physics scaler for log-log inverse transformation.",
+        version="1.0.16",
+        notes="Increased target density space from 5 to 50 to improve s-curve effect.",
     )
 
 

@@ -547,49 +547,32 @@ class ViscosityPredictorCNP:
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         logger.debug(f"--- PREPROCESSING START ---")
         logger.debug(f"Input DataFrame Shape: {df.shape}")
+        logger.debug(f"Input DataFrame Columns: {df.columns.tolist()}")
+
+        # Log critical data types and stats to catch data mismatch
+        if "Protein_conc" in df.columns:
+            logger.debug(
+                f"Protein_conc stats - Min: {df['Protein_conc'].min()}, Max: {df['Protein_conc'].max()}, Dtype: {df['Protein_conc'].dtype}"
+            )
+        else:
+            logger.warning("Protein_conc column MISSING!")
+
+        if "Protein_class_type" in df.columns:
+            logger.debug(
+                f"Protein_class_type sample: {df['Protein_class_type'].unique()[:5]}"
+            )
+        else:
+            logger.warning("Protein_class_type column MISSING!")
 
         df_proc = df.copy()
-
-        # 0. Extract objects to values if needed
         for col in df_proc.select_dtypes(include=["object"]):
             df_proc[col] = df_proc[col].apply(
                 lambda x: x.value if hasattr(x, "value") else x
             )
-
+        # 1. Normalize Categories
         if "ID" in df_proc.columns:
             df_proc.drop(columns=["ID"], inplace=True)
 
-        # 1. Fill defaults for numeric columns (Matches Train)
-        num_cols = [
-            "kP",
-            "MW",
-            "PI_mean",
-            "PI_range",
-            "Protein_conc",
-            "Temperature",
-            "Buffer_pH",
-            "Buffer_conc",
-            "Salt_conc",
-            "Stabilizer_conc",
-            "Surfactant_conc",
-            "Excipient_conc",
-            "C_Class",
-            "HCI",
-        ]
-        for c in num_cols:
-            if c not in df_proc.columns:
-                df_proc[c] = 0.0
-            else:
-                df_proc[c] = df_proc[c].fillna(0.0)
-
-        # 2. Add Missing Feature Engineering (Matches Train)
-        logger.debug("Calculating concentration interaction features...")
-        df_proc["log_conc"] = np.log1p(df_proc["Protein_conc"])
-        df_proc["conc_sq"] = df_proc["Protein_conc"] ** 2
-        df_proc["conc_x_kP"] = df_proc["Protein_conc"] * df_proc["kP"]
-        df_proc["conc_x_HCI"] = df_proc["Protein_conc"] * df_proc["HCI"]
-
-        # 3. Normalize Categories
         for c in self.cat_cols:
             if c in df_proc.columns:
                 df_proc[c] = df_proc[c].astype(str).str.lower()
@@ -597,42 +580,32 @@ class ViscosityPredictorCNP:
             else:
                 df_proc[c] = "unknown"
 
-        # 4. Compute New Prior Features
+        # 2. Compute New Features
         logger.debug("Computing physics features...")
         new_features = df_proc.apply(
             self._calculate_physics_features, axis=1, result_type="expand"
         )
         df_proc = pd.concat([df_proc, new_features], axis=1)
 
+        # 3. Static Features Transformation
         feature_names = (
             self.preprocessor.feature_names_in_
             if hasattr(self.preprocessor, "feature_names_in_")
             else []
         )
-
-        # Target columns and ID are expected to be missing during inference
-        expected_missing = ["ID"] + list(self.shear_map.keys())
-
+        # Log expected features vs present features
         missing_feats = [col for col in feature_names if col not in df_proc.columns]
-        actual_missing = [col for col in missing_feats if col not in expected_missing]
+        if missing_feats:
+            logger.warning(f"Missing features filled with 0.0: {missing_feats}")
 
-        if actual_missing:
-            logger.warning(f"Missing static features filled with 0.0: {actual_missing}")
-        for col in missing_feats:
-            df_proc[col] = 0.0
+        for col in feature_names:
+            if col not in df_proc.columns:
+                df_proc[col] = 0.0
 
         X_static = self.preprocessor.transform(df_proc)
-
-        # Ensure no NaNs leaked into the matrix
-        if np.isnan(X_static).any():
-            logger.warning(
-                "NaNs found in X_static after preprocessing! Replacing with 0."
-            )
-            X_static = np.nan_to_num(X_static)
-
         logger.debug(f"Static features transformed shape: {X_static.shape}")
 
-        # 6. Physics Flattening & Scaling (Log-Log)
+        # 4. Physics Flattening & Scaling (Log-Log)
         points_list = []
         static_list = []
 
@@ -780,13 +753,6 @@ class ViscosityPredictorCNP:
         ci_range: Tuple[float, float] = (2.5, 97.5),
     ):
         logger.info(f"Predict with Uncertainty triggered. n_samples={n_samples}")
-
-        # 1. Prepare Data
-        # We need the context tensor to re-encode it multiple times
-        # Note: We rely on the internal cached context from the last 'learn' call if available
-        # Ideally, you might want to store 'context_t' in self during learn() to use it here.
-        # For now, we will stick to the cached memory_vector unless you want full epistemic uncertainty.
-
         self.model.train()  # Enable Dropout
 
         memory_vector = self.memory_vector
@@ -798,12 +764,7 @@ class ViscosityPredictorCNP:
         preds_log = []
         with torch.no_grad():
             for i in range(n_samples):
-                # OPTIONAL: To capture Encoder uncertainty, uncomment the lines below
-                # (requires saving self.context_t in learn())
-                if hasattr(self, "context_t"):
-                    memory_vector = self.model.encode_memory(self.context_t)
-
-                # Decode
+                # Use decode_from_memory loop
                 out_scaled = self.model.decode_from_memory(
                     memory_vector, q_shear, q_static
                 )
@@ -838,8 +799,8 @@ class ViscosityPredictorCNP:
 # ==========================================
 if __name__ == "__main__":
     # Test Configuration
-    model_dir = "models/experiments/o_net_dense"
-    training_file = "data/raw/formulation_data_02162026.csv"
+    model_dir = "models/experiments/o_net"
+    training_file = "data/raw/formulation_data_02122026.csv"
 
     # 1. Initialize
     try:
@@ -904,7 +865,7 @@ if __name__ == "__main__":
 
     # 3. Simulate Prediction
     target_data = """ID,Protein_type,Protein_class_type,kP,MW,PI_mean,PI_range,Protein_conc,Temperature,Buffer_type,Buffer_pH,Buffer_conc,Salt_type,Salt_conc,Stabilizer_type,Stabilizer_conc,Surfactant_type,Surfactant_conc,Excipient_type,Excipient_conc,C_Class,HCI,Viscosity_100,Viscosity_1000,Viscosity_10000,Viscosity_100000,Viscosity_15000000
-   F504,Nivolumab,mAb_IgG4,3.5,146,8.8,0.3,215,25.29,Histidine,6,15,NaCl,70,Sucrose,0.2,tween-80,0.05,Lysine,25,1.3,1.1,23.2,19.6,16.4,13.4,6.7"""
+   F494,Nivolumab,mAb_IgG4,3.5,146,8.8,0.3,300,25.21,Histidine,6,15,none,0,none,0,none,0,none,0,1.3,1.1,108.62763247668865,110.48915866313887,113.44864108990167,112.93919802120153,28.598067758622932"""
     target_df = pd.read_csv(io.StringIO(target_data))
     target_df.to_csv("debug_predict.csv")
     print("\nRunning Prediction...")
