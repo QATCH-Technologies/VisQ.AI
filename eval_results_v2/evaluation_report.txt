@@ -4,16 +4,16 @@ FEW-SHOT CONTEXT SIZE SWEEP (pre-trained model)
 ============================================================
   Context Size | Avg RMSE | Avg MAE
   ----------------------------------------
-  k= 1           | 0.3878   | 0.3126
-  k= 2           | 0.3857   | 0.3114
-  k= 3           | 0.3845   | 0.3095
-  k= 4           | 0.3875   | 0.3130
-  k= 5           | 0.3847   | 0.3112
-  k= 6           | 0.3854   | 0.3118
-  k= 7           | 0.3828   | 0.3088
-  k= 8           | 0.3813   | 0.3083
-  k= 9           | 0.3810   | 0.3092
-  k=10           | 0.3861   | 0.3130
+  k= 1           | nan   | nan
+  k= 2           | nan   | nan
+  k= 3           | nan   | nan
+  k= 4           | nan   | nan
+  k= 5           | nan   | nan
+  k= 6           | nan   | nan
+  k= 7           | nan   | nan
+  k= 8           | nan   | nan
+  k= 9           | nan   | nan
+  k=10           | nan   | nan
 
   Interpretation: Look for the 'elbow' where adding more context
   gives diminishing RMSE returns - that is your minimum viable
@@ -22,8 +22,8 @@ FEW-SHOT CONTEXT SIZE SWEEP (pre-trained model)
 ============================================================
 BOOTSTRAP CI (B=1000, group-level resampling)
 ============================================================
-  RMSE (log10 viscosity)        : 0.3687  [95% CI: 0.3094 – 0.4331]
-  MAE (log10 viscosity)         : 0.2882  [95% CI: 0.2394 – 0.3414]
+  RMSE (log10 viscosity)        : nan  [95% CI: nan – nan]
+  MAE (log10 viscosity)         : nan  [95% CI: nan – nan]
 
   NOTE: CI width reflects evaluation uncertainty due to limited data,
   not just model variance. Wide CI = your evaluation itself is noisy.
@@ -32,20 +32,20 @@ BOOTSTRAP CI (B=1000, group-level resampling)
 PER-GROUP DIAGNOSTICS (sorted by RMSE desc)
 ============================================================
   Top 5 hardest groups:
-    pembrolizumab                   n= 27  RMSE=0.5365+=0.0911 [SHEAR-THINNING]
-    trastuzumab                     n= 16  RMSE=0.5190+=0.0572 [SHEAR-THINNING]
-    ibalizumab                      n= 34  RMSE=0.4798+=0.0325 [SHEAR-THINNING]
-    bevacizumab                     n= 16  RMSE=0.4521+=0.0509 [SHEAR-THINNING]
-    nivolumab                       n= 19  RMSE=0.4512+=0.0701 [SHEAR-THINNING]
+    poly-higg                       n=139  RMSE=nan+=nan [SHEAR-THINNING]
+    none                            n= 88  RMSE=nan+=nan [SHEAR-THINNING]
+    bsa                             n= 49  RMSE=nan+=nan [SHEAR-THINNING]
+    bgg                             n= 26  RMSE=nan+=nan [SHEAR-THINNING]
+    adalimumab                      n= 34  RMSE=nan+=nan [SHEAR-THINNING]
 
 ============================================================
 LATENT VARIANCE DIAGNOSTIC (v3 - protein-only separation)
 ============================================================
-  Mean inter-protein L2 distance      : 5.0894
-  Mean inter-group L2 (all incl none) : 4.8304
-  Mean intra-group latent spread      : 0.5013
-  Separation ratio (protein-only)     : 10.15
-  Protein latent norm spread          : 7.34970
+  Mean inter-protein L2 distance      : nan
+  Mean inter-group L2 (all incl none) : nan
+  Mean intra-group latent spread      : nan
+  Separation ratio (protein-only)     : nan
+  Protein latent norm spread          : nan
 
   IMPORTANT: v2 reported separation_ratio=18.11 but that was inflated
   by the trivial protein-vs-buffer distinction ('none' group at norm 7.49
@@ -62,15 +62,15 @@ LATENT VARIANCE DIAGNOSTIC (v3 - protein-only separation)
 ============================================================
 CONTEXT UTILITY DIAGNOSTIC (real vs null context RMSE)
 ============================================================
-  Mean utility gain across groups  : 0.0415
-  Groups where context HURTS (< 0) : 7 / 13
+  Mean utility gain across groups  : nan
+  Groups where context HURTS (< 0) : 0 / 13
 
   Groups with lowest context utility (most likely to still be ignoring context):
-    bevacizumab                     real=0.4303  null=0.3278  gain=-0.3128 <- CONTEXT IGNORED
-    none                            real=0.2133  null=0.1987  gain=-0.0731 <- CONTEXT IGNORED
-    trastuzumab                     real=0.5084  null=0.4911  gain=-0.0350 <- CONTEXT IGNORED
-    pembrolizumab                   real=0.5504  null=0.5401  gain=-0.0191 <- CONTEXT IGNORED
-    ibalizumab                      real=0.4854  null=0.4763  gain=-0.0191 <- CONTEXT IGNORED
+    poly-higg                       real=nan  null=nan  gain=+nan
+    none                            real=nan  null=nan  gain=+nan
+    bsa                             real=nan  null=nan  gain=+nan
+    bgg                             real=nan  null=nan  gain=+nan
+    adalimumab                      real=nan  null=nan  gain=+nan
 
   Interpretation:
   - utility_gain > 0  -> context reduces error (model uses context)
