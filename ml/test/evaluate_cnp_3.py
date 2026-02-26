@@ -42,7 +42,7 @@ import torch.nn.functional as F
 from scipy.interpolate import PchipInterpolator
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from train_o_net_v3 import AttentionPool, CrossSampleCNP
+from train_cnp_3 import AttentionPool, CrossSampleCNP
 
 # ============================================================
 # 1. Preprocessing (mirrors train_o_net_no_phys.py exactly)

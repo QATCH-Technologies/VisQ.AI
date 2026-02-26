@@ -40,9 +40,9 @@ except ImportError:
 # ──────────────────────────────────────────────────────────────────────────────
 # CONFIG
 # ──────────────────────────────────────────────────────────────────────────────
-MODEL_DIR = r"models\experiments\o_net"
+MODEL_DIR = r"models\experiments\o_net_v3"
 DATA_CSV = r"data/raw/formulation_data_02162026.csv"
-OUTPUT_DIR = r"models\experiments\o_net\benchmarks"
+OUTPUT_DIR = r"models\experiments\o_net_v3\benchmarks"
 LEARN_STEPS = 50
 LEARN_LR = 1e-3
 SEED = 42
@@ -144,23 +144,20 @@ def has_nan(p):
 
 
 def metrics(true, pred):
-    """Return MAE, MAPE, log-RMSE, and R² on Viscosity_1000."""
+    """Return MAE, MAPE, RMSE, and R² on Viscosity_1000."""
     t = np.asarray(true, dtype=float)
     p = np.asarray(pred, dtype=float)
     mae = float(np.mean(np.abs(t - p)))
     mape = float(np.mean(np.abs((t - p) / np.clip(t, 1e-6, None))) * 100)
-    log_rmse = float(
-        np.sqrt(
-            np.mean(
-                (np.log10(np.clip(t, 1e-6, None)) - np.log10(np.clip(p, 1e-6, None)))
-                ** 2
-            )
-        )
-    )
+
+    # Raw RMSE in linear space (cP)
+    rmse = float(np.sqrt(np.mean((t - p) ** 2)))
+
     ss_res = np.sum((t - p) ** 2)
     ss_tot = np.sum((t - np.mean(t)) ** 2)
     r2 = float(1 - ss_res / (ss_tot + 1e-12))
-    return {"mae": mae, "mape": mape, "log_rmse": log_rmse, "r2": r2}
+
+    return {"mae": mae, "mape": mape, "rmse": rmse, "r2": r2}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -258,9 +255,8 @@ def run_per_protein(predictor, df: pd.DataFrame) -> pd.DataFrame:
             m = metrics(sub["True_Visc1000"], sub["Pred_Visc1000"])
             logger.info(
                 f"     MAE={m['mae']:.3f} cP  |  MAPE={m['mape']:.1f}%  |  "
-                f"log-RMSE={m['log_rmse']:.4f}  |  R2={m['r2']:.4f}"
+                f"RMSE={m['rmse']:.3f} cP  |  R2={m['r2']:.4f}"
             )
-
     return pd.DataFrame(all_records)
 
 
@@ -296,7 +292,7 @@ def plot_parity(results_df: pd.DataFrame, save_dir: str) -> str:
             "grid.linestyle": "-",
             "grid.linewidth": 0.7,
             "font.family": "DejaVu Sans",
-            "font.size": 11,
+            "font.size": 20,
         }
     )
 
@@ -324,49 +320,6 @@ def plot_parity(results_df: pd.DataFrame, save_dir: str) -> str:
         zorder=2,
         label="Perfect parity",
     )
-
-    # ── ±20% and ±50% error bands ─────────────────────────────────────────────
-    for factor, alpha, label in [(1.50, 0.07, "±50%"), (1.20, 0.12, "±20%")]:
-        ax.fill_between(
-            parity_x,
-            parity_x / factor,
-            parity_x * factor,
-            color=C_CYAN_PALE,
-            alpha=alpha,
-            zorder=1,
-        )
-    # Band edge lines
-    for factor, ls in [(1.20, (0, (4, 3))), (1.50, (0, (2, 4)))]:
-        ax.plot(
-            parity_x,
-            parity_x * factor,
-            color=C_CYAN_MED,
-            lw=0.8,
-            ls=ls,
-            zorder=2,
-            alpha=0.7,
-        )
-        ax.plot(
-            parity_x,
-            parity_x / factor,
-            color=C_CYAN_MED,
-            lw=0.8,
-            ls=ls,
-            zorder=2,
-            alpha=0.7,
-        )
-    # Band labels (right edge)
-    for factor, txt in [(1.20, "±20%"), (1.50, "±50%")]:
-        y_pos = hi / factor * 0.92
-        ax.text(
-            hi * 0.78,
-            y_pos,
-            txt,
-            fontsize=7.5,
-            color=C_CYAN_MED,
-            va="center",
-            alpha=0.9,
-        )
 
     # ── Scatter per protein type ──────────────────────────────────────────────
     for pt in protein_types:
@@ -408,10 +361,10 @@ def plot_parity(results_df: pd.DataFrame, save_dir: str) -> str:
 
     # ── Axis labels ───────────────────────────────────────────────────────────
     ax.set_xlabel(
-        "Measured  Viscosity @ 1000 s⁻¹  (cP)", fontsize=12, labelpad=10, color=C_TEXT
+        "Measured  Viscosity @ 1000 s⁻¹  (cP)", fontsize=16, labelpad=12, color=C_TEXT
     )
     ax.set_ylabel(
-        "Predicted  Viscosity @ 1000 s⁻¹  (cP)", fontsize=12, labelpad=10, color=C_TEXT
+        "Predicted  Viscosity @ 1000 s⁻¹  (cP)", fontsize=16, labelpad=12, color=C_TEXT
     )
 
     # ── Metrics box (top-left) ────────────────────────────────────────────────
@@ -419,7 +372,7 @@ def plot_parity(results_df: pd.DataFrame, save_dir: str) -> str:
         f"Overall  (N={len(results_df)})\n"
         f"MAE        {overall['mae']:.2f} cP\n"
         f"MAPE       {overall['mape']:.1f}%\n"
-        f"log-RMSE   {overall['log_rmse']:.4f}\n"
+        f"RMSE       {overall['rmse']:.2f} cP\n"
         f"R²         {overall['r2']:.4f}"
     )
     ax.text(
@@ -427,7 +380,7 @@ def plot_parity(results_df: pd.DataFrame, save_dir: str) -> str:
         0.97,
         metrics_text,
         transform=ax.transAxes,
-        fontsize=9,
+        fontsize=16,
         verticalalignment="top",
         horizontalalignment="left",
         color=C_TEXT,
@@ -441,47 +394,26 @@ def plot_parity(results_df: pd.DataFrame, save_dir: str) -> str:
         family="monospace",
     )
 
-    # ── Legend — parity reference lines only, no protein names ──────────────
+    # ── Legend — parity reference line only ───────────────────────────────────
     parity_handle = Line2D(
         [0], [0], color=C_DEEP_BLUE, lw=1.6, ls="--", label="Perfect parity"
     )
-    band_handle = Line2D(
-        [0],
-        [0],
-        color=C_CYAN_MED,
-        lw=1.2,
-        ls=(0, (4, 3)),
-        label="\u00b120% / \u00b150% bands",
-    )
     ax.legend(
-        handles=[parity_handle, band_handle],
-        labels=["Perfect parity", "\u00b120% / \u00b150% bands"],
+        handles=[parity_handle],
+        labels=["Perfect parity"],
         loc="lower right",
-        fontsize=9,
-        framealpha=0.95,
+        fontsize=13,
         edgecolor=C_BORDER,
         borderpad=0.8,
         handlelength=1.8,
     )
-
     # ── Title ─────────────────────────────────────────────────────────────────
     ax.set_title(
         "Viscosity @ 1000 s\u207b\u00b9 \u2014 Calibration Parity",
-        fontsize=13,
-        fontweight="bold",
+        fontsize=17,
         pad=14,
         color=C_TEXT,
         loc="left",
-    )
-    fig.text(
-        0.0,
-        -0.02,
-        "Each protein type: model calibrated on all its samples, then predicted on those same samples.",
-        ha="left",
-        fontsize=8,
-        color=C_MUTED,
-        style="italic",
-        transform=ax.transAxes,
     )
 
     plt.tight_layout()
@@ -535,7 +467,7 @@ def main():
         f"{results_df['Protein_type'].nunique()} proteins)\n"
         f"  MAE        : {m['mae']:.3f} cP\n"
         f"  MAPE       : {m['mape']:.1f}%\n"
-        f"  log-RMSE   : {m['log_rmse']:.5f}\n"
+        f"  RMSE       : {m['rmse']:.3f} cP\n"
         f"  R2         : {m['r2']:.5f}\n"
         f"{'='*55}"
     )
