@@ -152,7 +152,7 @@ class CNPModelPackager:
 # ==========================================
 def main():
     # Configuration
-    MODEL_DIR = "models/experiments/o_net_v3"  # Where train_o_net.py saved outputs
+    MODEL_DIR = "models/experiments/cnp-cy"  # Where train_o_net.py saved outputs
     # Ensure this points to the standalone inference script
     CODE_FILE = "ml/test/inference_o_net.py"
     OUTPUT_DIR = "models/production"  # Where to put the .visq package

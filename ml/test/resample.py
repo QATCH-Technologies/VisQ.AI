@@ -434,7 +434,7 @@ def _legacy_sucrose_multiplier(row, conc_M, prior_val):
 
 
 def main():
-    input_file = "data/raw/formulation_data_02162026.csv"
+    input_file = "data/raw/formulation_data_03022026.csv"
     output_file = "data/processed/augmented_formulation_data.csv"
     print(f"Loading {input_file}...")
 
@@ -613,96 +613,96 @@ def main():
 
                 synthetic_rows.append(new_row)
 
-        # -------------------------------------------------------------
-        # PRIOR-DIRECTED TITRATION SWEEPS
-        # -------------------------------------------------------------
-        if base_protein >= 100.0:
-            titration_chemicals = [
-                ("Stabilizer_type", "Stabilizer_conc", "Sucrose"),
-                ("Excipient_type", "Excipient_conc", "Arginine"),
-            ]
-            molar_sweeps = [0.1, 0.25, 0.4, 0.5]
+        # # -------------------------------------------------------------
+        # # PRIOR-DIRECTED TITRATION SWEEPS
+        # # -------------------------------------------------------------
+        # if base_protein >= 100.0:
+        #     titration_chemicals = [
+        #         ("Stabilizer_type", "Stabilizer_conc", "Sucrose"),
+        #         ("Excipient_type", "Excipient_conc", "Arginine"),
+        #     ]
+        #     molar_sweeps = [0.1, 0.25, 0.4, 0.5]
 
-            for type_col, conc_col, chem_name in titration_chemicals:
-                prior_val = get_regime_and_prior(row, chem_name)
-                mw = MW_MAP.get(chem_name.lower(), 150.0)
+        #     for type_col, conc_col, chem_name in titration_chemicals:
+        #         prior_val = get_regime_and_prior(row, chem_name)
+        #         mw = MW_MAP.get(chem_name.lower(), 150.0)
 
-                for t_idx, conc_M in enumerate(molar_sweeps):
-                    new_row = row.copy()
-                    new_row["ID"] = f"{row['ID']}_titrate_{chem_name}_{t_idx+1}"
+        #         for t_idx, conc_M in enumerate(molar_sweeps):
+        #             new_row = row.copy()
+        #             new_row["ID"] = f"{row['ID']}_titrate_{chem_name}_{t_idx+1}"
 
-                    # Inject chemical
-                    if pd.isna(new_row[type_col]) or str(new_row[type_col]).lower() in [
-                        "none",
-                        "unknown",
-                    ]:
-                        new_row[type_col] = chem_name
-                    new_row[conc_col] = conc_M
+        #             # Inject chemical
+        #             if pd.isna(new_row[type_col]) or str(new_row[type_col]).lower() in [
+        #                 "none",
+        #                 "unknown",
+        #             ]:
+        #                 new_row[type_col] = chem_name
+        #             new_row[conc_col] = conc_M
 
-                    # ----------------------------------------------------------
-                    # SUCROSE: use model-derived per-shear-rate multipliers
-                    # ----------------------------------------------------------
-                    if chem_name == "Sucrose":
-                        model_multipliers = None
-                        if estimator is not None:
-                            model_multipliers = _get_sucrose_multipliers(
-                                estimator, row, conc_M, shear_rates
-                            )
+        #             # ----------------------------------------------------------
+        #             # SUCROSE: use model-derived per-shear-rate multipliers
+        #             # ----------------------------------------------------------
+        #             if chem_name == "Sucrose":
+        #                 model_multipliers = None
+        #                 if estimator is not None:
+        #                     model_multipliers = _get_sucrose_multipliers(
+        #                         estimator, row, conc_M, shear_rates
+        #                     )
 
-                        if model_multipliers is not None:
-                            # Model path — each shear rate gets its own multiplier
-                            # derived from exp(delta_log_visc[sr]), reflecting the
-                            # shear-rate-resolved crowding effect captured in the
-                            # statistical model (changes to both K and n).
-                            # Small Gaussian noise is added in log space to maintain
-                            # the same sample diversity as the rest of the pipeline.
-                            noise = np.random.normal(0.0, 0.02, size=len(shear_rates))
-                            per_sr_multipliers = model_multipliers * np.exp(noise)
-                            new_y = y_linear * per_sr_multipliers
-                            sucrose_model_hits += 1
-                        else:
-                            # Legacy fallback — scalar multiplier, all shear rates equal
-                            scalar = _legacy_sucrose_multiplier(row, conc_M, prior_val)
-                            new_y = y_linear * scalar
-                            sucrose_fallback_hits += 1
+        #                 if model_multipliers is not None:
+        #                     # Model path — each shear rate gets its own multiplier
+        #                     # derived from exp(delta_log_visc[sr]), reflecting the
+        #                     # shear-rate-resolved crowding effect captured in the
+        #                     # statistical model (changes to both K and n).
+        #                     # Small Gaussian noise is added in log space to maintain
+        #                     # the same sample diversity as the rest of the pipeline.
+        #                     noise = np.random.normal(0.0, 0.02, size=len(shear_rates))
+        #                     per_sr_multipliers = model_multipliers * np.exp(noise)
+        #                     new_y = y_linear * per_sr_multipliers
+        #                     sucrose_model_hits += 1
+        #                 else:
+        #                     # Legacy fallback — scalar multiplier, all shear rates equal
+        #                     scalar = _legacy_sucrose_multiplier(row, conc_M, prior_val)
+        #                     new_y = y_linear * scalar
+        #                     sucrose_fallback_hits += 1
 
-                    # ----------------------------------------------------------
-                    # ARGININE (and any other chemical): original physics formula
-                    # ----------------------------------------------------------
-                    else:
-                        mass_mg_ml = conc_M * mw
-                        dilution = max(0.8, 1.0 - (mass_mg_ml / 1000.0))
+        #             # ----------------------------------------------------------
+        #             # ARGININE (and any other chemical): original physics formula
+        #             # ----------------------------------------------------------
+        #             else:
+        #                 mass_mg_ml = conc_M * mw
+        #                 dilution = max(0.8, 1.0 - (mass_mg_ml / 1000.0))
 
-                        if prior_val > 0:
-                            shielding = np.exp(-1.0 * conc_M)
-                            crowding = np.exp(
-                                0.0000005 * base_protein * (mass_mg_ml**2) * prior_val
-                            )
-                        elif prior_val < 0:
-                            shielding = np.exp(prior_val * 0.8 * conc_M)
-                            crowding = 1.0
-                        else:
-                            shielding = 1.0
-                            crowding = 1.0
+        #                 if prior_val > 0:
+        #                     shielding = np.exp(-1.0 * conc_M)
+        #                     crowding = np.exp(
+        #                         0.0000005 * base_protein * (mass_mg_ml**2) * prior_val
+        #                     )
+        #                 elif prior_val < 0:
+        #                     shielding = np.exp(prior_val * 0.8 * conc_M)
+        #                     crowding = 1.0
+        #                 else:
+        #                     shielding = 1.0
+        #                     crowding = 1.0
 
-                        physics_multiplier = dilution * shielding * crowding
-                        new_y = y_linear * physics_multiplier
+        #                 physics_multiplier = dilution * shielding * crowding
+        #                 new_y = y_linear * physics_multiplier
 
-                    new_row[visc_cols] = new_y
-                    titrations_generated += 1
-                    synthetic_rows.append(new_row)
+        #             new_row[visc_cols] = new_y
+        #             titrations_generated += 1
+        #             synthetic_rows.append(new_row)
 
     synth_df = pd.DataFrame(synthetic_rows)
     augmented_df = pd.concat([df, synth_df], ignore_index=True)
     augmented_df.to_csv(output_file, index=False)
 
-    print(f"Generated {titrations_generated} Prior-Directed Titrations.")
-    if sucrose_model_hits + sucrose_fallback_hits > 0:
-        print(
-            f"  Sucrose multiplier source — "
-            f"model: {sucrose_model_hits}, "
-            f"legacy fallback: {sucrose_fallback_hits}"
-        )
+    # print(f"Generated {titrations_generated} Prior-Directed Titrations.")
+    # if sucrose_model_hits + sucrose_fallback_hits > 0:
+    #     print(
+    #         f"  Sucrose multiplier source — "
+    #         f"model: {sucrose_model_hits}, "
+    #         f"legacy fallback: {sucrose_fallback_hits}"
+    #     )
 
 
 if __name__ == "__main__":
