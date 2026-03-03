@@ -1,5 +1,5 @@
 ID,Protein_type,Protein_class_type,kP,MW,PI_mean,PI_range,Protein_conc,Temperature,Buffer_type,Buffer_pH,Buffer_conc,Salt_type,Salt_conc,Stabilizer_type,Stabilizer_conc,Surfactant_type,Surfactant_conc,Excipient_type,Excipient_conc,C_Class,HCI,Viscosity_100,Viscosity_1000,Viscosity_10000,Viscosity_100000,Viscosity_15000000,Pred_Viscosity_100,Pred_Viscosity_1000,Pred_Viscosity_10000,Pred_Viscosity_100000,Pred_Viscosity_15000000
-F425,Pembrolizumab,mAb_IgG4,3.5,149,7.57,0.3,150,25,Histidine,6,15,none,0,none,0.0,none,0,none,0,1.3,1.1,25.63,21.0,18.38,14.61,8.3,34.733055,27.643965,21.165476,16.115925,8.150903
-F427,Pembrolizumab,mAb_IgG4,3.5,149,7.57,0.3,214,25,Histidine,6,15,none,0,none,0.0,none,0,none,0,1.3,1.1,43.75,43.75,43.75,40.25,14.0,66.79665,51.62574,39.86862,30.94086,16.783134
-F446,Adalimumab,mAb_IgG1,3.0,148,8.7,0.3,135,25,Histidine,6,15,none,0,none,0.0,none,0,none,0,1.0,1.0,10.31,8.75,7.88,7.25,1.35,13.65876,10.976001,8.571757,6.6548257,3.89568
-F448,Adalimumab,mAb_IgG1,3.0,148,8.7,0.3,135,25,Histidine,6,15,none,0,Sucrose,0.4,none,0,none,0,1.0,1.0,8.38,8.38,8.38,7.71,1.4,12.719828,10.262068,8.087427,6.1949234,3.6453278
+F425,Pembrolizumab,mAb_IgG4,3.5,149,7.57,0.3,150,25,Histidine,6,15,none,0,none,0.0,none,0,none,0,1.3,1.1,25.63,21.0,18.38,14.61,8.3,25.09041,22.83439,19.270609,14.613573,5.508659
+F427,Pembrolizumab,mAb_IgG4,3.5,149,7.57,0.3,214,25,Histidine,6,15,none,0,none,0.0,none,0,none,0,1.3,1.1,43.75,43.75,43.75,40.25,14.0,40.96502,39.056034,38.312252,35.151627,13.735394
+F446,Adalimumab,mAb_IgG1,3.0,148,8.7,0.3,135,25,Histidine,6,15,none,0,none,0.0,none,0,none,0,1.0,1.0,10.31,8.75,7.88,7.25,1.35,8.575922,7.9299517,6.9933977,5.3401246,1.2920669
+F448,Adalimumab,mAb_IgG1,3.0,148,8.7,0.3,135,25,Histidine,6,15,none,0,Sucrose,0.4,none,0,none,0,1.0,1.0,8.38,8.38,8.38,7.71,1.4,7.873064,7.9779058,8.086796,7.319337,1.7853235
