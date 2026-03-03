@@ -1106,8 +1106,8 @@ def objective_cv(trial, samples, static_dim, device):
 # ==========================================
 
 if __name__ == "__main__":
-    data = "data/raw/formulation_data_03022026.csv"
-    # data = "data/processed/augmented_formulation_data.csv"
+    # data = "data/raw/formulation_data_03022026.csv"
+    data = "data/processed/augmented_formulation_data.csv"
     out = "./models/experiments/o_net_v3"
     trials = 0
 
