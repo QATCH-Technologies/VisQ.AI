@@ -41,7 +41,7 @@ except ImportError:
 # CONFIG
 # ──────────────────────────────────────────────────────────────────────────────
 MODEL_DIR = r"models\experiments\o_net_v3"
-DATA_CSV = r"data/raw/formulation_data_02162026.csv"
+DATA_CSV = r"data/raw/formulation_data_03022026.csv"
 OUTPUT_DIR = r"models\experiments\o_net_v3\benchmarks"
 LEARN_STEPS = 50
 LEARN_LR = 1e-3

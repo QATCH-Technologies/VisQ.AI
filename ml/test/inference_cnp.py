@@ -841,49 +841,6 @@ class ViscosityPredictorCNP:
             f"Memory norm: {self.memory_vector.norm().item():.3f}"
         )
 
-    def _select_diverse_context(
-        self, df: pd.DataFrame, max_k: int = 15
-    ) -> pd.DataFrame:
-        """
-        [FIX-5] Select a diverse subset of context samples by stratifying on
-        protein concentration quartiles. This ensures the encoded memory vector
-        covers the formulation space rather than overrepresenting one regime.
-
-        Used in __main__ before passing history_df to learn(). Not called
-        internally — callers can choose whether to apply this filter.
-
-        Args:
-            df:    Full context pool for a single protein group.
-            max_k: Maximum number of context samples to return.
-
-        Returns:
-            Stratified subset of df with at most max_k rows.
-        """
-        if len(df) <= max_k:
-            return df
-
-        df_copy = df.copy()
-        try:
-            df_copy["_conc_bin"] = pd.qcut(
-                df_copy["Protein_conc"], q=4, duplicates="drop", labels=False
-            )
-            per_bin = max(1, max_k // df_copy["_conc_bin"].nunique())
-            result = (
-                df_copy.groupby("_conc_bin", group_keys=False)
-                .apply(lambda x: x.sample(min(len(x), per_bin), random_state=42))
-                .drop(columns=["_conc_bin"])
-            )
-            self._logger.debug(
-                f"_select_diverse_context: {len(df)} → {len(result)} samples "
-                f"(stratified by Protein_conc quartile, max_k={max_k})"
-            )
-            return result
-        except Exception as e:
-            self._logger.warning(
-                f"_select_diverse_context failed ({e}). Returning random sample."
-            )
-            return df.sample(min(len(df), max_k), random_state=42)
-
     def predict(self, df: pd.DataFrame) -> pd.DataFrame:
         """
         Predicts using the cached memory (calibrated state).
@@ -1051,7 +1008,7 @@ class ViscosityPredictorCNP:
 if __name__ == "__main__":
     # Test Configuration
     model_dir = "models/experiments/o_net_v3"
-    training_file = "data/raw/formulation_data_02162026.csv"
+    training_file = "data/raw/formulation_data_03022026.csv"
 
     # 1. Initialize Predictor
     try:
@@ -1101,11 +1058,6 @@ F448,Adalimumab,mAb_IgG1,3,148,8.7,0.3,135,25,Histidine,6,15,none,0,Sucrose,0.4,
 
         if not history_df.empty:
             print(f"Adapting to {protein} ({len(history_df)} context samples)...")
-
-            # [FIX-5] Select a diverse context subset before encoding
-            history_df = predictor._select_diverse_context(history_df, max_k=15)
-            print(f"  (diverse subset: {len(history_df)} samples)")
-
             # [FIX-2] Reset both memory state and stored context before each group
             predictor.memory_vector = None
             predictor.context_t = None
@@ -1174,7 +1126,6 @@ F448,Adalimumab,mAb_IgG1,3,148,8.7,0.3,135,25,Histidine,6,15,none,0,Sucrose,0.4,
         predictor.context_t = None
 
         if not history_df.empty:
-            history_df = predictor._select_diverse_context(history_df, max_k=15)
             predictor.learn(history_df)
             mean_pred, stats = predictor.predict_with_uncertainty(
                 prot_target_df, n_samples=100

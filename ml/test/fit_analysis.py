@@ -20,7 +20,7 @@ from scipy.optimize import curve_fit
 warnings.filterwarnings("ignore")
 
 # ── 1.  Load data ─────────────────────────────────────────────────────────────
-DATA_FILE = "data/raw/formulation_data_02162026.csv"
+DATA_FILE = "data/raw/formulation_data_03022026.csv"
 OUTPUT_DIR = "viscosity_plots"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 

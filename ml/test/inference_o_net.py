@@ -33,7 +33,7 @@ logger = logging.getLogger("VisQ_Inference")
 
 
 # ==========================================
-# 1. Model Architecture (Carreau-Yasuda)
+# 1. Model Architecture (Embedded for Standalone Use)
 # ==========================================
 
 
@@ -42,15 +42,17 @@ class AttentionPool(nn.Module):
         super().__init__()
         self.attn = nn.MultiheadAttention(latent_dim, n_heads, batch_first=True)
         self.query = nn.Parameter(torch.randn(1, 1, latent_dim))
+        # [ADDED] LayerNorm to match the v3 architecture update
         self.norm = nn.LayerNorm(latent_dim)
 
     def forward(self, x):
         q = self.query.expand(x.size(0), -1, -1)
         out, _ = self.attn(q, x, x)
+        # [ADDED] Apply LayerNorm before returning
         return self.norm(out.squeeze(1))
 
 
-class CarreauYasudaCNP(nn.Module):
+class CrossSampleCNP(nn.Module):
     def __init__(self, static_dim, hidden_dim=128, latent_dim=128, dropout=0.0):
         super().__init__()
         self.encoder = nn.Sequential(
@@ -62,63 +64,22 @@ class CarreauYasudaCNP(nn.Module):
             nn.Linear(hidden_dim, latent_dim),
         )
         self.pooler = AttentionPool(latent_dim)
-
-        # Maps the formulation directly to the 5 CY parameters
-        self.param_net = nn.Sequential(
-            nn.Linear(static_dim + latent_dim, hidden_dim),
+        self.decoder = nn.Sequential(
+            nn.Linear(1 + static_dim + latent_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, 5),
+            nn.Linear(hidden_dim, 1),
         )
-
-        # Buffers to hold the scaler means/stds for unscaling inside the forward pass
-        self.register_buffer("shear_mean", torch.tensor(0.0))
-        self.register_buffer("shear_std", torch.tensor(1.0))
-        self.register_buffer("visc_mean", torch.tensor(0.0))
-        self.register_buffer("visc_std", torch.tensor(1.0))
-
-    def set_scaler(self, physics_scaler):
-        """Must be called after initialization to pass the scaler variables to the model."""
-        self.shear_mean.fill_(physics_scaler.mean_[0])
-        self.shear_std.fill_(physics_scaler.scale_[0])
-        self.visc_mean.fill_(physics_scaler.mean_[1])
-        self.visc_std.fill_(physics_scaler.scale_[1])
-
-    def _compute_cy_viscosity(self, query_shear, query_static, r_expanded):
-        """Shared logic for deriving physical parameters and computing viscosity."""
-        param_input = torch.cat([query_static, r_expanded], dim=-1)
-        raw_params = self.param_net(param_input)
-
-        # Constrain parameters to physical realities
-        eta_0 = torch.exp(raw_params[..., 0:1])
-        eta_inf = eta_0 * torch.sigmoid(raw_params[..., 1:2])
-        lam = torch.exp(raw_params[..., 2:3])
-        a = F.softplus(raw_params[..., 3:4]) + 1e-3
-        n = torch.sigmoid(raw_params[..., 4:5])
-
-        # Unscale shear rate z-scores back to raw physical values
-        log10_shear_raw = query_shear * self.shear_std + self.shear_mean
-        shear_raw = 10.0**log10_shear_raw
-
-        # Apply the Carreau-Yasuda equation
-        bracket = 1.0 + (lam * shear_raw) ** a
-        exponent = (n - 1.0) / a
-        visc_raw = eta_inf + (eta_0 - eta_inf) * (bracket**exponent)
-
-        # Scale the resulting viscosity back to z-scores
-        log10_visc_raw = torch.log10(visc_raw + 1e-9)
-        visc_scaled = (log10_visc_raw - self.visc_mean) / self.visc_std
-
-        return visc_scaled
 
     def forward(self, context_tensor, query_shear, query_static):
         encoded = self.encoder(context_tensor)
         r = self.pooler(encoded)
         n_queries = query_shear.size(1)
         r_expanded = r.unsqueeze(1).repeat(1, n_queries, 1)
-        return self._compute_cy_viscosity(query_shear, query_static, r_expanded)
+        decoder_input = torch.cat([query_shear, query_static, r_expanded], dim=-1)
+        return self.decoder(decoder_input)
 
     def encode_memory(self, context_tensor):
         return self.pooler(self.encoder(context_tensor))
@@ -126,7 +87,8 @@ class CarreauYasudaCNP(nn.Module):
     def decode_from_memory(self, memory_vector, query_shear, query_static):
         n_queries = query_shear.size(1)
         r_expanded = memory_vector.unsqueeze(1).repeat(1, n_queries, 1)
-        return self._compute_cy_viscosity(query_shear, query_static, r_expanded)
+        decoder_input = torch.cat([query_shear, query_static, r_expanded], dim=-1)
+        return self.decoder(decoder_input)
 
 
 # ==========================================
@@ -384,6 +346,8 @@ PRIOR_TABLE = {
 # ==========================================
 class ViscosityPredictorCNP:
     def __init__(self, model_dir: str, verbose: bool = False):
+        # Create a per-instance logger that can be silenced independently
+        # of the module-level logger used elsewhere in this file.
         self._logger = logging.getLogger(f"VisQ_Inference.{id(self)}")
         if not verbose:
             self._logger.setLevel(
@@ -427,21 +391,23 @@ class ViscosityPredictorCNP:
         self._logger.debug(f"Model config: {self.config}")
         self._logger.debug(f"Static dimension: {self.static_dim}")
 
-        # Initialize the new CY standalone model class
-        self.model = CarreauYasudaCNP(
+        # Initialize the standalone model class
+        self.model = CrossSampleCNP(
             static_dim=self.static_dim,
             hidden_dim=self.config["hidden_dim"],
             latent_dim=self.config["latent_dim"],
             dropout=self.config["dropout"],
         ).to(self.device)
 
-        # Load weights and bind the active scaler bounds. strict=False handles cases
-        # where you might load an older checkpoint lacking the CY parameter buffers.
-        self.model.load_state_dict(checkpoint["state_dict"], strict=False)
-        self.model.set_scaler(self.physics_scaler)
+        self.model.load_state_dict(checkpoint["state_dict"])
         self.model.eval()
 
+        # [FIX-2] Save a pristine copy of the model weights so we can restore
+        # them before each learn() call, preventing cross-protein contamination.
         self._original_state = copy.deepcopy(self.model.state_dict())
+
+        # Stores the raw context tensor from the last learn() call,
+        # used by predict_with_uncertainty for context-subsampling CI.
         self.context_t: Optional[torch.Tensor] = None
 
         # Shear Mapping (Log-Log scaling logic)
@@ -503,6 +469,10 @@ class ViscosityPredictorCNP:
         return c_class * np.exp(-delta_ph / tau)
 
     def _calculate_physics_features(self, row):
+        """
+        Computes separate Prior scores and split-concentration features.
+        Matches train preprocessing logic exactly.
+        """
         cci = self._calculate_cci(row)
         p_type = str(row.get("Protein_class_type", "default")).lower()
 
@@ -616,6 +586,9 @@ class ViscosityPredictorCNP:
             else:
                 df_proc[c] = df_proc[c].fillna(0.0)
 
+        # ---------------------------------------------------------
+        # 2. Add Missing Feature Engineering & Unit Normalization
+        # ---------------------------------------------------------
         self._logger.debug(
             "Normalizing units to mg/mL and calculating Physics Features..."
         )
@@ -640,6 +613,7 @@ class ViscosityPredictorCNP:
                 )
             )
 
+        # Unit conversions to mg/mL
         if "Stabilizer_type" in df_proc.columns:
             stabilizer_mw = get_mw(df_proc["Stabilizer_type"], default_mw=342.3)
         else:
@@ -660,6 +634,7 @@ class ViscosityPredictorCNP:
 
         df_proc["Surfactant_mg_mL"] = df_proc["Surfactant_conc"] * 10.0
 
+        # Feature calculation
         df_proc["log_conc"] = np.log1p(df_proc["Protein_conc"])
         df_proc["conc_sq"] = df_proc["Protein_conc"] ** 2
         df_proc["conc_x_kP"] = df_proc["Protein_conc"] * df_proc["kP"]
@@ -704,7 +679,9 @@ class ViscosityPredictorCNP:
             else []
         )
 
+        # Target columns and ID are expected to be missing during inference
         expected_missing = ["ID"] + list(self.shear_map.keys())
+
         missing_feats = [col for col in feature_names if col not in df_proc.columns]
         actual_missing = [col for col in missing_feats if col not in expected_missing]
 
@@ -717,6 +694,7 @@ class ViscosityPredictorCNP:
 
         X_static = self.preprocessor.transform(df_proc)
 
+        # Ensure no NaNs leaked into the matrix
         if np.isnan(X_static).any():
             self._logger.warning(
                 "NaNs found in X_static after preprocessing! Replacing with 0."
@@ -729,6 +707,8 @@ class ViscosityPredictorCNP:
         n_rows = len(df_proc)
         n_shears = len(self.shear_map)
 
+        # Build all (log_shear, log_visc) pairs in a single numpy array,
+        # then call physics_scaler.transform once instead of n_rows*n_shears times.
         raw_points = np.empty((n_rows * n_shears, 2), dtype=np.float64)
         static_list = []
 
@@ -746,6 +726,7 @@ class ViscosityPredictorCNP:
                 static_list.append(X_static[i])
                 row_idx += 1
 
+        # [FIX-6] Single batched transform — avoids n*m repeated sklearn calls
         scaled_points = self.physics_scaler.transform(raw_points)
 
         static_t = (
@@ -768,11 +749,35 @@ class ViscosityPredictorCNP:
     def learn(
         self,
         df: pd.DataFrame,
-        steps: int = 50,
-        lr: float = 1e-3,
+        steps: int = 50,  # kept for API compatibility — no longer used
+        lr: float = 1e-3,  # kept for API compatibility — no longer used
         n_draws: int = 20,
         k: int = 8,
     ):
+        """
+        Adapts the predictor to a new protein group by encoding its context
+        samples into a stable latent memory vector.
+
+        [FIX-1] No weight updates are performed. The CNP is designed to adapt
+        entirely through the latent vector r — fine-tuning weights on 20-30
+        samples corrupts the encoder's learned representations and causes
+        cross-protein contamination.
+
+        [FIX-2] Model weights are restored from the pristine checkpoint before
+        encoding, so successive calls for different proteins are fully isolated.
+
+        [FIX-3] Multi-draw averaging: n_draws random subsets of size k are
+        encoded and their latent vectors are averaged. This smooths out the
+        stochastic context variance (intra-group spread) and produces a more
+        stable memory vector than a single full-context encoding.
+
+        Args:
+            df:      DataFrame of context samples for the target protein.
+            steps:   Ignored. Retained for API compatibility.
+            lr:      Ignored. Retained for API compatibility.
+            n_draws: Number of random context subsets to encode and average.
+            k:       Size of each random subset (matches the few-shot elbow k=8).
+        """
         if df.empty:
             self._logger.warning("Context DataFrame is empty. Skipping learning.")
             print("Warning: Context DataFrame is empty. Skipping learning.")
@@ -784,20 +789,25 @@ class ViscosityPredictorCNP:
         )
         print(f" > Encoding context: {len(df)} samples, {n_draws} draws of k={k}...")
 
+        # [FIX-2] Restore pristine weights before every encode so successive
+        # calls for different proteins never contaminate each other.
         self.model.load_state_dict(self._original_state)
 
+        # 1. Preprocess all context samples into tensors
         static_t, shear_t, visc_t = self._preprocess(df)
         context_t = torch.cat([shear_t, visc_t, static_t], dim=-1)
 
+        # 2. Store full context tensor for uncertainty estimation
         self.context_t = context_t
 
         n_ctx = context_t.size(1)
-        k_eff = min(k, n_ctx)
+        k_eff = min(k, n_ctx)  # can't draw more than we have
 
         self.model.eval()
         memory_draws = []
         with torch.no_grad():
             if n_ctx <= k_eff:
+                # Not enough context for subsampling — encode everything once
                 self._logger.debug(
                     f"n_ctx={n_ctx} <= k={k_eff}: encoding full context once."
                 )
@@ -808,6 +818,7 @@ class ViscosityPredictorCNP:
                 )
                 return
 
+            # [FIX-3] Multi-draw averaging
             for draw_i in range(n_draws):
                 idx = torch.randperm(n_ctx, device=self.device)[:k_eff]
                 subset = context_t[:, idx, :]
@@ -818,6 +829,7 @@ class ViscosityPredictorCNP:
                     f"idx={idx.tolist()}, norm={r.norm().item():.3f}"
                 )
 
+        # Average across draws → stable latent representation
         self.memory_vector = torch.stack(memory_draws, dim=0).mean(dim=0)
         self._logger.info(
             f" > Encoding complete ({n_draws} draws averaged). "
@@ -829,54 +841,35 @@ class ViscosityPredictorCNP:
             f"Memory norm: {self.memory_vector.norm().item():.3f}"
         )
 
-    def _select_diverse_context(
-        self, df: pd.DataFrame, max_k: int = 15
-    ) -> pd.DataFrame:
-        if len(df) <= max_k:
-            return df
-
-        df_copy = df.copy()
-        try:
-            df_copy["_conc_bin"] = pd.qcut(
-                df_copy["Protein_conc"], q=4, duplicates="drop", labels=False
-            )
-            per_bin = max(1, max_k // df_copy["_conc_bin"].nunique())
-            result = (
-                df_copy.groupby("_conc_bin", group_keys=False)
-                .apply(lambda x: x.sample(min(len(x), per_bin), random_state=42))
-                .drop(columns=["_conc_bin"])
-            )
-            self._logger.debug(
-                f"_select_diverse_context: {len(df)} → {len(result)} samples "
-                f"(stratified by Protein_conc quartile, max_k={max_k})"
-            )
-            return result
-        except Exception as e:
-            self._logger.warning(
-                f"_select_diverse_context failed ({e}). Returning random sample."
-            )
-            return df.sample(min(len(df), max_k), random_state=42)
-
     def predict(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Predicts using the cached memory (calibrated state).
+        """
         self._logger.info(f"Predict triggered on {len(df)} samples.")
 
+        # 1. Context Resolution
         memory_vector = self.memory_vector
 
+        # Handle Zero-Shot (if learn was never called)
         if memory_vector is None:
             self._logger.warning(
                 "Memory vector is None. Performing Zero-Shot prediction (using zero tensor)."
             )
             memory_vector = torch.zeros((1, self.config["latent_dim"])).to(self.device)
 
+        # 2. Prepare Query
         q_static, q_shear, _ = self._preprocess(df)
 
+        # 3. Decode from Memory (using cached vector)
         self.model.eval()
         with torch.no_grad():
             y_scaled = self.model.decode_from_memory(memory_vector, q_shear, q_static)
 
+        # 4. Inverse Scaling — batched via _inverse_to_log helper
         pred_log10 = self._inverse_to_log(q_shear, y_scaled)
         pred_visc_cp = np.power(10, pred_log10)
 
+        # 5. Format Results
         results = df.copy()
         n_shears = len(self.shear_map)
         shear_keys = list(self.shear_map.keys())
@@ -899,8 +892,37 @@ class ViscosityPredictorCNP:
         df: pd.DataFrame,
         n_samples: int = 100,
         ci_range: Tuple[float, float] = (2.5, 97.5),
-        k: Optional[int] = None,
+        k: Optional[int] = None,  # retained for API compatibility — no longer used
     ):
+        """
+        Estimates the model's predictive uncertainty via MC Dropout.
+
+        The memory vector is fixed (already encoded from context), and the
+        decoder is run n_samples times in train() mode so that each forward
+        pass samples a different dropout mask. The spread of those predictions
+        reflects the model's own uncertainty about the query — not variance in
+        the training history.
+
+        CIs are computed in log10 space (where the model was trained) and
+        exponentiated for the final output. This avoids distortion from the
+        heavy right tail of viscosity values.
+
+        Requires dropout > 0.0 in the model config. If dropout == 0.0,
+        all passes are deterministic and the CI will be zero-width.
+
+        Args:
+            df:        DataFrame of query samples to predict.
+            n_samples: Number of stochastic forward passes (100 recommended).
+            ci_range:  Percentile bounds for the confidence interval.
+            k:         Deprecated. Accepted for backwards compatibility but ignored.
+                       Previously controlled context-subsampling subset size.
+
+        Returns:
+            mean_pred:  Mean prediction in linear cP, shape (n_queries,).
+            stats:      Dict with keys 'mean_log10', 'std_log10', 'lower_ci',
+                        'upper_ci'. std_log10 is in log10 units (0.1 ≈ ±26%
+                        factor); lower/upper_ci are in linear cP.
+        """
         dropout_val = self.config.get("dropout", 0.0)
         self._logger.info(
             f"MC Dropout uncertainty: n_samples={n_samples}, "
@@ -917,8 +939,10 @@ class ViscosityPredictorCNP:
                 "Retrain with dropout > 0.0 for real uncertainty estimates."
             )
 
+        # 1. Prepare query tensors
         q_static, q_shear, _ = self._preprocess(df)
 
+        # 2. Fix the memory vector — uncertainty comes from the decoder, not context
         memory_fixed = (
             self.memory_vector
             if self.memory_vector is not None
@@ -929,7 +953,8 @@ class ViscosityPredictorCNP:
                 "No memory vector (zero-shot). CI reflects decoder noise only."
             )
 
-        self.model.train()
+        # 3. Run n_samples stochastic decoder passes with dropout active
+        self.model.train()  # activates dropout masks
         preds_log = []
         with torch.no_grad():
             for i in range(n_samples):
@@ -942,7 +967,8 @@ class ViscosityPredictorCNP:
                     self._logger.debug(f"  MC Dropout pass {i+1}/{n_samples}")
         self.model.eval()
 
-        stack_log = np.stack(preds_log)
+        # [FIX-4b] All statistics computed in log10 space
+        stack_log = np.stack(preds_log)  # (n_samples, n_queries)
         mean_log = np.mean(stack_log, axis=0)
         std_log = np.std(stack_log, axis=0)
         lower_log = np.percentile(stack_log, ci_range[0], axis=0)
@@ -953,10 +979,10 @@ class ViscosityPredictorCNP:
         upper_ci = np.power(10, upper_log)
 
         stats = {
-            "mean_log10": mean_log,
-            "std_log10": std_log,
-            "lower_ci": lower_ci,
-            "upper_ci": upper_ci,
+            "mean_log10": mean_log,  # log10 units — use for model diagnostics
+            "std_log10": std_log,  # log10 units — 0.1 ≈ ±26% factor error
+            "lower_ci": lower_ci,  # linear cP
+            "upper_ci": upper_ci,  # linear cP
         }
 
         self._logger.info(
@@ -965,9 +991,13 @@ class ViscosityPredictorCNP:
         )
         return mean_pred, stats
 
+    # ------------------------------------------------------------------
+    # Internal helper: inverse-transform a scaled decoder output to log10 visc
+    # ------------------------------------------------------------------
     def _inverse_to_log(
         self, q_shear: torch.Tensor, out_scaled: torch.Tensor
     ) -> np.ndarray:
+        """Inverse-scales a decoder output tensor to log10 viscosity values."""
         q_shear_np = q_shear.cpu().numpy().reshape(-1, 1)
         out_np = out_scaled.cpu().numpy().reshape(-1, 1)
         combined = np.hstack([q_shear_np, out_np])
@@ -978,7 +1008,7 @@ class ViscosityPredictorCNP:
 if __name__ == "__main__":
     # Test Configuration
     model_dir = "models/experiments/o_net_v3"
-    training_file = "data/raw/formulation_data_02162026.csv"
+    training_file = "data/raw/formulation_data_03022026.csv"
 
     # 1. Initialize Predictor
     try:
@@ -1020,6 +1050,7 @@ F448,Adalimumab,mAb_IgG1,3,148,8.7,0.3,135,25,Histidine,6,15,none,0,Sucrose,0.4,
         prot_target_df = target_df[target_df["Protein_type"] == protein].copy()
         target_ids = prot_target_df["ID"].tolist()
 
+        # Build history strictly EXCLUDING the target samples to avoid data leakage
         history_df = full_train_df[
             (full_train_df["Protein_type"] == protein)
             & (~full_train_df["ID"].isin(target_ids))
@@ -1027,9 +1058,7 @@ F448,Adalimumab,mAb_IgG1,3,148,8.7,0.3,135,25,Histidine,6,15,none,0,Sucrose,0.4,
 
         if not history_df.empty:
             print(f"Adapting to {protein} ({len(history_df)} context samples)...")
-            history_df = predictor._select_diverse_context(history_df, max_k=15)
-            print(f"  (diverse subset: {len(history_df)} samples)")
-
+            # [FIX-2] Reset both memory state and stored context before each group
             predictor.memory_vector = None
             predictor.context_t = None
             predictor.learn(history_df)
@@ -1040,6 +1069,7 @@ F448,Adalimumab,mAb_IgG1,3,148,8.7,0.3,135,25,Histidine,6,15,none,0,Sucrose,0.4,
             predictor.memory_vector = None
             predictor.context_t = None
 
+        # Predict for this protein group
         print(f"Predicting {len(prot_target_df)} target sample(s)...")
         results_df = predictor.predict(prot_target_df)
         all_results.append(results_df)
@@ -1065,6 +1095,7 @@ F448,Adalimumab,mAb_IgG1,3,148,8.7,0.3,135,25,Histidine,6,15,none,0,Sucrose,0.4,
             actual_col = f"Viscosity_{shear}"
             pred_col = f"Pred_Viscosity_{shear}"
 
+            # Safely grab values, handling cases where they might be missing/NaN
             actual_val = row.get(actual_col, np.nan)
             pred_val = row.get(pred_col, np.nan)
 
@@ -1085,6 +1116,7 @@ F448,Adalimumab,mAb_IgG1,3,148,8.7,0.3,135,25,Histidine,6,15,none,0,Sucrose,0.4,
         prot_target_df = target_df[target_df["Protein_type"] == protein].copy()
         target_ids = prot_target_df["ID"].tolist()
 
+        # Re-build context (same as above, excluding targets)
         history_df = full_train_df[
             (full_train_df["Protein_type"] == protein)
             & (~full_train_df["ID"].isin(target_ids))
@@ -1094,7 +1126,6 @@ F448,Adalimumab,mAb_IgG1,3,148,8.7,0.3,135,25,Histidine,6,15,none,0,Sucrose,0.4,
         predictor.context_t = None
 
         if not history_df.empty:
-            history_df = predictor._select_diverse_context(history_df, max_k=15)
             predictor.learn(history_df)
             mean_pred, stats = predictor.predict_with_uncertainty(
                 prot_target_df, n_samples=100
