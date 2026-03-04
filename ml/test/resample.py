@@ -6,23 +6,7 @@ import pandas as pd
 from scipy.interpolate import PchipInterpolator
 from scipy.optimize import OptimizeWarning, curve_fit
 
-# Suppress the covariance warning since we have 0 degrees of freedom on 5 points
 warnings.simplefilter("ignore", OptimizeWarning)
-
-# ViscosityEstimator is optional — gracefully falls back if JSON models are absent
-try:
-    from visc_estimator import SHEAR_RATE_VALS as _EST_SR_VALS
-    from visc_estimator import ViscosityEstimator
-
-    print(
-        "Estimator module found. Attempting to load viscosity models for sucrose titration augmentations..."
-    )
-    _ESTIMATOR_AVAILABLE = True
-except ImportError:
-    _ESTIMATOR_AVAILABLE = False
-
-VISC_MODELS_PATH = "viscosity_models.json"
-VISC_BOUNDARIES_PATH = "viscosity_boundaries.json"
 
 CONC_THRESHOLDS = {
     "arginine": 150.0,
@@ -279,6 +263,196 @@ MW_MAP = {
     "default_sugar": 342.3,
 }
 
+# ============================================================
+# Viscosity Profile Classification
+# ============================================================
+
+# Low-shear viscosity bins (cP) — boundaries chosen to reflect typical
+# pharmaceutical formulation ranges where low-viscosity samples dominate.
+#
+#   very_low  : < 5 cP    (dilute / near-solvent)
+#   low       : 5–20 cP   (easily injectable, abundant in datasets)
+#   medium    : 20–100 cP (moderate resistance)
+#   high      : 100–500 cP (challenging SC delivery)
+#   very_high : > 500 cP  (highly concentrated, rare)
+VISCOSITY_MAGNITUDE_BINS = [
+    ("very_low", 0.0, 5.0),
+    ("low", 5.0, 20.0),
+    ("medium", 20.0, 100.0),
+    ("high", 100.0, 500.0),
+    ("very_high", 500.0, np.inf),
+]
+
+# Shear-thinning classification based on the ratio of low-shear to
+# high-shear viscosity:  r = Viscosity_100 / Viscosity_15000000
+#
+#   newtonian        : r < 2    (nearly flat profile)
+#   mild_thinning    : 2 ≤ r < 10
+#   strong_thinning  : r ≥ 10
+SHEAR_THINNING_BINS = [
+    ("newtonian", 0.0, 2.0),
+    ("mild_thinning", 2.0, 10.0),
+    ("strong_thinning", 10.0, np.inf),
+]
+
+# Maximum synthetic augmentation multiplier to prevent extreme
+# oversampling of a single rare profile.
+MAX_BALANCE_MULTIPLIER = 8
+
+
+def classify_viscosity_profile(y_linear: np.ndarray) -> str:
+    """
+    Assigns a 2D profile class label of the form
+    "<magnitude_bin>__<shear_thinning_bin>", e.g. "high__strong_thinning".
+
+    Parameters
+    ----------
+    y_linear : array of viscosity values at [100, 1000, 10000, 100000, 15000000] s⁻¹.
+
+    Returns
+    -------
+    str  label used as the distribution-balancing key.
+    """
+    eta_low = float(y_linear[0])  # 100 s⁻¹
+    eta_high = float(y_linear[-1])  # 15 000 000 s⁻¹
+
+    # Magnitude bin
+    mag_label = "very_high"
+    for label, lo, hi in VISCOSITY_MAGNITUDE_BINS:
+        if lo <= eta_low < hi:
+            mag_label = label
+            break
+
+    # Shear-thinning bin
+    ratio = eta_low / max(eta_high, 1e-9)
+    st_label = "strong_thinning"
+    for label, lo, hi in SHEAR_THINNING_BINS:
+        if lo <= ratio < hi:
+            st_label = label
+            break
+
+    return f"{mag_label}__{st_label}"
+
+
+def compute_balance_multipliers(
+    df: pd.DataFrame,
+    visc_cols: list[str],
+    base_augmentations: int,
+    max_multiplier: int = MAX_BALANCE_MULTIPLIER,
+) -> dict[str, int]:
+    """
+    Computes per-profile-class augmentation counts that push the *synthetic*
+    distribution toward uniformity across profile classes.
+
+    Strategy
+    --------
+    - Count core samples per class  →  n_c
+    - Target: every class contributes ~equal synthetic samples.
+      target_synth_per_class  = max(n_c) * base_augmentations   (anchored to
+                                the most common class, which keeps its base rate)
+    - synth_count_c = target_synth_per_class / n_c  per core sample,
+      clamped to [base_augmentations, base_augmentations * max_multiplier]
+      and rounded to the nearest integer.
+
+    Returns
+    -------
+    dict mapping profile_class → augmentation_count_per_core_sample
+    """
+    class_counts: dict[str, int] = {}
+    for _, row in df.iterrows():
+        y = row[visc_cols].values.astype(float)
+        y = np.maximum(y, 1e-6)
+        label = classify_viscosity_profile(y)
+        class_counts[label] = class_counts.get(label, 0) + 1
+
+    if not class_counts:
+        return {}
+
+    max_count = max(class_counts.values())
+
+    multipliers: dict[str, int] = {}
+    for label, count in class_counts.items():
+        # Ideal total synthetic samples for this class (to match the majority class)
+        target_total_synth = max_count * base_augmentations
+        # Per core sample, how many synthetics do we need?
+        raw_aug = target_total_synth / count
+        # Clamp and round
+        clamped = int(round(min(raw_aug, base_augmentations * max_multiplier)))
+        clamped = max(clamped, base_augmentations)
+        multipliers[label] = clamped
+
+    return multipliers
+
+
+def normalize_protein_type(raw: str) -> str:
+    """
+    Returns a lowercase, whitespace-stripped canonical protein type key
+    suitable for grouping.  No mapping is applied — we group on the raw
+    value so that genuinely distinct entries (e.g. 'poly-hIgG' vs
+    'mab_igg1') remain separate bins.
+    """
+    return str(raw).strip().lower()
+
+
+def compute_intra_type_multipliers(
+    df: pd.DataFrame,
+    visc_cols: list[str],
+    protein_type_col: str,
+    base_augmentations: int,
+    max_multiplier: int = MAX_BALANCE_MULTIPLIER,
+) -> dict[tuple[str, str], int]:
+    """
+    Computes per-(protein_type, profile_class) augmentation counts so that
+    the synthetic distribution is balanced *within* each protein type.
+
+    This prevents a protein type with many low-viscosity samples (e.g.
+    poly-hIgG) from flooding the training set with that viscosity regime
+    while its higher-viscosity representatives remain scarce.
+
+    Strategy
+    --------
+    For every protein type T independently:
+      - Count core samples per profile class  →  n_{T,c}
+      - Anchor to the median class count within T (using median rather than
+        max avoids one outlier class dictating the scale for the whole type).
+      - target_synth_{T,c} = median_count_T × base_aug / n_{T,c}
+      - Clamp to [1, base_aug × max_multiplier] and round.
+
+    Using the median anchor means:
+      • Over-represented classes (n > median) get a multiplier < base, i.e.
+        they are downsampled relative to the default.
+      • Under-represented classes (n < median) are upsampled.
+      • The median class gets approximately base_aug (no change).
+
+    Returns
+    -------
+    dict mapping (protein_type, profile_class) → augmentation_count_per_core_sample
+    """
+    # Build (protein_type, profile_class) → count
+    counts: dict[tuple[str, str], int] = {}
+    for _, row in df.iterrows():
+        p_type = normalize_protein_type(row.get(protein_type_col, "unknown"))
+        y = np.maximum(row[visc_cols].values.astype(float), 1e-6)
+        p_class = classify_viscosity_profile(y)
+        key = (p_type, p_class)
+        counts[key] = counts.get(key, 0) + 1
+
+    # Group counts by protein type to compute per-type median
+    type_class_counts: dict[str, dict[str, int]] = {}
+    for (p_type, p_class), n in counts.items():
+        type_class_counts.setdefault(p_type, {})[p_class] = n
+
+    multipliers: dict[tuple[str, str], int] = {}
+    for p_type, class_counts in type_class_counts.items():
+        median_count = float(np.median(list(class_counts.values())))
+        for p_class, n in class_counts.items():
+            raw_aug = (median_count * base_augmentations) / n
+            clamped = int(round(min(raw_aug, base_augmentations * max_multiplier)))
+            clamped = max(clamped, 1)  # always generate at least one synthetic
+            multipliers[(p_type, p_class)] = clamped
+
+    return multipliers
+
 
 def carreau_yasuda_model(gamma, eta_0, eta_inf, K, a, n):
     gamma = np.maximum(gamma, 1e-6)
@@ -342,99 +516,12 @@ def get_regime_and_prior(row, target_chemical):
 
 
 # ============================================================
-# Sucrose multiplier via ViscosityEstimator
-# ============================================================
-
-
-def _get_sucrose_multipliers(estimator, row, conc_M, shear_rates):
-    """
-    Query the ViscosityEstimator for the per-shear-rate viscosity multiplier
-    that sucrose at `conc_M` (molar) produces for the protein/buffer context
-    described by `row`.
-
-    Returns a numpy array of shape (len(shear_rates),) where each element is
-    the multiplicative factor by which the baseline viscosity changes at that
-    shear rate:
-        multiplier[i] = exp(delta_log_visc[shear_rates[i]])
-                      = eta_with_sucrose[sr] / eta_baseline[sr]
-
-    This replaces the arbitrary scalar (dilution * shielding * crowding) used
-    previously for sucrose, providing shear-rate-resolved estimates grounded
-    in the statistical model built from real experimental data.
-
-    Returns None if the estimator cannot produce a valid estimate, so the
-    caller can fall back to the legacy scalar formula.
-    """
-    probe = {
-        "ID": row.get("ID", "probe"),
-        "Protein_type": row.get("Protein_type", ""),
-        "Protein_conc": row.get("Protein_conc", np.nan),
-        "Buffer_type": row.get("Buffer_type", ""),
-        "Buffer_conc": row.get("Buffer_conc", np.nan),
-        "Stabilizer_type": "Sucrose",
-        "Stabilizer_conc": conc_M,
-        # Remaining ingredient slots inactive
-        "Salt_type": "none",
-        "Salt_conc": 0.0,
-        "Surfactant_type": "none",
-        "Surfactant_conc": 0.0,
-        "Excipient_type": "none",
-        "Excipient_conc": 0.0,
-    }
-
-    try:
-        est_result = estimator.estimate(probe)
-    except Exception:
-        return None
-
-    # Find the sucrose IngredientEstimate
-    sucrose_ie = next(
-        (
-            ie
-            for ie in est_result.ingredient_estimates
-            if ie.ingredient.lower() == "sucrose"
-        ),
-        None,
-    )
-    if sucrose_ie is None:
-        return None
-
-    # Convert delta_log_visc to a per-shear-rate multiplier array aligned to
-    # the shear_rates used in this script (not necessarily the estimator's list)
-    multipliers = np.ones(len(shear_rates))
-    for i, sr in enumerate(shear_rates):
-        delta = sucrose_ie.delta_log_visc.get(str(int(sr)))
-        if delta is not None and np.isfinite(delta):
-            multipliers[i] = np.exp(delta)
-
-    # Sanity check: multipliers should be positive and not wildly extreme
-    if np.any(multipliers <= 0) or np.any(multipliers > 1e6):
-        return None
-
-    return multipliers
-
-
-def _legacy_sucrose_multiplier(row, conc_M, prior_val):
-    """
-    Original scalar physics multiplier for sucrose (fallback when estimator
-    is unavailable or returns None).
-    """
-    base_protein = float(row.get("Protein_conc", 0.0))
-    mw = MW_MAP.get("sucrose", 342.3)
-    mass_mg_ml = conc_M * mw
-    dilution = max(0.8, 1.0 - (mass_mg_ml / 1000.0))
-    shielding = np.exp(-1.0 * conc_M)
-    crowding = np.exp(0.0000005 * base_protein * (mass_mg_ml**2) * prior_val)
-    return dilution * shielding * crowding
-
-
-# ============================================================
 # Main
 # ============================================================
 
 
 def main():
-    input_file = "data/raw/formulation_data_03022026.csv"
+    input_file = "data/raw/formulation_data_03042026.csv"
     output_file = "data/processed/augmented_formulation_data.csv"
     print(f"Loading {input_file}...")
 
@@ -443,44 +530,6 @@ def main():
     except FileNotFoundError:
         print("Please ensure the CSV file is in the same directory.")
         return
-
-    # ── Initialise the viscosity estimator (sucrose titrations only) ──────────
-    estimator = None
-    if _ESTIMATOR_AVAILABLE:
-        models_ok = Path(VISC_MODELS_PATH).exists()
-        bounds_ok = Path(VISC_BOUNDARIES_PATH).exists()
-        if models_ok and bounds_ok:
-            try:
-                estimator = ViscosityEstimator(
-                    VISC_MODELS_PATH, VISC_BOUNDARIES_PATH, extrapolate=True
-                )
-                print(
-                    "ViscosityEstimator loaded — sucrose titrations will use "
-                    "model-derived per-shear-rate multipliers."
-                )
-            except Exception as e:
-                print(
-                    f"Warning: could not load ViscosityEstimator ({e}). "
-                    "Falling back to legacy sucrose formula."
-                )
-        else:
-            missing = [
-                p
-                for p, ok in [
-                    (VISC_MODELS_PATH, models_ok),
-                    (VISC_BOUNDARIES_PATH, bounds_ok),
-                ]
-                if not ok
-            ]
-            print(
-                f"Warning: {missing} not found. "
-                "Falling back to legacy sucrose formula."
-            )
-    else:
-        print(
-            "Warning: visc_estimator module not found. "
-            "Falling back to legacy sucrose formula."
-        )
 
     shear_rates = np.array([100, 1000, 10000, 100000, 15000000], dtype=float)
     visc_cols = [
@@ -501,35 +550,114 @@ def main():
         "Excipient_conc",
     ]
 
-    synthetic_rows = []
     base_augmentations = 2
-    failed_fits = 0
-    flat_samples_detected = 0
-    titrations_generated = 0
-    # Track how often each sucrose multiplier source was used
-    sucrose_model_hits = 0
-    sucrose_fallback_hits = 0
-
     np.random.seed(42)
 
-    print(
-        "Generating synthetic data "
-        "(Carreau-Yasuda + PCHIP + Forced Flats + Titration Sweeps)..."
+    # ------------------------------------------------------------------
+    # Pre-compute distribution-balancing multipliers.
+    #
+    # Only core (real) samples are considered here — no synthetic rows
+    # are included in the distribution analysis, so the balance weights
+    # reflect the true underlying data distribution.
+    # ------------------------------------------------------------------
+    print("Analysing viscosity profile distribution...")
+    balance_multipliers = compute_balance_multipliers(
+        df, visc_cols, base_augmentations, MAX_BALANCE_MULTIPLIER
     )
 
-    for idx, row in df.iterrows():
+    protein_type_col = "Protein_class_type"
+    print("Analysing intra-protein-type profile distribution...")
+    intra_type_multipliers = compute_intra_type_multipliers(
+        df, visc_cols, protein_type_col, base_augmentations, MAX_BALANCE_MULTIPLIER
+    )
+
+    # Print distribution summary for transparency
+    print("\n  Global profile class distribution (core samples):")
+    class_counts_summary: dict[str, int] = {}
+    for _, row in df.iterrows():
+        y = np.maximum(row[visc_cols].values.astype(float), 1e-6)
+        lbl = classify_viscosity_profile(y)
+        class_counts_summary[lbl] = class_counts_summary.get(lbl, 0) + 1
+
+    for lbl in sorted(class_counts_summary):
+        n = class_counts_summary[lbl]
+        m = balance_multipliers.get(lbl, base_augmentations)
+        print(f"    {lbl:<38s}  core={n:4d}  global_synth_per_core={m:2d}")
+
+    print("\n  Intra-type profile distribution (core samples):")
+    # Group for the per-type report
+    type_summary: dict[str, dict[str, int]] = {}
+    for _, row in df.iterrows():
+        p_type = normalize_protein_type(row.get(protein_type_col, "unknown"))
+        y = np.maximum(row[visc_cols].values.astype(float), 1e-6)
+        lbl = classify_viscosity_profile(y)
+        type_summary.setdefault(p_type, {})[lbl] = (
+            type_summary.get(p_type, {}).get(lbl, 0) + 1
+        )
+
+    for p_type in sorted(type_summary):
+        print(f"    [{p_type}]")
+        for lbl in sorted(type_summary[p_type]):
+            n = type_summary[p_type][lbl]
+            global_m = balance_multipliers.get(lbl, base_augmentations)
+            intra_m = intra_type_multipliers.get((p_type, lbl), base_augmentations)
+            final_m = min(global_m, intra_m)
+            print(
+                f"      {lbl:<38s}  core={n:4d}  "
+                f"global={global_m:2d}  intra={intra_m:2d}  "
+                f"→ effective={final_m:2d}"
+            )
+    print()
+
+    synthetic_rows = []
+    failed_fits = 0
+    flat_samples_detected = 0
+
+    print("Generating synthetic data...")
+
+    for _, row in df.iterrows():
         y_linear = row[visc_cols].values.astype(float)
         y_linear = np.maximum(y_linear, 1e-6)
-        base_protein = float(row.get("Protein_conc", 0.0))
 
-        # --- FLAT PLATEAU DETECTION ---
-        is_flat_start = (y_linear[0] - y_linear[1]) < (0.02 * y_linear[0])
+        # Classify this core sample to look up its balance multiplier
+        profile_class = classify_viscosity_profile(y_linear)
+        p_type = normalize_protein_type(row.get(protein_type_col, "unknown"))
 
-        if is_flat_start:
+        global_aug = balance_multipliers.get(profile_class, base_augmentations)
+        intra_aug = intra_type_multipliers.get(
+            (p_type, profile_class), base_augmentations
+        )
+
+        # Final balance weight: the more restrictive of the two axes.
+        # - global_aug  lifts globally under-represented profile shapes.
+        # - intra_aug   suppresses profiles that are over-represented
+        #               *within their own protein type* (e.g. poly-hIgG
+        #               low-viscosity), even when they look globally rare.
+        # Taking min() ensures neither dimension is silently ignored.
+        balance_aug = min(global_aug, intra_aug)
+
+        # --- PLATEAU DETECTION (all adjacent shear-rate pairs) ---
+        # A region is considered flat when the drop between two consecutive
+        # points is less than 2 % of the left-hand value.  We scan every
+        # adjacent pair so intermediate plateaus (e.g. 1 000–10 000 s⁻¹)
+        # are caught alongside the classical flat-start case.
+        flat_regions = [
+            i
+            for i in range(len(y_linear) - 1)
+            if (y_linear[i] - y_linear[i + 1]) < (0.02 * y_linear[i])
+        ]
+        has_flat_region = len(flat_regions) > 0
+        is_flat_start = 0 in flat_regions  # kept for the forced-flat gate below
+
+        if has_flat_region:
             flat_samples_detected += 1
-            current_augmentations = base_augmentations * 5
+            # Scale boost by how many flat regions exist so profiles with
+            # multiple plateaus receive proportionally more augmentation,
+            # then take the larger of that or the distribution balance weight.
+            flat_boost = base_augmentations * (3 + len(flat_regions) * 2)
+            current_augmentations = max(flat_boost, balance_aug)
         else:
-            current_augmentations = base_augmentations
+            current_augmentations = balance_aug
 
         # Standard Carreau-Yasuda initial guesses
         eta_0_guess = max(y_linear[0], y_linear[-1] + 0.1)
@@ -552,7 +680,9 @@ def main():
             failed_fits += 1
 
         # -------------------------------------------------------------
-        # 1. GENERATE STANDARD AUGMENTATIONS (Upsampled if flat)
+        # 1. GENERATE STANDARD AUGMENTATIONS
+        #    Count is now governed by the balance multiplier (and the
+        #    flat-start override where applicable) instead of a fixed 2.
         # -------------------------------------------------------------
         for i in range(current_augmentations):
             new_row = row.copy()
@@ -585,7 +715,11 @@ def main():
             synthetic_rows.append(new_row)
 
         # -------------------------------------------------------------
-        # 2. GENERATE FORCED FLAT SCENARIOS (For non-flat curves)
+        # 2. GENERATE FORCED FLAT SCENARIOS (For non-flat-start curves only)
+        #    Injecting a synthetic flat start is only meaningful when the
+        #    real curve does not already begin flat — using is_flat_start
+        #    (index 0 specifically) preserves that intent while still
+        #    allowing the broader has_flat_region boost above.
         # -------------------------------------------------------------
         if not is_flat_start:
             num_forced_flat = 2
@@ -613,96 +747,45 @@ def main():
 
                 synthetic_rows.append(new_row)
 
-        # # -------------------------------------------------------------
-        # # PRIOR-DIRECTED TITRATION SWEEPS
-        # # -------------------------------------------------------------
-        # if base_protein >= 100.0:
-        #     titration_chemicals = [
-        #         ("Stabilizer_type", "Stabilizer_conc", "Sucrose"),
-        #         ("Excipient_type", "Excipient_conc", "Arginine"),
-        #     ]
-        #     molar_sweeps = [0.1, 0.25, 0.4, 0.5]
-
-        #     for type_col, conc_col, chem_name in titration_chemicals:
-        #         prior_val = get_regime_and_prior(row, chem_name)
-        #         mw = MW_MAP.get(chem_name.lower(), 150.0)
-
-        #         for t_idx, conc_M in enumerate(molar_sweeps):
-        #             new_row = row.copy()
-        #             new_row["ID"] = f"{row['ID']}_titrate_{chem_name}_{t_idx+1}"
-
-        #             # Inject chemical
-        #             if pd.isna(new_row[type_col]) or str(new_row[type_col]).lower() in [
-        #                 "none",
-        #                 "unknown",
-        #             ]:
-        #                 new_row[type_col] = chem_name
-        #             new_row[conc_col] = conc_M
-
-        #             # ----------------------------------------------------------
-        #             # SUCROSE: use model-derived per-shear-rate multipliers
-        #             # ----------------------------------------------------------
-        #             if chem_name == "Sucrose":
-        #                 model_multipliers = None
-        #                 if estimator is not None:
-        #                     model_multipliers = _get_sucrose_multipliers(
-        #                         estimator, row, conc_M, shear_rates
-        #                     )
-
-        #                 if model_multipliers is not None:
-        #                     # Model path — each shear rate gets its own multiplier
-        #                     # derived from exp(delta_log_visc[sr]), reflecting the
-        #                     # shear-rate-resolved crowding effect captured in the
-        #                     # statistical model (changes to both K and n).
-        #                     # Small Gaussian noise is added in log space to maintain
-        #                     # the same sample diversity as the rest of the pipeline.
-        #                     noise = np.random.normal(0.0, 0.02, size=len(shear_rates))
-        #                     per_sr_multipliers = model_multipliers * np.exp(noise)
-        #                     new_y = y_linear * per_sr_multipliers
-        #                     sucrose_model_hits += 1
-        #                 else:
-        #                     # Legacy fallback — scalar multiplier, all shear rates equal
-        #                     scalar = _legacy_sucrose_multiplier(row, conc_M, prior_val)
-        #                     new_y = y_linear * scalar
-        #                     sucrose_fallback_hits += 1
-
-        #             # ----------------------------------------------------------
-        #             # ARGININE (and any other chemical): original physics formula
-        #             # ----------------------------------------------------------
-        #             else:
-        #                 mass_mg_ml = conc_M * mw
-        #                 dilution = max(0.8, 1.0 - (mass_mg_ml / 1000.0))
-
-        #                 if prior_val > 0:
-        #                     shielding = np.exp(-1.0 * conc_M)
-        #                     crowding = np.exp(
-        #                         0.0000005 * base_protein * (mass_mg_ml**2) * prior_val
-        #                     )
-        #                 elif prior_val < 0:
-        #                     shielding = np.exp(prior_val * 0.8 * conc_M)
-        #                     crowding = 1.0
-        #                 else:
-        #                     shielding = 1.0
-        #                     crowding = 1.0
-
-        #                 physics_multiplier = dilution * shielding * crowding
-        #                 new_y = y_linear * physics_multiplier
-
-        #             new_row[visc_cols] = new_y
-        #             titrations_generated += 1
-        #             synthetic_rows.append(new_row)
-
     synth_df = pd.DataFrame(synthetic_rows)
     augmented_df = pd.concat([df, synth_df], ignore_index=True)
     augmented_df.to_csv(output_file, index=False)
 
-    # print(f"Generated {titrations_generated} Prior-Directed Titrations.")
-    # if sucrose_model_hits + sucrose_fallback_hits > 0:
-    #     print(
-    #         f"  Sucrose multiplier source — "
-    #         f"model: {sucrose_model_hits}, "
-    #         f"legacy fallback: {sucrose_fallback_hits}"
-    #     )
+    # ------------------------------------------------------------------
+    # Post-augmentation distribution report
+    # ------------------------------------------------------------------
+    print(f"\nSummary:")
+    print(f"  Core samples          : {len(df)}")
+    print(f"  Synthetic samples     : {len(synth_df)}")
+    print(f"  Total                 : {len(augmented_df)}")
+    print(f"  Failed CY fits        : {failed_fits}")
+    print(f"  Any flat region found : {flat_samples_detected}")
+
+    print("\n  Synthetic sample distribution by protein type and profile class:")
+    synth_type_class_counts: dict[str, dict[str, int]] = {}
+    for _, row in synth_df.iterrows():
+        p_type = normalize_protein_type(row.get(protein_type_col, "unknown"))
+        y = np.maximum(row[visc_cols].values.astype(float), 1e-6)
+        lbl = classify_viscosity_profile(y)
+        synth_type_class_counts.setdefault(p_type, {})[lbl] = (
+            synth_type_class_counts.get(p_type, {}).get(lbl, 0) + 1
+        )
+
+    all_p_types = sorted(set(list(type_summary) + list(synth_type_class_counts)))
+    for p_type in all_p_types:
+        core_classes = type_summary.get(p_type, {})
+        synth_classes = synth_type_class_counts.get(p_type, {})
+        all_lbls = sorted(set(list(core_classes) + list(synth_classes)))
+        print(f"    [{p_type}]")
+        for lbl in all_lbls:
+            core_n = core_classes.get(lbl, 0)
+            synth_n = synth_classes.get(lbl, 0)
+            print(
+                f"      {lbl:<38s}  core={core_n:4d}  synth={synth_n:5d}  "
+                f"total={core_n + synth_n:5d}"
+            )
+
+    print(f"\nSaved to {output_file}")
 
 
 if __name__ == "__main__":

@@ -41,18 +41,31 @@ class AttentionPool(nn.Module):
         super().__init__()
         self.attn = nn.MultiheadAttention(latent_dim, n_heads, batch_first=True)
         self.query = nn.Parameter(torch.randn(1, 1, latent_dim))
+        # [FIX-1] LayerNorm must be present to match training state_dict keys
+        # (pooler.norm.weight / pooler.norm.bias). Omitting it causes a hard
+        # load failure even if the weights are otherwise identical.
+        self.norm = nn.LayerNorm(latent_dim)
 
     def forward(self, x):
         q = self.query.expand(x.size(0), -1, -1)
         out, _ = self.attn(q, x, x)
-        return out.squeeze(1)
+        return self.norm(out.squeeze(1))
 
 
-class CrossSampleCNP(nn.Module):
+class CarreauYasudaCNP(nn.Module):
+    """
+    Exact replica of the CarreauYasudaCNP class from train_cy_cnp.py.
+
+    Key architectural differences from the old CrossSampleCNP this replaces:
+      - param_net outputs 5 Carreau-Yasuda parameters (not 1 raw viscosity).
+      - The decoder does NOT take shear rate as input; shear is applied through
+        the CY physics equation inside forward / decode_from_memory.
+      - Four scaler buffers (shear_mean, shear_std, visc_mean, visc_std) are
+        saved inside the model's state_dict and restored automatically on load.
+    """
+
     def __init__(self, static_dim, hidden_dim=128, latent_dim=128, dropout=0.0):
         super().__init__()
-
-        # --- ARCHITECTURE FIX: Restore Static Inputs ---
         self.encoder = nn.Sequential(
             nn.Linear(2 + static_dim, hidden_dim),
             nn.ReLU(),
@@ -62,46 +75,85 @@ class CrossSampleCNP(nn.Module):
             nn.Linear(hidden_dim, latent_dim),
         )
         self.pooler = AttentionPool(latent_dim)
-        self.decoder = nn.Sequential(
-            nn.Linear(1 + static_dim + latent_dim, hidden_dim),
+
+        # Maps (static + latent r) → 5 raw CY parameters. No shear input here;
+        # shear enters through the physics equation below.
+        self.param_net = nn.Sequential(
+            nn.Linear(static_dim + latent_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, 1),
+            nn.Linear(hidden_dim, 5),
         )
 
+        # Scaler statistics are stored as buffers so they are saved/restored
+        # with the state_dict. Values are overwritten by set_scaler() at
+        # training time; at inference time they come back via load_state_dict.
+        self.register_buffer("shear_mean", torch.tensor(0.0))
+        self.register_buffer("shear_std", torch.tensor(1.0))
+        self.register_buffer("visc_mean", torch.tensor(0.0))
+        self.register_buffer("visc_std", torch.tensor(1.0))
+
+    def set_scaler(self, physics_scaler):
+        """Populates scaler buffers from a fitted StandardScaler."""
+        self.shear_mean.fill_(physics_scaler.mean_[0])
+        self.shear_std.fill_(physics_scaler.scale_[0])
+        self.visc_mean.fill_(physics_scaler.mean_[1])
+        self.visc_std.fill_(physics_scaler.scale_[1])
+
+    def _cy_decode(self, raw_params, query_shear):
+        """Shared CY physics used by both forward and decode_from_memory."""
+        # Constrain parameters to physically valid ranges
+        eta_0 = torch.exp(raw_params[..., 0:1])
+        eta_inf = eta_0 * torch.sigmoid(raw_params[..., 1:2])
+        lam = torch.exp(raw_params[..., 2:3])
+        a = F.softplus(raw_params[..., 3:4]) + 1e-3
+        n = torch.sigmoid(raw_params[..., 4:5])
+
+        # Unscale shear z-scores → raw physical values (s⁻¹)
+        log10_shear_raw = query_shear * self.shear_std + self.shear_mean
+        shear_raw = 10.0**log10_shear_raw
+
+        # Carreau-Yasuda equation
+        bracket = 1.0 + (lam * shear_raw) ** a
+        exponent = (n - 1.0) / a
+        visc_raw = eta_inf + (eta_0 - eta_inf) * (bracket**exponent)
+
+        # Re-scale viscosity to z-score space to match training targets
+        log10_visc_raw = torch.log10(visc_raw + 1e-9)
+        return (log10_visc_raw - self.visc_mean) / self.visc_std
+
     def forward(self, context_tensor, query_shear, query_static):
-        # 1. Encode Context
         encoded = self.encoder(context_tensor)
         r = self.pooler(encoded)
 
-        # 2. Decode
         n_queries = query_shear.size(1)
         r_expanded = r.unsqueeze(1).repeat(1, n_queries, 1)
 
-        decoder_input = torch.cat([query_shear, query_static, r_expanded], dim=-1)
-        return self.decoder(decoder_input)
+        param_input = torch.cat([query_static, r_expanded], dim=-1)
+        raw_params = self.param_net(param_input)
+        return self._cy_decode(raw_params, query_shear)
 
     def encode_memory(self, context_tensor):
-        """
-        Encodes the context into a single latent vector (memory).
-        Used during the 'learn' phase.
-        """
-        encoded = self.encoder(context_tensor)
-        return self.pooler(encoded)
+        """Encodes the context into a single latent vector (memory)."""
+        return self.pooler(self.encoder(context_tensor))
 
     def decode_from_memory(self, memory_vector, query_shear, query_static):
         """
-        Decodes targets using a pre-computed latent vector.
-        Used during the 'predict' phase.
+        Decodes viscosity predictions from a pre-computed latent vector.
+
+        Previously referenced self.decoder (which does not exist on this
+        class). Now correctly replicates the full param_net + CY physics
+        pipeline used in forward(), so predictions are identical to running
+        the full forward pass with a cached memory vector.
         """
         n_queries = query_shear.size(1)
-        # Expand memory to match the number of query points
         r_expanded = memory_vector.unsqueeze(1).repeat(1, n_queries, 1)
 
-        decoder_input = torch.cat([query_shear, query_static, r_expanded], dim=-1)
-        return self.decoder(decoder_input)
+        param_input = torch.cat([query_static, r_expanded], dim=-1)
+        raw_params = self.param_net(param_input)
+        return self._cy_decode(raw_params, query_shear)
 
 
 # ==========================================
@@ -395,8 +447,11 @@ class ViscosityPredictorCNP:
         logger.debug(f"Model config: {self.config}")
         logger.debug(f"Static dimension: {self.static_dim}")
 
-        # Initialize the standalone model class
-        self.model = CrossSampleCNP(
+        # Initialize with the same architecture used at training time.
+        # CarreauYasudaCNP's scaler buffers (shear_mean/std, visc_mean/std)
+        # are restored automatically by load_state_dict below; no need to
+        # call set_scaler() separately at inference time.
+        self.model = CarreauYasudaCNP(
             static_dim=self.static_dim,
             hidden_dim=self.config["hidden_dim"],
             latent_dim=self.config["latent_dim"],
@@ -799,8 +854,8 @@ class ViscosityPredictorCNP:
 # ==========================================
 if __name__ == "__main__":
     # Test Configuration
-    model_dir = "models/experiments/o_net"
-    training_file = "data/raw/formulation_data_02122026.csv"
+    model_dir = "models/experiments/cnp-cy"
+    training_file = "data/raw/formulation_data_03042026.csv"
 
     # 1. Initialize
     try:

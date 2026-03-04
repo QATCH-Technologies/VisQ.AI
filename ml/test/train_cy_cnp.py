@@ -568,21 +568,13 @@ def load_and_preprocess(csv_path, save_dir=None):
         df["Excipient_type"], default_mw=150.0
     )  # generic amino acid guess
     df["Excipient_mg_mL"] = (df["Excipient_conc"] * excipient_mw) / 1000.0
-
-    # Surfactant (%w/v -> mg/mL): % * 10
     df["Surfactant_mg_mL"] = df["Surfactant_conc"] * 10.0
-
-    # 2. Calculate the Unified Physics Features
     df["log_conc"] = np.log1p(df["Protein_conc"])
     df["conc_sq"] = df["Protein_conc"] ** 2
     df["conc_x_kP"] = df["Protein_conc"] * df["kP"]
     df["conc_x_HCI"] = df["Protein_conc"] * df["HCI"]
-
-    # Crowding Index (Now physically accurate: mg of protein interacting with mg of stabilizer)
     df["Crowding_Index"] = df["Protein_conc"] * df["Stabilizer_mg_mL"]
     df["Stabilizer_Squared"] = df["Stabilizer_mg_mL"] ** 2
-
-    # Total Solute Mass (Sum of all mass in mg/mL)
     df["Total_Solute_Mass"] = (
         df["Protein_conc"]
         + df["Stabilizer_mg_mL"]
@@ -590,13 +582,27 @@ def load_and_preprocess(csv_path, save_dir=None):
         + df["Salt_mg_mL"]
         + df["Surfactant_mg_mL"]
     )
+    V_BAR_PROTEIN = 0.73 / 1000.0
+    V_BAR_SUCROSE = 0.62 / 1000.0
+    V_BAR_SALT = 0.30 / 1000.0
+    V_BAR_AMINO = 0.70 / 1000.0
 
-    # Effective Fraction: The true volumetric crowding proxy
+    df["Phi_Protein"] = df["Protein_conc"] * V_BAR_PROTEIN
+    df["Phi_Stabilizer"] = df["Stabilizer_mg_mL"] * V_BAR_SUCROSE
+    df["Phi_Salt"] = df["Salt_mg_mL"] * V_BAR_SALT
+    df["Phi_Excipient"] = df["Excipient_mg_mL"] * V_BAR_AMINO
+
+    df["Phi_Total"] = (
+        df["Phi_Protein"] + df["Phi_Stabilizer"] + df["Phi_Salt"] + df["Phi_Excipient"]
+    )
     df["Effective_Protein_Fraction"] = df["Protein_conc"] / df[
         "Total_Solute_Mass"
     ].replace(0, 1e-6)
-
-    # Add the engineered columns to the NN's numerical pipeline
+    PHI_MAX = 0.65
+    safe_phi = df["Phi_Total"].clip(upper=PHI_MAX - 0.01)
+    df["KD_Asymptote"] = (1.0 - (safe_phi / PHI_MAX)) ** -2.0
+    df["Exp_Crowding"] = np.exp(safe_phi * 2.5)
+    df["Ionic_Strength_Proxy"] = np.sqrt(df["Salt_conc"] / 1000.0)
     engineered_cols = [
         "log_conc",
         "conc_sq",
@@ -606,6 +612,11 @@ def load_and_preprocess(csv_path, save_dir=None):
         "Stabilizer_Squared",
         "Total_Solute_Mass",
         "Effective_Protein_Fraction",
+        "KD_Asymptote",
+        "Exp_Crowding",
+        "Phi_Protein",
+        "Phi_Stabilizer",
+        "Phi_Total",
     ]
 
     # ---------------------------------------------------------

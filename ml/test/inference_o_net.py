@@ -597,7 +597,8 @@ class ViscosityPredictorCNP:
             "sucrose": 342.3,
             "trehalose": 342.3,
             "arginine": 174.2,
-            "proline": 115.1,
+            "proline": 115.1,  # Note: using 115.13 in train, but keeping 115.1 if that's your standard
+            "lysine": 149.19,  # Adding the updated precision from train
             "nacl": 58.44,
             "default_sugar": 342.3,
         }
@@ -634,7 +635,7 @@ class ViscosityPredictorCNP:
 
         df_proc["Surfactant_mg_mL"] = df_proc["Surfactant_conc"] * 10.0
 
-        # Feature calculation
+        # Base feature calculation
         df_proc["log_conc"] = np.log1p(df_proc["Protein_conc"])
         df_proc["conc_sq"] = df_proc["Protein_conc"] ** 2
         df_proc["conc_x_kP"] = df_proc["Protein_conc"] * df_proc["kP"]
@@ -656,6 +657,31 @@ class ViscosityPredictorCNP:
         df_proc["Effective_Protein_Fraction"] = df_proc["Protein_conc"] / df_proc[
             "Total_Solute_Mass"
         ].replace(0, 1e-6)
+
+        # --- NEW RHEOLOGICAL PHYSICS FEATURES ---
+        V_BAR_PROTEIN = 0.73 / 1000.0
+        V_BAR_SUCROSE = 0.62 / 1000.0
+        V_BAR_SALT = 0.30 / 1000.0
+        V_BAR_AMINO = 0.70 / 1000.0
+
+        df_proc["Phi_Protein"] = df_proc["Protein_conc"] * V_BAR_PROTEIN
+        df_proc["Phi_Stabilizer"] = df_proc["Stabilizer_mg_mL"] * V_BAR_SUCROSE
+        df_proc["Phi_Salt"] = df_proc["Salt_mg_mL"] * V_BAR_SALT
+        df_proc["Phi_Excipient"] = df_proc["Excipient_mg_mL"] * V_BAR_AMINO
+
+        df_proc["Phi_Total"] = (
+            df_proc["Phi_Protein"]
+            + df_proc["Phi_Stabilizer"]
+            + df_proc["Phi_Salt"]
+            + df_proc["Phi_Excipient"]
+        )
+
+        PHI_MAX = 0.65
+        safe_phi = df_proc["Phi_Total"].clip(upper=PHI_MAX - 0.01)
+        df_proc["KD_Asymptote"] = (1.0 - (safe_phi / PHI_MAX)) ** -2.0
+        df_proc["Exp_Crowding"] = np.exp(safe_phi * 2.5)
+        df_proc["Ionic_Strength_Proxy"] = np.sqrt(df_proc["Salt_conc"] / 1000.0)
+        # ----------------------------------------
 
         # 3. Normalize Categories
         for c in self.cat_cols:
@@ -726,7 +752,7 @@ class ViscosityPredictorCNP:
                 static_list.append(X_static[i])
                 row_idx += 1
 
-        # [FIX-6] Single batched transform — avoids n*m repeated sklearn calls
+        # Single batched transform — avoids n*m repeated sklearn calls
         scaled_points = self.physics_scaler.transform(raw_points)
 
         static_t = (

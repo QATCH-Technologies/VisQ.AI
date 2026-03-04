@@ -21,6 +21,8 @@ import warnings
 import matplotlib
 
 matplotlib.use("Agg")
+logging.getLogger("matplotlib").setLevel(logging.WARNING)
+logging.getLogger("matplotlib.font_manager").setLevel(logging.WARNING)
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
@@ -41,12 +43,19 @@ except ImportError:
 # CONFIG
 # ──────────────────────────────────────────────────────────────────────────────
 MODEL_DIR = r"models\experiments\o_net_v3"
-DATA_CSV = r"data/raw/formulation_data_03022026.csv"
+DATA_CSV = r"data/raw/formulation_data_03042026.csv"
 OUTPUT_DIR = r"models\experiments\o_net_v3\benchmarks"
 LEARN_STEPS = 50
 LEARN_LR = 1e-3
 SEED = 42
 TARGET_VISC = "Viscosity_1000"  # shear rate column to show on parity plot
+
+# Set to a specific protein name (e.g. "mAb-A") to evaluate only that protein.
+# Set to None to run the full per-protein loop.
+TARGET_PROTEIN = "poly-hIgG"  # e.g. "mAb-A"
+
+# Set to False to skip saving the parity plot PNG entirely.
+PLOT_ENABLED = True
 # ──────────────────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
@@ -173,18 +182,65 @@ def safe_log(msg: str):
         logger.info(msg.encode("ascii", errors="replace").decode("ascii"))
 
 
+def _eval_single_protein(
+    predictor, df: pd.DataFrame, pt: str, base_snap: dict
+) -> list[dict]:
+    """
+    Calibrate and predict one protein type.  Returns a list of record dicts.
+    The base model state is restored before learning and NOT restored after,
+    so the caller must manage snapshot resets between proteins if needed.
+    """
+    protein_df = df[df["Protein_type"] == pt].copy()
+    logger.info(
+        f"     Calibrating on {len(protein_df)} samples, "
+        f"then predicting the same {len(protein_df)} samples."
+    )
+
+    restore_state(predictor, base_snap)
+    predictor.learn(protein_df, steps=LEARN_STEPS, lr=LEARN_LR)
+
+    if has_nan(predictor):
+        logger.warning(f"     NaN weights after learning {pt} — skipping.")
+        restore_state(predictor, base_snap)
+        return []
+
+    try:
+        results = predictor.predict(protein_df)
+    except Exception as e:
+        logger.warning(f"     Predict failed for {pt}: {e}")
+        return []
+
+    if PRED_TARGET not in results.columns:
+        logger.warning(f"     {PRED_TARGET} not in results for {pt}.")
+        return []
+
+    records = []
+    for _, row in results.iterrows():
+        true_val = protein_df.loc[
+            protein_df["ID"] == str(row["ID"]), TARGET_VISC
+        ].values
+        if len(true_val) == 0:
+            continue
+        records.append(
+            {
+                "Protein_type": pt,
+                "ID": str(row["ID"]),
+                "True_Visc1000": float(true_val[0]),
+                "Pred_Visc1000": float(row[PRED_TARGET]),
+            }
+        )
+    return records
+
+
 def run_per_protein(predictor, df: pd.DataFrame) -> pd.DataFrame:
     """
-    Per-protein self-calibration evaluation.
+    Per-protein self-calibration evaluation across all protein types.
 
     For each named protein type:
       1. Restore the base (zero-shot / pretrained) model state.
       2. Calibrate (learn) on ALL samples of that protein.
       3. Predict those same samples.
       4. Record true vs predicted Viscosity_1000.
-
-    This tests how well the model adapts to and explains each protein's
-    formulation-viscosity landscape once given its complete dataset.
 
     Returns a DataFrame with columns:
         Protein_type, ID, True_Visc1000, Pred_Visc1000
@@ -197,7 +253,6 @@ def run_per_protein(predictor, df: pd.DataFrame) -> pd.DataFrame:
         ]
     )
 
-    # Snapshot the base model state once — restored fresh for every protein
     base_snap = save_state(predictor)
     all_records = []
 
@@ -207,57 +262,54 @@ def run_per_protein(predictor, df: pd.DataFrame) -> pd.DataFrame:
 
     for pt in protein_types:
         safe_log(f"\n  Protein: {pt}")
+        records = _eval_single_protein(predictor, df, pt, base_snap)
+        all_records.extend(records)
 
-        protein_df = df[df["Protein_type"] == pt].copy()
-        logger.info(
-            f"     Calibrating on {len(protein_df)} samples, then predicting the same {len(protein_df)} samples."
-        )
-
-        # Restore clean base weights, then calibrate on this protein's data
-        restore_state(predictor, base_snap)
-        predictor.learn(protein_df, steps=LEARN_STEPS, lr=LEARN_LR)
-
-        if has_nan(predictor):
-            logger.warning(f"     NaN weights after learning {pt} — skipping.")
-            restore_state(predictor, base_snap)
-            continue
-
-        # Predict the same protein samples (tests calibration quality)
-        try:
-            results = predictor.predict(protein_df)
-        except Exception as e:
-            logger.warning(f"     Predict failed for {pt}: {e}")
-            continue
-
-        if PRED_TARGET not in results.columns:
-            logger.warning(f"     {PRED_TARGET} not in results for {pt}.")
-            continue
-
-        for _, row in results.iterrows():
-            true_val = protein_df.loc[
-                protein_df["ID"] == str(row["ID"]), TARGET_VISC
-            ].values
-            if len(true_val) == 0:
-                continue
-            all_records.append(
-                {
-                    "Protein_type": pt,
-                    "ID": str(row["ID"]),
-                    "True_Visc1000": float(true_val[0]),
-                    "Pred_Visc1000": float(row[PRED_TARGET]),
-                }
-            )
-
-        # Per-protein summary
-        sub_records = [r for r in all_records if r["Protein_type"] == pt]
-        if sub_records:
-            sub = pd.DataFrame(sub_records)
+        if records:
+            sub = pd.DataFrame(records)
             m = metrics(sub["True_Visc1000"], sub["Pred_Visc1000"])
             logger.info(
                 f"     MAE={m['mae']:.3f} cP  |  MAPE={m['mape']:.1f}%  |  "
                 f"RMSE={m['rmse']:.3f} cP  |  R2={m['r2']:.4f}"
             )
+
     return pd.DataFrame(all_records)
+
+
+def run_single_protein(predictor, df: pd.DataFrame, protein_name: str) -> pd.DataFrame:
+    """
+    Calibrate and evaluate a single named protein type.
+
+    Raises ValueError if the protein name is not found in the dataset.
+
+    Returns a DataFrame with columns:
+        Protein_type, ID, True_Visc1000, Pred_Visc1000
+    """
+    available = sorted(
+        pt
+        for pt in df["Protein_type"].unique()
+        if str(pt).lower() not in ("none", "nan", "")
+    )
+
+    if protein_name not in available:
+        raise ValueError(
+            f"Protein '{protein_name}' not found in dataset.\n"
+            f"Available types: {available}"
+        )
+
+    safe_log(f"\n  Protein (single eval): {protein_name}")
+    base_snap = save_state(predictor)
+    records = _eval_single_protein(predictor, df, protein_name, base_snap)
+
+    if records:
+        sub = pd.DataFrame(records)
+        m = metrics(sub["True_Visc1000"], sub["Pred_Visc1000"])
+        logger.info(
+            f"     MAE={m['mae']:.3f} cP  |  MAPE={m['mape']:.1f}%  |  "
+            f"RMSE={m['rmse']:.3f} cP  |  R2={m['r2']:.4f}"
+        )
+
+    return pd.DataFrame(records)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -266,6 +318,9 @@ def run_per_protein(predictor, df: pd.DataFrame) -> pd.DataFrame:
 
 
 def plot_parity(results_df: pd.DataFrame, save_dir: str) -> str:
+    """
+    Generate and save the parity plot PNG.  Only called when PLOT_ENABLED=True.
+    """
     protein_types = sorted(results_df["Protein_type"].unique())
     colour_map = {
         pt: PROTEIN_COLOURS[i % len(PROTEIN_COLOURS)]
@@ -361,10 +416,16 @@ def plot_parity(results_df: pd.DataFrame, save_dir: str) -> str:
 
     # ── Axis labels ───────────────────────────────────────────────────────────
     ax.set_xlabel(
-        "Measured  Viscosity @ 1000 s⁻¹  (cP)", fontsize=16, labelpad=12, color=C_TEXT
+        "Measured  Viscosity @ 1000 s\u207b\u00b9  (cP)",
+        fontsize=16,
+        labelpad=12,
+        color=C_TEXT,
     )
     ax.set_ylabel(
-        "Predicted  Viscosity @ 1000 s⁻¹  (cP)", fontsize=16, labelpad=12, color=C_TEXT
+        "Predicted  Viscosity @ 1000 s\u207b\u00b9  (cP)",
+        fontsize=16,
+        labelpad=12,
+        color=C_TEXT,
     )
 
     # ── Metrics box (top-left) ────────────────────────────────────────────────
@@ -373,7 +434,7 @@ def plot_parity(results_df: pd.DataFrame, save_dir: str) -> str:
         f"MAE        {overall['mae']:.2f} cP\n"
         f"MAPE       {overall['mape']:.1f}%\n"
         f"RMSE       {overall['rmse']:.2f} cP\n"
-        f"R²         {overall['r2']:.4f}"
+        f"R\u00b2         {overall['r2']:.4f}"
     )
     ax.text(
         0.03,
@@ -407,9 +468,11 @@ def plot_parity(results_df: pd.DataFrame, save_dir: str) -> str:
         borderpad=0.8,
         handlelength=1.8,
     )
+
     # ── Title ─────────────────────────────────────────────────────────────────
+    title_suffix = f" \u2014 {protein_types[0]}" if len(protein_types) == 1 else ""
     ax.set_title(
-        "Viscosity @ 1000 s\u207b\u00b9 \u2014 Calibration Parity",
+        f"Viscosity @ 1000 s\u207b\u00b9 \u2014 Calibration Parity{title_suffix}",
         fontsize=17,
         pad=14,
         color=C_TEXT,
@@ -417,7 +480,14 @@ def plot_parity(results_df: pd.DataFrame, save_dir: str) -> str:
     )
 
     plt.tight_layout()
-    out_path = os.path.join(save_dir, "parity_viscosity_1000_per_protein.png")
+
+    # Build a filename that reflects the scope (single vs all)
+    stem = (
+        f"parity_viscosity_1000_{protein_types[0].replace(' ', '_')}"
+        if len(protein_types) == 1
+        else "parity_viscosity_1000_per_protein"
+    )
+    out_path = os.path.join(save_dir, f"{stem}.png")
     fig.savefig(out_path, dpi=160, bbox_inches="tight", facecolor=C_WHITE)
     plt.close(fig)
     logger.info(f"Parity plot saved: {out_path}")
@@ -447,15 +517,21 @@ def main():
         f"{df['Protein_type'].nunique()} protein types."
     )
 
-    # 3. Per-protein calibration + prediction
-    results_df = run_per_protein(predictor, df)
+    # 3. Calibration + prediction — single protein or full loop
+    if TARGET_PROTEIN is not None:
+        logger.info(f"Single-protein mode: {TARGET_PROTEIN}")
+        results_df = run_single_protein(predictor, df, TARGET_PROTEIN)
+        csv_stem = f"predictions_visc1000_{TARGET_PROTEIN.replace(' ', '_')}"
+    else:
+        results_df = run_per_protein(predictor, df)
+        csv_stem = "per_protein_predictions_visc1000"
 
     if results_df.empty:
         logger.error("No predictions were produced — check model paths and data.")
         return
 
     # 4. Save predictions table
-    pred_path = os.path.join(OUTPUT_DIR, "per_protein_predictions_visc1000.csv")
+    pred_path = os.path.join(OUTPUT_DIR, f"{csv_stem}.csv")
     results_df.to_csv(pred_path, index=False)
     logger.info(f"Predictions saved: {pred_path}")
 
@@ -472,20 +548,24 @@ def main():
         f"{'='*55}"
     )
 
-    # Per-protein breakdown
-    logger.info("\n  Per-protein breakdown:")
-    for pt, grp in results_df.groupby("Protein_type"):
-        pm = metrics(grp["True_Visc1000"], grp["Pred_Visc1000"])
-        logger.info(
-            f"    {pt:<18}  n={len(grp):>3}  "
-            f"MAE={pm['mae']:6.2f} cP  MAPE={pm['mape']:5.1f}%  "
-            f"R2={pm['r2']:.3f}"
-        )
+    # Per-protein breakdown (only meaningful for full run)
+    if TARGET_PROTEIN is None:
+        logger.info("\n  Per-protein breakdown:")
+        for pt, grp in results_df.groupby("Protein_type"):
+            pm = metrics(grp["True_Visc1000"], grp["Pred_Visc1000"])
+            logger.info(
+                f"    {pt:<18}  n={len(grp):>3}  "
+                f"MAE={pm['mae']:6.2f} cP  MAPE={pm['mape']:5.1f}%  "
+                f"R2={pm['r2']:.3f}"
+            )
 
-    # 6. Parity plot
-    logger.info("\nGenerating parity plot...")
-    plot_path = plot_parity(results_df, OUTPUT_DIR)
-    logger.info(f"\nDone.  Outputs:\n  {pred_path}\n  {plot_path}")
+    # 6. Parity plot (optional)
+    if PLOT_ENABLED:
+        logger.info("\nGenerating parity plot...")
+        plot_path = plot_parity(results_df, OUTPUT_DIR)
+        logger.info(f"\nDone.  Outputs:\n  {pred_path}\n  {plot_path}")
+    else:
+        logger.info(f"\nDone (plot suppressed).  Output:\n  {pred_path}")
 
 
 if __name__ == "__main__":
