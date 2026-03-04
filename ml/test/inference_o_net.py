@@ -1033,8 +1033,8 @@ class ViscosityPredictorCNP:
 
 if __name__ == "__main__":
     # Test Configuration
-    model_dir = "models/experiments/o_net_v3"
-    training_file = "data/raw/formulation_data_03022026.csv"
+    model_dir = "models/experiments/o_net_v3_debug"
+    training_file = "data/raw/formulation_data_03042026.csv"
 
     # 1. Initialize Predictor
     try:
@@ -1060,10 +1060,22 @@ if __name__ == "__main__":
 
     # 3. Define the 4 Target Samples
     target_data = """ID,Protein_type,Protein_class_type,kP,MW,PI_mean,PI_range,Protein_conc,Temperature,Buffer_type,Buffer_pH,Buffer_conc,Salt_type,Salt_conc,Stabilizer_type,Stabilizer_conc,Surfactant_type,Surfactant_conc,Excipient_type,Excipient_conc,C_Class,HCI,Viscosity_100,Viscosity_1000,Viscosity_10000,Viscosity_100000,Viscosity_15000000
-F425,Pembrolizumab,mAb_IgG4,3.5,149,7.57,0.3,150,25,Histidine,6,15,none,0,none,0,none,0,none,0,1.3,1.1,25.63,21,18.38,14.61,8.3
-F427,Pembrolizumab,mAb_IgG4,3.5,149,7.57,0.3,214,25,Histidine,6,15,none,0,none,0,none,0,none,0,1.3,1.1,43.75,43.75,43.75,40.25,14
-F446,Adalimumab,mAb_IgG1,3,148,8.7,0.3,135,25,Histidine,6,15,none,0,none,0,none,0,none,0,1,1,10.31,8.75,7.88,7.25,1.35
-F448,Adalimumab,mAb_IgG1,3,148,8.7,0.3,135,25,Histidine,6,15,none,0,Sucrose,0.4,none,0,none,0,1,1,8.38,8.38,8.38,7.71,1.4"""
+511,poly-hIgG,Polyclonal,3.0,150.0,7.6,1.0,83.0,25.000999999999998,Histidine,6.0,15.0,None,0.0,Sucrose,0.25,None,0.0,None,0.0,0.9,0.9,4.15,4.241726808503929,4.224562944902968,3.8919067922752015,1.72
+510,poly-hIgG,Polyclonal,3.0,150.0,7.6,1.0,242.0,25.655,Histidine,6.0,15.0,None,0.0,Sucrose,0.25,None,0.0,None,0.0,0.9,0.9,29.38,30.340889032955356,31.301778065910714,28.069955096868252,6.111796504318651
+506,poly-hIgG,Polyclonal,3.0,150.0,7.6,1.0,187.0,25.216363636363635,Histidine,6.0,15.0,None,0.0,None,0.0,None,0.0,None,0.0,0.9,0.9,12.52,10.321785009980417,10.723818589982447,11.125852169984476,2.7313683010081693
+508,poly-hIgG,Polyclonal,3.0,150.0,7.6,1.0,51.0,25.475,Histidine,6.0,15.0,None,0.0,None,0.0,None,0.0,None,0.0,0.9,0.9,1.72,1.72,1.4183669622711517,1.4410542584139545,1.14
+515,poly-hIgG,Polyclonal,3.0,150.0,7.6,1.0,159.0,25.250999999999998,Histidine,6.0,15.0,None,0.0,None,0.0,tween-80,0.05,None,0.0,0.9,0.9,6.71,5.691395576632083,5.425949696535762,5.426417598201115,3.00470612918506
+517,poly-hIgG,Polyclonal,3.0,150.0,7.6,1.0,296.0,25.568571428571428,Histidine,6.0,15.0,None,0.0,None,0.0,tween-80,0.05,None,0.0,0.9,0.9,88.57646767469906,78.772050896506,72.44930075569195,65.02211788951377,18.947868987755655
+514,poly-hIgG,Polyclonal,3.0,150.0,7.6,1.0,55.0,25.722727272727273,Histidine,6.0,15.0,None,0.0,Sucrose,0.5,None,0.0,None,0.0,0.9,0.9,5.25,5.132474531519482,5.29679914324673,5.461123754973978,2.16
+518,poly-hIgG,Polyclonal,3.0,150.0,7.6,1.0,63.0,25.244,Histidine,6.0,15.0,None,0.0,None,0.0,tween-80,0.05,None,0.0,0.9,0.9,1.82,1.82,1.5960672785417862,1.604774931875364,1.6105121914967662
+509,poly-hIgG,Polyclonal,3.0,150.0,7.6,1.0,172.0,24.80181818181818,Histidine,6.0,15.0,None,0.0,Sucrose,0.25,None,0.0,None,0.0,0.9,0.9,14.6,11.911294294387185,12.311684208098823,12.666615154277906,3.2894519705939445
+512,poly-hIgG,Polyclonal,3.0,150.0,7.6,1.0,169.0,25.246363636363636,Histidine,6.0,15.0,None,0.0,Sucrose,0.5,None,0.0,None,0.0,0.9,0.9,14.13,14.773708753852125,15.417417507704249,16.061126261556375,4.075273287044114
+505,poly-hIgG,Polyclonal,3.0,150.0,7.6,1.0,122.0,25.380000000000003,Histidine,6.0,15.0,None,0.0,None,0.0,None,0.0,None,0.0,0.9,0.9,3.1,3.0900041764258295,3.1703124375952543,3.250620698764679,1.79
+516,poly-hIgG,Polyclonal,3.0,150.0,7.6,1.0,213.0,25.50111111111111,Histidine,6.0,15.0,None,0.0,None,0.0,tween-80,0.05,None,0.0,0.9,0.9,20.23,20.728437778133426,16.56236264609049,16.339430136328815,4.712363191521079
+507,poly-hIgG,Polyclonal,3.0,150.0,7.6,1.0,246.0,25.0775,Histidine,6.0,15.0,None,0.0,None,0.0,None,0.0,None,0.0,0.9,0.9,61.0,63.087089537940074,65.17417907588015,58.68797105586572,10.463958633272128
+513,poly-hIgG,Polyclonal,3.0,150.0,7.6,1.0,207.0,24.963,Histidine,6.0,15.0,None,0.0,Sucrose,0.5,None,0.0,None,0.0,0.9,0.9,32.91703110346997,33.17984165373529,31.087439816165666,29.22844459852041,6.9844521999087785
+630,Adalimumab,mAb_IgG1,3.0,148.0,8.7,0.3,206.0,25.352,Histidine,6.0,15.0,NaCl,70.0,Sucrose,0.2,tween-80,0.05,None,0.0,1.0,1.0,36.409639311346425,38.00580243930652,39.60196556726662,40.86606349338408,6.360255266991149
+631,Adalimumab,mAb_IgG1,3.0,148.0,8.7,0.3,206.0,25.323333333333334,Histidine,6.0,15.0,NaCl,70.0,Sucrose,0.2,tween-80,0.05,None,0.0,1.0,1.0,52.19857144459378,52.12424942979692,53.14314424266189,47.45329065859241,8.137937880920497"""
 
     target_df = pd.read_csv(io.StringIO(target_data))
     target_df["ID"] = target_df["ID"].astype(str)
