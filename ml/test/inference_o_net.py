@@ -1033,7 +1033,7 @@ class ViscosityPredictorCNP:
 
 if __name__ == "__main__":
     # Test Configuration
-    model_dir = "models/experiments/o_net_v3_debug"
+    model_dir = "models/experiments/o_net_v3_debug_no_aug"
     training_file = "data/raw/formulation_data_03042026.csv"
 
     # 1. Initialize Predictor

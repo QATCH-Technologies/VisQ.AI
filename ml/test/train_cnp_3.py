@@ -530,14 +530,14 @@ def load_and_preprocess(csv_path, save_dir=None):
         + df["Surfactant_mg_mL"]
     )
     V_BAR_PROTEIN = 0.73 / 1000.0
-    V_BAR_SUCROSE = 0.62 / 1000.0
+    V_BAR_STAB = 0.62 / 1000.0
     V_BAR_SALT = 0.30 / 1000.0
-    V_BAR_AMINO = 0.70 / 1000.0
+    V_BAR_EXCIP = 0.70 / 1000.0
 
     df["Phi_Protein"] = df["Protein_conc"] * V_BAR_PROTEIN
-    df["Phi_Stabilizer"] = df["Stabilizer_mg_mL"] * V_BAR_SUCROSE
+    df["Phi_Stabilizer"] = df["Stabilizer_mg_mL"] * V_BAR_STAB
     df["Phi_Salt"] = df["Salt_mg_mL"] * V_BAR_SALT
-    df["Phi_Excipient"] = df["Excipient_mg_mL"] * V_BAR_AMINO
+    df["Phi_Excipient"] = df["Excipient_mg_mL"] * V_BAR_EXCIP
 
     df["Phi_Total"] = (
         df["Phi_Protein"] + df["Phi_Stabilizer"] + df["Phi_Salt"] + df["Phi_Excipient"]
@@ -1117,10 +1117,10 @@ def objective_cv(trial, samples, static_dim, device):
 # ==========================================
 
 if __name__ == "__main__":
-    data = "data/raw/formulation_data_03042026.csv"
-    # data = "data/processed/augmented_formulation_data.csv"
-    out = "./models/experiments/o_net_v3_debug_no_aug"
-    trials = 30
+    # data = "data/raw/formulation_data_03042026.csv"
+    data = "data/processed/augmented_formulation_data.csv"
+    out = "./models/experiments/o_net_v3_debug_aug"
+    trials = 0
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     best_params = {
@@ -1330,3 +1330,356 @@ if __name__ == "__main__":
     print(
         f"Final group difficulty weights: {dict(sorted(group_weights.items(), key=lambda x: -x[1]))}"
     )
+
+    # ==========================================
+    # PARITY EVALUATION (all samples, all shear rates)
+    # ==========================================
+    print("\n" + "=" * 60)
+    print("PARITY EVALUATION")
+    print("=" * 60)
+    print(f"Data: {data}")
+
+    physics_scaler_path = os.path.join(out, "physics_scaler.pkl")
+    physics_scaler_eval = joblib.load(physics_scaler_path)
+
+    raw_df = pd.read_csv(data)
+
+    parity_shear_map = {
+        "Viscosity_100": 100.0,
+        "Viscosity_1000": 1000.0,
+        "Viscosity_10000": 10000.0,
+        "Viscosity_100000": 100000.0,
+        "Viscosity_15000000": 1.5e7,
+    }
+    key_shears_eval = list(parity_shear_map.values())
+    key_log_shears_eval = np.log10(key_shears_eval)
+
+    # Scale the query shear values using physics_scaler (first feature = log10 shear)
+    shear_mean = physics_scaler_eval.mean_[0]
+    shear_scale = physics_scaler_eval.scale_[0]
+    visc_mean = physics_scaler_eval.mean_[1]
+    visc_scale = physics_scaler_eval.scale_[1]
+
+    scaled_log_shears = torch.tensor(
+        [(ls - shear_mean) / shear_scale for ls in key_log_shears_eval],
+        dtype=torch.float32,
+    ).to(
+        device
+    )  # [5]
+
+    # Build group lookup from the full samples list
+    eval_groups = defaultdict(list)
+    for s in samples:
+        eval_groups[s["group"]].append(s)
+
+    all_actual, all_predicted = [], []
+    all_eval_groups, all_sample_ids, all_shear_rates = [], [], []
+
+    final_model.eval()
+    with torch.no_grad():
+        for sample in samples:
+            sid = sample["id"]
+            group = sample["group"]
+            task_samples = eval_groups[group]
+
+            # Use all other same-group samples as context; fall back to self if alone
+            ctx_samples = [s for s in task_samples if s["id"] != sid]
+            if len(ctx_samples) == 0:
+                ctx_samples = task_samples
+
+            ctx_items = []
+            for s in ctx_samples:
+                stat = s["static"].unsqueeze(0).repeat(s["points"].shape[0], 1)
+                ctx_items.append(torch.cat([s["points"], stat], dim=1))
+            ctx_tensor = torch.cat(ctx_items, dim=0).unsqueeze(0).to(device)
+
+            # Query at each of the 5 key shear rates
+            n_shears = len(key_shears_eval)
+            q_shear = scaled_log_shears.view(1, n_shears, 1)  # [1, 5, 1]
+            q_static = (
+                sample["static"]
+                .unsqueeze(0)
+                .unsqueeze(0)
+                .repeat(1, n_shears, 1)
+                .to(device)
+            )  # [1, 5, static_dim]
+
+            pred_scaled = final_model(ctx_tensor, q_shear, q_static)  # [1, 5, 1]
+            pred_scaled = pred_scaled.squeeze().cpu().numpy()  # [5]
+
+            # Inverse-transform from scaled log10-viscosity back to linear viscosity
+            pred_log_visc = pred_scaled * visc_scale + visc_mean
+            pred_visc = 10.0**pred_log_visc
+
+            # Match against raw CSV row
+            row_mask = raw_df["ID"] == sid
+            if not row_mask.any():
+                continue
+            row = raw_df[row_mask].iloc[0]
+
+            for i, (col, shear) in enumerate(parity_shear_map.items()):
+                if col in raw_df.columns and pd.notna(row[col]) and row[col] > 0:
+                    all_actual.append(float(row[col]))
+                    all_predicted.append(float(pred_visc[i]))
+                    all_eval_groups.append(group)
+                    all_sample_ids.append(sid)
+                    all_shear_rates.append(shear)
+
+    all_actual = np.array(all_actual)
+    all_predicted = np.array(all_predicted)
+    all_eval_groups = np.array(all_eval_groups)
+    all_shear_rates = np.array(all_shear_rates)
+
+    log_actual = np.log10(np.clip(all_actual, 1e-6, None))
+    log_predicted = np.log10(np.clip(all_predicted, 1e-6, None))
+
+    ss_res = np.sum((log_actual - log_predicted) ** 2)
+    ss_tot = np.sum((log_actual - log_actual.mean()) ** 2)
+    rmse_log = float(np.sqrt(np.mean((log_actual - log_predicted) ** 2)))
+    r2_log = float(1.0 - ss_res / ss_tot) if ss_tot > 0 else float("nan")
+
+    print(f"\nOverall ({len(all_actual)} sample-shear pairs):")
+    print(f"  RMSE (log10 viscosity): {rmse_log:.4f}")
+    print(f"  R²   (log10 viscosity): {r2_log:.4f}")
+
+    print("\nPer-group parity (RMSE in log10 space):")
+    for g in sorted(set(all_eval_groups)):
+        mask = all_eval_groups == g
+        g_rmse = float(np.sqrt(np.mean((log_actual[mask] - log_predicted[mask]) ** 2)))
+        print(f"  {g:28s}: RMSE={g_rmse:.4f}  (n={mask.sum()})")
+
+    print("\nPer-shear-rate parity (RMSE in log10 space):")
+    for shear in key_shears_eval:
+        mask = all_shear_rates == shear
+        if not mask.any():
+            continue
+        s_rmse = float(np.sqrt(np.mean((log_actual[mask] - log_predicted[mask]) ** 2)))
+        print(f"  {shear:12.0f} s⁻¹: RMSE={s_rmse:.4f}  (n={mask.sum()})")
+
+    # Save parity results CSV
+    parity_df = pd.DataFrame(
+        {
+            "ID": all_sample_ids,
+            "Group": all_eval_groups,
+            "Shear_Rate": all_shear_rates,
+            "Actual_Viscosity": all_actual,
+            "Predicted_Viscosity": all_predicted,
+            "Log10_Actual": log_actual,
+            "Log10_Predicted": log_predicted,
+            "Log10_Error": log_predicted - log_actual,
+        }
+    )
+    parity_csv_path = os.path.join(out, "parity_results.csv")
+    parity_df.to_csv(parity_csv_path, index=False)
+    print(f"\nParity results saved to {parity_csv_path}")
+
+    # Parity plot (saved as PNG; non-blocking)
+    try:
+        import matplotlib.cm as cm
+        import matplotlib.pyplot as plt
+
+        unique_groups_plot = sorted(set(all_eval_groups))
+        cmap = cm.get_cmap("tab20", len(unique_groups_plot))
+        colors = [cmap(i) for i in range(len(unique_groups_plot))]
+        color_map = {g: colors[i] for i, g in enumerate(unique_groups_plot)}
+
+        fig, ax = plt.subplots(figsize=(7, 7))
+        for g in unique_groups_plot:
+            mask = all_eval_groups == g
+            ax.scatter(
+                log_actual[mask],
+                log_predicted[mask],
+                color=color_map[g],
+                label=g,
+                alpha=0.65,
+                s=20,
+            )
+
+        lims = [
+            min(log_actual.min(), log_predicted.min()) - 0.1,
+            max(log_actual.max(), log_predicted.max()) + 0.1,
+        ]
+        ax.plot(lims, lims, "k--", linewidth=1, label="Parity (y=x)")
+        ax.set_xlim(lims[0], lims[1])
+        ax.set_ylim(lims[0], lims[1])
+        ax.set_xlabel("log₁₀(Actual Viscosity)")
+        ax.set_ylabel("log₁₀(Predicted Viscosity)")
+        ax.set_title(
+            f"Parity Plot — All Samples & Shear Rates\n"
+            f"RMSE={rmse_log:.4f}, R²={r2_log:.4f}"
+        )
+        ax.legend(fontsize=7, markerscale=1.5, loc="upper left", ncol=2)
+        ax.set_aspect("equal")
+
+        parity_plot_path = os.path.join(out, "parity_plot.png")
+        fig.tight_layout()
+        fig.savefig(parity_plot_path, dpi=150)
+        plt.close(fig)
+        print(f"Parity plot saved to {parity_plot_path}")
+    except Exception as e:
+        print(f"(Parity plot skipped: {e})")
+
+    # ==========================================
+    # FEATURE IMPORTANCE (Permutation-based)
+    # ==========================================
+    print("\n" + "=" * 60)
+    print("FEATURE IMPORTANCE (Permutation, Decoder-Side)")
+    print("=" * 60)
+
+    # Load preprocessor for feature names
+    preprocessor_path = os.path.join(out, "preprocessor.pkl")
+    preprocessor_fi = joblib.load(preprocessor_path)
+    try:
+        feature_names_fi = list(preprocessor_fi.get_feature_names_out())
+    except Exception:
+        feature_names_fi = [f"feature_{i}" for i in range(static_dim)]
+
+    # Collect per-sample data for importance evaluation
+    fi_ctx_tensors = []
+    fi_static_vecs = []
+    fi_true_log_visc = []
+    fi_valid_masks = []
+
+    final_model.eval()
+    with torch.no_grad():
+        for sample in samples:
+            sid = sample["id"]
+            group = sample["group"]
+            task_samples = eval_groups[group]
+            ctx_samples = [s for s in task_samples if s["id"] != sid]
+            if len(ctx_samples) == 0:
+                ctx_samples = task_samples
+
+            ctx_items = []
+            for s in ctx_samples:
+                stat = s["static"].unsqueeze(0).repeat(s["points"].shape[0], 1)
+                ctx_items.append(torch.cat([s["points"], stat], dim=1))
+            fi_ctx_tensors.append(torch.cat(ctx_items, dim=0).unsqueeze(0).to(device))
+            fi_static_vecs.append(sample["static"])
+
+            row_mask = raw_df["ID"] == sid
+            true_lv = [0.0] * 5
+            valid = [False] * 5
+            if row_mask.any():
+                row_fi = raw_df[row_mask].iloc[0]
+                for j, col in enumerate(parity_shear_map):
+                    if (
+                        col in raw_df.columns
+                        and pd.notna(row_fi[col])
+                        and row_fi[col] > 0
+                    ):
+                        true_lv[j] = np.log10(float(row_fi[col]))
+                        valid[j] = True
+            fi_true_log_visc.append(true_lv)
+            fi_valid_masks.append(valid)
+
+    fi_static_matrix = torch.stack(fi_static_vecs)  # [N, D]
+    fi_true_log_visc = np.array(fi_true_log_visc)  # [N, 5]
+    fi_valid_masks = np.array(fi_valid_masks)  # [N, 5]
+
+    # Pre-compute latent r for each sample so permutation only re-runs the decoder
+    fi_r_list = []
+    with torch.no_grad():
+        for ctx_t in fi_ctx_tensors:
+            fi_r_list.append(final_model.encode_memory(ctx_t))  # [1, latent_dim]
+
+    def _decoder_mse(static_mat):
+        """MSE in log10-viscosity space using pre-computed r (fast: decoder-only)."""
+        errs = []
+        with torch.no_grad():
+            for i, (r, true_lv, valid) in enumerate(
+                zip(fi_r_list, fi_true_log_visc, fi_valid_masks, strict=False)
+            ):
+                if not any(valid):
+                    continue
+                q_st = (
+                    static_mat[i]
+                    .unsqueeze(0)
+                    .unsqueeze(0)
+                    .repeat(1, n_shears, 1)
+                    .to(device)
+                )
+                r_exp = r.unsqueeze(1).repeat(1, n_shears, 1)
+                dec_in = torch.cat([q_shear, q_st, r_exp], dim=-1)
+                pred_sc = final_model.decoder(dec_in).squeeze().cpu().numpy()
+                pred_lv = pred_sc * visc_scale + visc_mean
+                for j in range(5):
+                    if valid[j]:
+                        errs.append((pred_lv[j] - true_lv[j]) ** 2)
+        return float(np.mean(errs)) if errs else float("nan")
+
+    baseline_fi_mse = _decoder_mse(fi_static_matrix)
+    print(f"Baseline decoder MSE (log10 viscosity): {baseline_fi_mse:.6f}")
+    print(f"Permuting {static_dim} features across {len(samples)} samples...")
+
+    fi_importances = np.zeros(static_dim)
+    for j in range(static_dim):
+        perm = fi_static_matrix.clone()
+        perm[:, j] = fi_static_matrix[torch.randperm(len(samples)), j]
+        fi_importances[j] = _decoder_mse(perm) - baseline_fi_mse
+
+    ranked_idx = np.argsort(-fi_importances)
+
+    print("\nTop 20 most important features (individual):")
+    print(f"  {'Feature':<55} {'ΔMSE':>10}")
+    print(f"  {'-'*55} {'-'*10}")
+    for k in ranked_idx[:20]:
+        fname = feature_names_fi[k] if k < len(feature_names_fi) else f"feature_{k}"
+        print(f"  {fname:<55} {fi_importances[k]:>10.6f}")
+
+    # Grouped importance: sum OHE indicator columns back to their original column name
+    cat_cols_fi = [
+        "Protein_type",
+        "Protein_class_type",
+        "Buffer_type",
+        "Salt_type",
+        "Stabilizer_type",
+        "Surfactant_type",
+        "Excipient_type",
+    ]
+    grouped_imp = defaultdict(float)
+    for k, imp in enumerate(fi_importances):
+        fname = feature_names_fi[k] if k < len(feature_names_fi) else f"feature_{k}"
+        if fname.startswith("cat__"):
+            rest = fname[5:]
+            matched = next(
+                (
+                    col
+                    for col in cat_cols_fi
+                    if rest.startswith(col + "_") or rest == col
+                ),
+                None,
+            )
+            grouped_imp[matched if matched else rest] += imp
+        elif fname.startswith("num__"):
+            grouped_imp[fname[5:]] += imp
+        else:
+            grouped_imp[fname] += imp
+
+    grouped_ranked = sorted(grouped_imp.items(), key=lambda x: -x[1])
+    print("\nGrouped feature importance (categoricals summed by column):")
+    print(f"  {'Feature':<45} {'ΔMSE':>10}")
+    print(f"  {'-'*45} {'-'*10}")
+    for fname, imp in grouped_ranked:
+        print(f"  {fname:<45} {imp:>10.6f}")
+
+    # Save importance to CSV
+    fi_df = pd.DataFrame(
+        {
+            "Feature": [
+                feature_names_fi[k] if k < len(feature_names_fi) else f"feature_{k}"
+                for k in range(static_dim)
+            ],
+            "Importance_dMSE": fi_importances,
+        }
+    ).sort_values("Importance_dMSE", ascending=False)
+    fi_csv_path = os.path.join(out, "feature_importance.csv")
+    fi_df.to_csv(fi_csv_path, index=False)
+
+    fi_grp_df = pd.DataFrame(
+        grouped_ranked, columns=["Feature_Group", "Importance_dMSE"]
+    )
+    fi_grp_csv_path = os.path.join(out, "feature_importance_grouped.csv")
+    fi_grp_df.to_csv(fi_grp_csv_path, index=False)
+    print(f"\nFeature importance saved to {fi_csv_path}")
+    print(f"Grouped importance saved to {fi_grp_csv_path}")
