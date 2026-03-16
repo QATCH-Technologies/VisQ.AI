@@ -116,18 +116,24 @@ NON_PROTEIN_GROUPS = {"none"}
 # when the data warrants it.
 
 CONCEPT_DEFS = [
-    ("crowding", "Exp_Crowding", +1),
-    ("ionic_screening", "Ionic_Strength_Proxy", +1),
-    ("self_interaction", "kP", -1),  # high kP → more association → high visc
-    ("hydrophobicity", "HCI", +1),
-    ("excluded_volume", "Phi_Total", +1),
-    ("viscosity_divergence", "KD_Asymptote", +1),
+    # --- Three confirmed pass-throughs (r>0.99, keep unchanged) ---
+    ("self_interaction", "kP", -1),  # high kP → attractive → high visc
+    ("hydrophobicity", "HCI", +1),  # high HCI → hydrophobic patches
+    ("charge_environment", "C_Class", +1),  # high C_Class → charge drives visc
+    # --- Moderate proxy (r=0.51, keep) ---
+    ("ionic_screening", "Ionic_Strength_Proxy", +1),  # Debye screening of repulsion
+    # --- Replaced: four collinear Phi_Total derivatives → four orthogonal signals ---
+    # Old: Exp_Crowding, Phi_Total, KD_Asymptote all = f(Phi_Total) → r≈0.26 each
+    # Old: prior_stabilizer sparse ordinal → r=0.16
+    # New: protein conc, conc nonlinearity, protein×stabilizer cross-term, continuous stab conc
+    ("crowding", "Protein_conc", +1),  # pure macromolecular crowding
+    ("nonlinear_conc", "conc_sq", +1),  # non-linear concentration effect
+    ("cosolute_interaction", "Crowding_Index", -1),  # conc × stabilizer cross-term
     (
         "cosolute_protection",
-        "prior_stabilizer",
+        "Stabilizer_mg_mL",
         -1,
-    ),  # high stabilizer score → reduces visc
-    ("charge_environment", "C_Class", +1),
+    ),  # continuous stabilizer concentration
 ]
 
 N_CONCEPTS_SUPERVISED = len(CONCEPT_DEFS)  # 8 — these get proxy supervision
@@ -1020,7 +1026,7 @@ def train_epoch(
     device,
     iterations=100,
     group_weights=None,
-    lambda_triplet=0.30,
+    lambda_triplet=0.10,  # [v2] Reduced from 0.30 → free latents were saturating
     lambda_consistency=0.10,  # [FIX-4]
     lambda_utility=2.5,  # [FIX-5]
     triplet_margin=3.0,  # [FIX-3]
@@ -1028,6 +1034,7 @@ def train_epoch(
     norm_target=5.0,
     lambda_concept_sup=0.10,  # [CBM-3] concept supervision (proxy labels)
     lambda_concept_consist=0.05,  # [CBM-4] concept consistency (intra-group)
+    lambda_antisat=0.05,  # [v2-CBM] anti-saturation on free concept dims
 ):
     """
     Train one epoch. Extends train_cnp_3.py with [CBM-3] and [CBM-4] losses.
@@ -1036,6 +1043,12 @@ def train_epoch(
     CBM losses activate only when model is ConceptBottleneckCNP and
     concept_targets are present in the sample dicts. Plain CrossSampleCNP
     training is unaffected.
+
+    [v2] lambda_triplet reduced to 0.10 (was 0.30) — free latents were
+    saturating at ±1 because the contrastive loss dominated.
+    [v2] lambda_antisat=0.05 soft penalty keeps free concept dims off ±1.
+         Applied only to the N_CONCEPTS_SUPERVISED:n_concepts slice so the
+         supervised concepts are not penalized for having sharp values.
     """
     model.train()
     total_loss = 0
@@ -1114,6 +1127,21 @@ def train_epoch(
                     ctx_concept_targets[:, :n_sup],
                 )
 
+        # ---- [v2-CBM] Anti-saturation penalty on free concept dimensions ----
+        # Penalizes concept activations that exceed ±0.9 on the FREE (unsupervised)
+        # dimensions only. Keeps gradient flow alive in those dimensions.
+        # Formula: mean( ReLU(|c| - 0.9)^2 ) — zero below 0.9, quadratic above.
+        antisat_loss = torch.tensor(0.0, device=device)
+        if (
+            is_cbm
+            and concepts_A is not None
+            and model.n_concepts > N_CONCEPTS_SUPERVISED
+        ):
+            free_concepts = concepts_A[:, N_CONCEPTS_SUPERVISED:]
+            antisat_loss = torch.mean(
+                torch.clamp(free_concepts.abs() - 0.90, min=0.0) ** 2
+            )
+
         # ---- Triplet [FIX-3] + latent consistency [FIX-4]
         #      + [CBM-4] concept consistency ----
         triplet_loss = torch.tensor(0.0, device=device)
@@ -1180,6 +1208,7 @@ def train_epoch(
             + lambda_norm * norm_penalty
             + lambda_concept_sup * concept_sup_loss  # [CBM-3]
             + lambda_concept_consist * concept_consist_loss  # [CBM-4]
+            + lambda_antisat * antisat_loss  # [v2-CBM]
         )
 
         if torch.isnan(loss):
@@ -1449,19 +1478,6 @@ def run_concept_intervention_demo(
 
             for ci, cname in enumerate(model.concept_names):
                 for cval in intervention_values:
-                    pred_int_sc = model.decode_from_memory(
-                        model.intervene(
-                            ctx_t,
-                            query_shear,
-                            q_static,
-                            concept_idx=ci,
-                            concept_value=cval,
-                        ),
-                        query_shear,
-                        q_static,
-                    )
-                    # intervene() returns predictions directly — fix signature:
-                    # use the lower-level API
                     c_mod = c_base.clone()
                     c_mod[:, ci] = cval
                     pred_int_sc = model.decode_from_memory(c_mod, query_shear, q_static)
@@ -1506,10 +1522,12 @@ def objective_cv(trial, samples, static_dim, device):
     dropout = trial.suggest_float("dropout", 0.05, 0.3)
     lr = trial.suggest_float("lr", 1e-4, 5e-3, log=True)
     weight_decay = trial.suggest_float("weight_decay", 1e-5, 1e-2, log=True)
-    # [CBM-3] Tune concept bottleneck width and supervision strength
     n_free = trial.suggest_int("n_free_concepts", 0, 8, step=2)
     n_concepts = N_CONCEPTS_SUPERVISED + n_free
     lambda_concept_sup = trial.suggest_float("lambda_concept_sup", 0.02, 0.3, log=True)
+    # [v2] Triplet upper bound tightened from 0.30 → 0.15 to prevent free-latent saturation
+    lambda_triplet = trial.suggest_float("lambda_triplet", 0.03, 0.15, log=True)
+    lambda_antisat = trial.suggest_float("lambda_antisat", 0.02, 0.15, log=True)
 
     hard_groups = ["etanercept", "vudalimab", "pembrolizumab", "ibalizumab"]
     medium_groups = ["adalimumab", "poly-higg", "nivolumab"]
@@ -1546,6 +1564,8 @@ def objective_cv(trial, samples, static_dim, device):
                 device,
                 iterations=50,
                 lambda_concept_sup=lambda_concept_sup,
+                lambda_triplet=lambda_triplet,
+                lambda_antisat=lambda_antisat,
             )
             val_loss = validate(model, val_fold, device, n_repeats=2)
             trial.report(val_loss, fold_idx * 40 + epoch)
@@ -1562,21 +1582,22 @@ def objective_cv(trial, samples, static_dim, device):
 # ==========================================
 
 if __name__ == "__main__":
-    data = "data/processed/augmented_formulation_data.csv"
-    out = "./models/experiments/cbm_cnp_v1"
+    data = "data/raw/formulation_data_03042026.csv"
+    out = "./models/experiments/cbm_cnp_v2"
     trials = 0
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Default params (used when trials=0 or as Optuna fallback)
     best_params = {
         "hidden_dim": 128,
         "latent_dim": 128,
         "dropout": 0.15,
         "lr": 5e-4,
         "weight_decay": 1e-4,
-        "n_free_concepts": 4,  # [CBM-1] 8 supervised + 4 free = 12 total
-        "lambda_concept_sup": 0.10,  # [CBM-3]
+        "n_free_concepts": 4,
+        "lambda_concept_sup": 0.10,
+        "lambda_triplet": 0.10,  # [v2] reduced from 0.30
+        "lambda_antisat": 0.05,  # [v2] new: prevents free-latent tanh saturation
         "epochs": 150,
     }
 
@@ -1681,6 +1702,8 @@ if __name__ == "__main__":
             iterations=100,
             group_weights=group_weights,
             lambda_concept_sup=lambda_concept_sup,
+            lambda_triplet=best_params.get("lambda_triplet", 0.10),
+            lambda_antisat=best_params.get("lambda_antisat", 0.05),
         )
 
         # [FIX-6] EMA difficulty reweighting
