@@ -1,0 +1,249 @@
+{
+  "metadata": {
+    "description": "Per-protein Low/Medium/High concentration bin boundaries. Bins are derived from tertile splits of each protein's observed Protein_conc values. Use min_mgml/max_mgml to determine which Conc_Level a target protein concentration falls into.",
+    "units": "mg/mL",
+    "generated_at": "2026-02-26T17:14:49.480669Z"
+  },
+  "boundaries": {
+    "Adalimumab": {
+      "High": {
+        "min_mgml": 139.0,
+        "max_mgml": 267.0,
+        "mean_mgml": 183.0,
+        "n_observations": 3
+      },
+      "Low": {
+        "min_mgml": 35.0,
+        "max_mgml": 100.0,
+        "mean_mgml": 64.4,
+        "n_observations": 5
+      },
+      "Medium": {
+        "min_mgml": 135.0,
+        "max_mgml": 135.0,
+        "mean_mgml": 135.0,
+        "n_observations": 13
+      }
+    },
+    "BGG": {
+      "High": {
+        "min_mgml": 152.0,
+        "max_mgml": 203.0,
+        "mean_mgml": 170.75,
+        "n_observations": 4
+      },
+      "Low": {
+        "min_mgml": 57.0,
+        "max_mgml": 66.0,
+        "mean_mgml": 61.5,
+        "n_observations": 2
+      },
+      "Medium": {
+        "min_mgml": 79.0,
+        "max_mgml": 108.0,
+        "mean_mgml": 91.3333,
+        "n_observations": 3
+      }
+    },
+    "BSA": {
+      "High": {
+        "min_mgml": 162.0,
+        "max_mgml": 431.0,
+        "mean_mgml": 241.0,
+        "n_observations": 14
+      },
+      "Low": {
+        "min_mgml": 5.0,
+        "max_mgml": 25.0,
+        "mean_mgml": 16.0714,
+        "n_observations": 14
+      },
+      "Medium": {
+        "min_mgml": 66.0,
+        "max_mgml": 160.0,
+        "mean_mgml": 112.0,
+        "n_observations": 8
+      }
+    },
+    "Belatacept": {
+      "High": {
+        "min_mgml": 110.0,
+        "max_mgml": 110.0,
+        "mean_mgml": 110.0,
+        "n_observations": 1
+      },
+      "Low": {
+        "min_mgml": 20.0,
+        "max_mgml": 55.0,
+        "mean_mgml": 44.0,
+        "n_observations": 5
+      },
+      "Medium": {
+        "min_mgml": 70.0,
+        "max_mgml": 70.0,
+        "mean_mgml": 70.0,
+        "n_observations": 2
+      }
+    },
+    "Bevacizumab": {
+      "High": {
+        "min_mgml": 136.0,
+        "max_mgml": 250.0,
+        "mean_mgml": 177.3333,
+        "n_observations": 3
+      },
+      "Low": {
+        "min_mgml": 50.0,
+        "max_mgml": 75.0,
+        "mean_mgml": 66.6667,
+        "n_observations": 3
+      },
+      "Medium": {
+        "min_mgml": 80.0,
+        "max_mgml": 100.0,
+        "mean_mgml": 93.3333,
+        "n_observations": 3
+      }
+    },
+    "Etanercept": {
+      "High": {
+        "min_mgml": 100.0,
+        "max_mgml": 150.0,
+        "mean_mgml": 126.0,
+        "n_observations": 4
+      },
+      "Low": {
+        "min_mgml": 20.0,
+        "max_mgml": 20.0,
+        "mean_mgml": 20.0,
+        "n_observations": 5
+      },
+      "Medium": {
+        "min_mgml": 55.0,
+        "max_mgml": 55.0,
+        "mean_mgml": 55.0,
+        "n_observations": 7
+      }
+    },
+    "Ibalizumab": {
+      "High": {
+        "min_mgml": 150.0,
+        "max_mgml": 304.0,
+        "mean_mgml": 235.1875,
+        "n_observations": 8
+      },
+      "Low": {
+        "min_mgml": 10.0,
+        "max_mgml": 30.0,
+        "mean_mgml": 19.2857,
+        "n_observations": 7
+      },
+      "Medium": {
+        "min_mgml": 40.0,
+        "max_mgml": 100.0,
+        "mean_mgml": 57.1429,
+        "n_observations": 7
+      }
+    },
+    "Nivolumab": {
+      "High": {
+        "min_mgml": 172.0,
+        "max_mgml": 335.0,
+        "mean_mgml": 251.4,
+        "n_observations": 5
+      },
+      "Low": {
+        "min_mgml": 12.0,
+        "max_mgml": 55.0,
+        "mean_mgml": 33.8,
+        "n_observations": 5
+      },
+      "Medium": {
+        "min_mgml": 82.0,
+        "max_mgml": 168.0,
+        "mean_mgml": 123.0,
+        "n_observations": 6
+      }
+    },
+    "Pembrolizumab": {
+      "High": {
+        "min_mgml": 135.0,
+        "max_mgml": 214.0,
+        "mean_mgml": 156.7143,
+        "n_observations": 7
+      },
+      "Low": {
+        "min_mgml": 49.0,
+        "max_mgml": 80.0,
+        "mean_mgml": 73.8333,
+        "n_observations": 6
+      },
+      "Medium": {
+        "min_mgml": 99.0,
+        "max_mgml": 100.0,
+        "mean_mgml": 99.6667,
+        "n_observations": 3
+      }
+    },
+    "Trastuzumab": {
+      "High": {
+        "min_mgml": 147.0,
+        "max_mgml": 157.0,
+        "mean_mgml": 152.0,
+        "n_observations": 2
+      },
+      "Low": {
+        "min_mgml": 50.0,
+        "max_mgml": 75.0,
+        "mean_mgml": 65.0,
+        "n_observations": 3
+      },
+      "Medium": {
+        "min_mgml": 100.0,
+        "max_mgml": 125.0,
+        "mean_mgml": 121.4286,
+        "n_observations": 7
+      }
+    },
+    "Vudalimab": {
+      "High": {
+        "min_mgml": 240.0,
+        "max_mgml": 276.0,
+        "mean_mgml": 258.0,
+        "n_observations": 2
+      },
+      "Low": {
+        "min_mgml": 50.0,
+        "max_mgml": 100.0,
+        "mean_mgml": 77.6667,
+        "n_observations": 9
+      },
+      "Medium": {
+        "min_mgml": 138.0,
+        "max_mgml": 150.0,
+        "mean_mgml": 147.0,
+        "n_observations": 9
+      }
+    },
+    "poly-hIgG": {
+      "High": {
+        "min_mgml": 163.0,
+        "max_mgml": 260.0,
+        "mean_mgml": 180.7879,
+        "n_observations": 33
+      },
+      "Low": {
+        "min_mgml": 10.0,
+        "max_mgml": 94.0,
+        "mean_mgml": 69.6,
+        "n_observations": 30
+      },
+      "Medium": {
+        "min_mgml": 101.0,
+        "max_mgml": 157.0,
+        "mean_mgml": 130.2308,
+        "n_observations": 26
+      }
+    }
+  }
+}

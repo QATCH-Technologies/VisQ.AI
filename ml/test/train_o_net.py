@@ -10,14 +10,12 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from scipy.interpolate import PchipInterpolator
 from sklearn.compose import ColumnTransformer
 from sklearn.model_selection import GroupShuffleSplit
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
-# ==========================================
-# 1. Model Architecture
-# ==========================================
 class CrossSampleCNP(nn.Module):
     def __init__(self, static_dim, hidden_dim=128, latent_dim=128, dropout=0.0):
         super().__init__()
@@ -388,8 +386,6 @@ def load_and_preprocess(csv_path, save_dir=None):
         new_conc_cols.append(f"{k}_high")
 
     def process_row_features(row):
-        # ... (Logic remains identical to your script) ...
-        # Copied for completeness
         c_class = row.get("C_Class", 1.0)
         # Fix for potential NaN in pH/PI
         ph = row.get("Buffer_pH", 7.0)
@@ -492,7 +488,6 @@ def load_and_preprocess(csv_path, save_dir=None):
 
     X_matrix = preprocessor.fit_transform(df)
 
-    # FIX: Safety check for NaNs in processed data
     if np.isnan(X_matrix).any():
         print("WARNING: NaNs found in X_matrix after preprocessing! Replacing with 0.")
         X_matrix = np.nan_to_num(X_matrix)
@@ -508,6 +503,7 @@ def load_and_preprocess(csv_path, save_dir=None):
     all_shear = []
     all_visc = []
 
+    # RE-ACTIVATED: The scaler must see the raw data to fit properly!
     for i in range(len(df)):
         for col, shear_val in shear_map.items():
             if col in df.columns and pd.notna(df.iloc[i][col]):
@@ -526,29 +522,54 @@ def load_and_preprocess(csv_path, save_dir=None):
         joblib.dump(preprocessor, os.path.join(save_dir, "preprocessor.pkl"))
         joblib.dump(physics_scaler, os.path.join(save_dir, "physics_scaler.pkl"))
 
+    # =========================================================
+    # Target Augmentation: PCHIP Dense Interpolation
+    # =========================================================
     samples = []
     for i in range(len(df)):
-        pts = []
+        raw_x = []
+        raw_y = []
+
+        # 1. Extract raw 5 points in log space
         for col, shear_val in shear_map.items():
             if col in df.columns and pd.notna(df.iloc[i][col]):
                 v = df.iloc[i][col]
                 if v <= 0:
                     v = 1e-6
-                raw_point = np.array([[np.log10(shear_val), np.log10(v)]])
+                raw_x.append(np.log10(shear_val))
+                raw_y.append(np.log10(v))
+
+        # 2. Only spline if we have enough valid points to form a curve
+        if len(raw_x) >= 3:
+            # Sort to ensure strict ascending order for the interpolator
+            sorted_indices = np.argsort(raw_x)
+            x_arr = np.array(raw_x)[sorted_indices]
+            y_arr = np.array(raw_y)[sorted_indices]
+
+            # Fit the shape-preserving physics spline
+            interpolator = PchipInterpolator(x_arr, y_arr)
+
+            # Generate 50 dense, evenly spaced points across the log-shear range
+            dense_x = np.linspace(x_arr.min(), x_arr.max(), 50)
+            dense_y = interpolator(dense_x)
+
+            # 3. Scale and package the 50 dense points
+            pts = []
+            for dx, dy in zip(dense_x, dense_y):
+                raw_point = np.array([[dx, dy]])
                 scaled_point = physics_scaler.transform(raw_point)[0]
                 pts.append(scaled_point)
 
-        if pts:
-            # FIX: Stack numpy arrays before tensor conversion to avoid UserWarning and speed up
-            pts_np = np.stack(pts)
-            samples.append(
-                {
-                    "static": torch.tensor(X_matrix[i], dtype=torch.float32),
-                    "points": torch.tensor(pts_np, dtype=torch.float32),
-                    "group": df.iloc[i]["Protein_type"],
-                    "id": df.iloc[i]["ID"],
-                }
-            )
+            if pts:
+                pts_np = np.stack(pts)
+                samples.append(
+                    {
+                        "static": torch.tensor(X_matrix[i], dtype=torch.float32),
+                        "points": torch.tensor(pts_np, dtype=torch.float32),
+                        "group": df.iloc[i]["Protein_type"],
+                        "id": df.iloc[i]["ID"],
+                    }
+                )
 
     return samples, X_matrix.shape[1]
 
@@ -760,8 +781,8 @@ def objective_cv(trial, samples, static_dim, device):
 # 5. Main Execution
 # ==========================================
 if __name__ == "__main__":
-    data = "data/processed/formulation_data_no_ibal.csv"
-    out = "./models/experiments/o_net_no_ibal"
+    data = "data/raw/formulation_data_02162026.csv"
+    out = "./models/experiments/o_net_dense"
     trials = 50
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

@@ -1,0 +1,39 @@
+
+============================================================
+FEW-SHOT CONTEXT SIZE SWEEP (pre-trained model)
+============================================================
+  Context Size | Avg RMSE | Avg MAE
+  ----------------------------------------
+  k= 1           | 0.2530   | 0.1979
+  k= 2           | 0.2528   | 0.1982
+  k= 3           | 0.2529   | 0.1979
+  k= 4           | 0.2520   | 0.1973
+  k= 5           | 0.2531   | 0.1982
+  k= 6           | 0.2515   | 0.1971
+  k= 7           | 0.2533   | 0.1993
+  k= 8           | 0.2510   | 0.1970
+  k= 9           | 0.2514   | 0.1985
+  k=10           | 0.2493   | 0.1963
+
+  Interpretation: Look for the 'elbow' where adding more context
+  gives diminishing RMSE returns — that is your minimum viable
+  context size for deployment.
+
+============================================================
+BOOTSTRAP CI (B=1000, group-level resampling)
+============================================================
+  RMSE (log10 viscosity)        : 0.2439  [95% CI: 0.1847 – 0.3169]
+  MAE (log10 viscosity)         : 0.1838  [95% CI: 0.1430 – 0.2290]
+
+  NOTE: CI width reflects evaluation uncertainty due to limited data,
+  not just model variance. Wide CI = your evaluation itself is noisy.
+
+============================================================
+PER-GROUP DIAGNOSTICS (sorted by RMSE desc)
+============================================================
+  Top 5 hardest groups:
+    pembrolizumab                   n= 27  RMSE=0.7511±0.0861 [SHEAR-THINNING]
+    trastuzumab                     n= 16  RMSE=0.4112±0.0441 [SHEAR-THINNING]
+    etanercept                      n= 23  RMSE=0.2715±0.0393 [SHEAR-THINNING]
+    vudalimab                       n= 23  RMSE=0.2586±0.0201 [SHEAR-THINNING]
+    poly-higg                       n=139  RMSE=0.2318±0.0100 [SHEAR-THINNING]

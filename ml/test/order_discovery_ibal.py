@@ -339,8 +339,8 @@ def main():
     seed = 42
     learn_steps = 50
     learn_lr = 1e-3
-    output_dir = r"models\experiments\o_net_no_ibal\benchmarks"
-    model_dir = r"models\experiments\o_net_no_ibal"
+    output_dir = r"models\experiments\o_net_v3_no_ibal\benchmarks"
+    model_dir = r"models\experiments\o_net_v3_no_ibal"
     no_pretrain = False
     pretrain_csv = r"data/processed/formulation_data_no_ibal.csv"
     ibal_csv = r"data/processed/ibal_eval.csv"
