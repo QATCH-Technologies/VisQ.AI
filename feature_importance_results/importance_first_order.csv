@@ -1,0 +1,22 @@
+feature,display,delta_mse_mean,delta_mse_std,category
+Protein_conc,Protein Concentration,0.09455937441316299,0.00746081051621686,Formulation
+kP,kP,0.007131153736086898,0.0006997541432036052,Protein Property
+HCI,HCI,0.006657041795639353,0.0006917476222429615,Protein Property
+Stabilizer_conc,Stabilizer Concentration,0.005670060704570855,0.00044041326647094276,Stabilizer
+Stabilizer_type,Stabilizer Type,0.004676499521478007,0.0006994456684103372,Stabilizer
+Buffer_conc,Buffer Concentration,0.0032938639235761532,0.0016955339302442076,Buffer
+Temperature,Temperature,0.002983082739315295,0.0004400969711076637,Process
+Buffer_type,Buffer Type,0.0027509212685459306,0.00046900626005501344,Buffer
+Protein_type,Protein Type,0.0026847835605436454,0.00031440038732964253,Protein Identity
+Buffer_pH,Buffer pH,0.0017901716465701968,0.00042177759450904824,Buffer
+Salt_conc,Salt Concentration,0.0013650053908811845,0.0002081589208087919,Salt / Ionic
+Excipient_type,Excipient Type,0.0011496123934982016,0.0001696792907764614,Excipient
+Salt_type,Salt Type,0.001043005069485022,0.00014997457946727292,Salt / Ionic
+Excipient_conc,Excipient Concentration,0.0009088282037918167,0.00022363825328542629,Excipient
+Protein_class_type,Protein Class,0.0008878537956988634,0.00015832377263100508,Protein Identity
+Surfactant_conc,Surfactant Concentration,0.0008165055841006564,0.000243218443531612,Surfactant
+Surfactant_type,Surfactant Type,0.0007299360179121558,0.0001873068117273379,Surfactant
+MW,MW  (molecular weight),0.00022594988404515325,5.51277173185987e-05,Protein Property
+C_Class,C_Class  (charge class),0.0001759090339971358,5.991420989935822e-05,Protein Property
+PI_mean,pI  (mean isoelectric point),0.00010758552031337621,4.87077225475116e-05,Protein Property
+PI_range,pI  (isoelectric range),6.438630426679288e-05,3.040388143915019e-05,Protein Property

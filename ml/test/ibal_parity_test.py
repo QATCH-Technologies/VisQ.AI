@@ -36,13 +36,15 @@ import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
 
+PROFILE_SAMPLE_ID = "263"
+
 warnings.filterwarnings("ignore")
 
 # ── suppress file-handler noise from inference_cnp on import ────────────────
 _orig_basicConfig = logging.basicConfig
 logging.basicConfig = lambda **kw: None  # type: ignore
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from inference_cnp import ViscosityPredictorCNP  # noqa: E402
+from inference_o_net import ViscosityPredictorCNP  # noqa: E402
 
 logging.basicConfig = _orig_basicConfig
 
@@ -51,10 +53,12 @@ logging.basicConfig = _orig_basicConfig
 # ──────────────────────────────────────────────────────────────────────────────
 MODEL_DIR = r"models/experiments/o_net_v3_10_ibal_no_aug"
 DATA_CSV = r"data/raw/formulation_data_03042026.csv"
-TOP10_CSV = r"ibalizumab_top10.csv"  # output of find_representative_ibalizumab.py
+TOP10_CSV = r"ibalizumab_top10.csv"
 OUT_DIR = r"models/experiments/o_net_v3_10_ibal_no_aug/benchmarks"
 PROTEIN_KEY = "Ibalizumab"
 PLOT_ENABLED = True
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -78,22 +82,24 @@ SHEAR_LABELS = {
     "Viscosity_15000000": "15 000 000 s\u207b\u00b9",
 }
 
-# ── Brand palette (mirrors parity_plot.py) ────────────────────────────────────
-C_DEEP_BLUE = "#2596be"
-C_TEXT = "#24292f"
-C_MUTED = "#6b7280"
-C_BORDER = "#d1d5db"
-C_BORDER_LT = "#e5e7eb"
-C_BG_LIGHTEST = "#f9fafb"
+# ── QATCH brand palette ───────────────────────────────────────────────────────
+C_DEEP_BLUE = "#1a85ad"  # QATCH primary (slightly richer/deeper)
+C_ACCENT = "#d95f3b"  # warm coral — predicted / contrast lines
+C_TEXT = "#1c2536"  # near-black, slight blue tint
+C_MUTED = "#64748b"  # slate for tick labels & secondary text
+C_BORDER = "#cbd5e1"  # cool light border
+C_BORDER_LT = "#e8edf4"  # very light grid
+C_BG_LIGHTEST = "#f6f9fc"  # barely-off-white axes bg
 C_WHITE = "#ffffff"
+C_BAND = "#1a85ad"  # 2× tolerance band fill (same family as primary)
 
-# One distinct colour per shear rate (drawn from project's PROTEIN_COLOURS pool)
+# Shear-rate colour ramp — sequential hues that read clearly on the light bg
 SHEAR_COLORS = {
-    "Viscosity_100": "#2596be",
-    "Viscosity_1000": "#4caf50",
-    "Viscosity_10000": "#ff9800",
-    "Viscosity_100000": "#f44336",
-    "Viscosity_15000000": "#9c27b0",
+    "Viscosity_100": "#2596be",  # QATCH blue
+    "Viscosity_1000": "#17a589",  # teal
+    "Viscosity_10000": "#e67e22",  # amber
+    "Viscosity_100000": "#e74c3c",  # coral-red
+    "Viscosity_15000000": "#7d3c98",  # violet
 }
 
 
@@ -160,11 +166,18 @@ def _apply_style():
             "ytick.color": C_MUTED,
             "xtick.labelcolor": C_MUTED,
             "ytick.labelcolor": C_MUTED,
+            "xtick.major.size": 4,
+            "xtick.minor.size": 2,
+            "ytick.major.size": 4,
+            "ytick.minor.size": 2,
+            "xtick.major.width": 0.8,
+            "ytick.major.width": 0.8,
             "grid.color": C_BORDER_LT,
             "grid.linestyle": "-",
-            "grid.linewidth": 0.7,
+            "grid.linewidth": 0.6,
             "font.family": "DejaVu Sans",
-            "font.size": 20,
+            "font.size": 13,
+            "axes.linewidth": 0.9,
         }
     )
 
@@ -204,13 +217,14 @@ def make_parity_plot(long_df, shear_subset, title, out_path, single_shear=False)
     hi = 10 ** (log_max + log_pad)
 
     # ── Figure ───────────────────────────────────────────────────────────────
-    fig, ax = plt.subplots(figsize=(8.5, 8.5), dpi=150)
+    fig, ax = plt.subplots(figsize=(8.5, 8.5), dpi=160)
     fig.patch.set_facecolor(C_WHITE)
     ax.set_facecolor(C_BG_LIGHTEST)
 
+    parity_x = np.linspace(lo, hi, 400)
+
     # Perfect parity line
-    parity_x = np.logspace(np.log10(lo), np.log10(hi), 300)
-    ax.plot(parity_x, parity_x, color=C_DEEP_BLUE, lw=1.6, ls="--", zorder=2)
+    ax.plot(parity_x, parity_x, color=C_DEEP_BLUE, lw=1.8, ls="--", zorder=3)
 
     # Scatter — colour-coded by shear rate
     for sc in shear_subset:
@@ -221,20 +235,20 @@ def make_parity_plot(long_df, shear_subset, title, out_path, single_shear=False)
             sub.loc[mask, "actual_cP"],
             sub.loc[mask, "pred_cP"],
             color=SHEAR_COLORS[sc],
-            s=52,
+            s=62,
             zorder=5,
-            alpha=0.85,
+            alpha=0.88,
             edgecolors=C_WHITE,
-            linewidths=0.7,
+            linewidths=0.9,
         )
 
-    # ── Linear axes ───────────────────────────────────────────────────────────
+    # ── Axis scales & limits ──────────────────────────────────────────────────
     ax.set_xlim(lo, hi)
     ax.set_ylim(lo, hi)
     ax.set_aspect("equal")
 
     ax.tick_params(which="both", length=4, width=0.8)
-    ax.grid(True, which="major", zorder=0)
+    ax.grid(True, which="major", zorder=0, linewidth=0.6)
 
     for spine in ax.spines.values():
         spine.set_edgecolor(C_BORDER)
@@ -243,43 +257,48 @@ def make_parity_plot(long_df, shear_subset, title, out_path, single_shear=False)
     ax.spines["right"].set_visible(False)
 
     # ── Axis labels ───────────────────────────────────────────────────────────
-    ax.set_xlabel("Measured Viscosity (cP)", fontsize=16, labelpad=12, color=C_TEXT)
-    ax.set_ylabel("Predicted Viscosity (cP)", fontsize=16, labelpad=12, color=C_TEXT)
+    ax.set_xlabel("Measured Viscosity (cP)", fontsize=15, labelpad=12, color=C_TEXT)
+    ax.set_ylabel("Predicted Viscosity (cP)", fontsize=15, labelpad=12, color=C_TEXT)
 
-    # ── Metrics box — top-left, monospace ────────────────────────────────────
-    metrics_text = f"MAE   {m['mae']:.2f} cP\n" f"RMSE  {m['rmse']:.2f} cP"
+    # ── Metrics box — log-scale metrics, top-left ────────────────────────────
+    metrics_text = (
+        f"MAE   {m['mae']:.2f} cP\n"
+        f"RMSE  {m['rmse']:.2f} cP\n"
+        f"R\u00b2    {m['r2']:.3f}"
+    )
     ax.text(
-        0.03,
+        0.04,
         0.97,
         metrics_text,
         transform=ax.transAxes,
-        fontsize=14,
+        fontsize=12,
         verticalalignment="top",
         horizontalalignment="left",
         color=C_TEXT,
         bbox=dict(
-            boxstyle="round,pad=0.5",
+            boxstyle="round,pad=0.55",
             facecolor=C_WHITE,
             edgecolor=C_BORDER,
-            linewidth=0.9,
-            alpha=0.92,
+            linewidth=0.8,
+            alpha=0.93,
         ),
         family="monospace",
     )
 
     # ── Legend ────────────────────────────────────────────────────────────────
     parity_handle = Line2D(
-        [0], [0], color=C_DEEP_BLUE, lw=1.6, ls="--", label="Perfect parity"
+        [0], [0], color=C_DEEP_BLUE, lw=1.8, ls="--", label="Perfect parity"
     )
     if single_shear:
         ax.legend(
             handles=[parity_handle],
             labels=["Perfect parity"],
             loc="lower right",
-            fontsize=13,
+            fontsize=12,
+            framealpha=0.92,
             edgecolor=C_BORDER,
             borderpad=0.8,
-            handlelength=1.8,
+            handlelength=2.0,
         )
     else:
         shear_handles = [
@@ -299,13 +318,146 @@ def make_parity_plot(long_df, shear_subset, title, out_path, single_shear=False)
             labels=["Perfect parity"] + [SHEAR_LABELS[sc] for sc in shear_subset],
             loc="lower right",
             fontsize=11,
+            framealpha=0.92,
             edgecolor=C_BORDER,
-            borderpad=0.8,
-            handlelength=1.8,
+            borderpad=0.9,
+            handlelength=2.0,
         )
 
     # ── Title ─────────────────────────────────────────────────────────────────
-    ax.set_title(title, fontsize=17, pad=14, color=C_TEXT, loc="left")
+    ax.set_title(
+        title, fontsize=16, pad=14, color=C_TEXT, loc="left", fontweight="semibold"
+    )
+
+    plt.tight_layout()
+    fig.savefig(out_path, dpi=160, bbox_inches="tight", facecolor=C_WHITE)
+    plt.close(fig)
+    logger.info(f"  Saved: {out_path}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Viscosity profile plot  (single formulation: predicted vs measured)
+# ──────────────────────────────────────────────────────────────────────────────
+
+SHEAR_RATES = [100, 1000, 10000, 100_000, 15_000_000]  # numeric x-axis values
+
+
+def make_profile_plot(results_df, sample_id, out_path):
+    """
+    Predicted vs measured viscosity profile across all 5 shear rates for one
+    formulation.  X-axis is shear rate (log), Y-axis is viscosity (linear).
+    """
+    _apply_style()
+
+    row = results_df[results_df["ID"] == str(sample_id)]
+    if row.empty:
+        logger.warning(f"Profile plot: sample ID '{sample_id}' not found — skipping.")
+        return
+    row = row.iloc[0]
+
+    measured = [row.get(sc, np.nan) for sc in SHEAR_COLS]
+    predicted = [row.get(f"Pred_{sc}", np.nan) for sc in SHEAR_COLS]
+
+    # Formulation label for subtitle
+    conc = row.get("Protein_conc", "?")
+    ph = row.get("Buffer_pH", "?")
+    salt = row.get("Salt_type", "none")
+    surf = row.get("Surfactant_type", "none")
+    stab = row.get("Stabilizer_type", "none")
+    stab_c = row.get("Stabilizer_conc", 0)
+    excip_parts = []
+    if str(salt).lower() not in ("none", "nan", ""):
+        excip_parts.append(str(salt))
+    if str(stab).lower() not in ("none", "nan", ""):
+        excip_parts.append(f"{stab} {stab_c} M")
+    if str(surf).lower() not in ("none", "nan", ""):
+        excip_parts.append(str(surf))
+    excip_str = ", ".join(excip_parts) if excip_parts else "no excipients"
+    subtitle = f"{conc} mg/mL  |  pH {ph}  |  {excip_str}"
+
+    fig, ax = plt.subplots(figsize=(8.5, 5.5), dpi=160)
+    fig.patch.set_facecolor(C_WHITE)
+    ax.set_facecolor(C_BG_LIGHTEST)
+
+    # ── Fill between measured and predicted ───────────────────────────────────
+    valid_idx = [
+        i
+        for i in range(len(SHEAR_RATES))
+        if pd.notna(measured[i]) and pd.notna(predicted[i])
+    ]
+    if valid_idx:
+        xs = [SHEAR_RATES[i] for i in valid_idx]
+        ms = [measured[i] for i in valid_idx]
+        ps = [predicted[i] for i in valid_idx]
+        ax.fill_between(
+            xs, ms, ps, color=C_DEEP_BLUE, alpha=0.08, linewidth=0, zorder=1
+        )
+
+    ax.plot(
+        SHEAR_RATES,
+        measured,
+        color=C_DEEP_BLUE,
+        lw=2.2,
+        ls="-",
+        marker="o",
+        markersize=7,
+        markeredgecolor=C_WHITE,
+        markeredgewidth=0.8,
+        zorder=4,
+        label="Measured",
+    )
+    ax.plot(
+        SHEAR_RATES,
+        predicted,
+        color=C_ACCENT,
+        lw=2.2,
+        ls="--",
+        marker="s",
+        markersize=7,
+        markeredgecolor=C_WHITE,
+        markeredgewidth=0.8,
+        zorder=4,
+        label="Predicted",
+    )
+
+    ax.set_xscale("log")
+
+    # Y limits: start from 0 with 15 % headroom above max
+    y_max = max(v for v in measured + predicted if pd.notna(v)) * 1.15
+    ax.set_ylim(0, y_max)
+
+    ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda v, _: f"{v:,.0f}"))
+    ax.tick_params(which="both", length=4, width=0.8)
+    ax.grid(True, which="major", zorder=0, linewidth=0.6)
+    ax.grid(True, which="minor", zorder=0, alpha=0.35, linewidth=0.3)
+    ax.minorticks_on()
+
+    for spine in ax.spines.values():
+        spine.set_edgecolor(C_BORDER)
+        spine.set_linewidth(0.9)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+    ax.set_xlabel("Shear Rate (s\u207b\u00b9)", fontsize=14, labelpad=10, color=C_TEXT)
+    ax.set_ylabel("Viscosity (cP)", fontsize=14, labelpad=10, color=C_TEXT)
+
+    ax.set_title(
+        f"Ibalizumab \u2014 Viscosity Profile  (ID {sample_id})\n{subtitle}",
+        fontsize=14,
+        pad=12,
+        color=C_TEXT,
+        loc="left",
+        fontweight="semibold",
+    )
+
+    ax.legend(
+        loc="upper right",
+        fontsize=12,
+        framealpha=0.92,
+        edgecolor=C_BORDER,
+        borderpad=0.8,
+        handlelength=2.0,
+    )
 
     plt.tight_layout()
     fig.savefig(out_path, dpi=160, bbox_inches="tight", facecolor=C_WHITE)
@@ -466,6 +618,23 @@ def main():
         out_path=os.path.join(args.out_dir, "parity_ibal_1000.png"),
         single_shear=True,
     )
+
+    # Fresh single-sample prediction from the encoded context (memory already set)
+    profile_row_df = iba_df[iba_df["ID"] == str(PROFILE_SAMPLE_ID)].copy()
+    if profile_row_df.empty:
+        logger.warning(
+            f"PROFILE_SAMPLE_ID '{PROFILE_SAMPLE_ID}' not found — skipping profile plot."
+        )
+    else:
+        # predictor.learn(profile_row_df)
+        profile_pred_df = predictor.predict(profile_row_df)
+        make_profile_plot(
+            results_df=profile_pred_df,
+            sample_id=PROFILE_SAMPLE_ID,
+            out_path=os.path.join(
+                args.out_dir, f"profile_ibal_{PROFILE_SAMPLE_ID}.png"
+            ),
+        )
 
     logger.info("\nDone.")
 
