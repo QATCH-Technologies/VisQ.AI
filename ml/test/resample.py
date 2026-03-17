@@ -87,8 +87,8 @@ warnings.simplefilter("ignore", OptimizeWarning)
 # Global Configuration
 # ============================================================
 
-INPUT_FILE = "data/raw/formulation_data_03042026.csv"
-OUTPUT_FILE = "data/processed/augmented_formulation_data.csv"
+INPUT_FILE = "data/processed/formulation_data_10_ibal.csv"
+OUTPUT_FILE = "data/processed/augmented_formulation_data_10_ibal.csv"
 
 # --- Pass 1 settings ---
 TARGET_SAMPLES_PER_TYPE: int = 200

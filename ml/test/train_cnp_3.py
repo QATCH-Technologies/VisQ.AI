@@ -1118,9 +1118,9 @@ def objective_cv(trial, samples, static_dim, device):
 
 if __name__ == "__main__":
     # data = "data/raw/formulation_data_03042026.csv"
-    data = "data/processed/augmented_formulation_data.csv"
-    out = "./models/experiments/o_net_v3_debug_aug"
-    trials = 50
+    data = "data/processed/formulation_data_10_ibal.csv"
+    out = "./models/experiments/o_net_v3_10_ibal_no_aug"
+    trials = 0
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     best_params = {

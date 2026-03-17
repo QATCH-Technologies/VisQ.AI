@@ -42,9 +42,9 @@ except ImportError:
 # ──────────────────────────────────────────────────────────────────────────────
 # CONFIG
 # ──────────────────────────────────────────────────────────────────────────────
-MODEL_DIR = r"models\experiments\o_net_v3"
+MODEL_DIR = r"/models/experiments/o_net_v3_10_ibal"
 DATA_CSV = r"data/raw/formulation_data_03042026.csv"
-OUTPUT_DIR = r"models\experiments\o_net_v3\benchmarks"
+OUTPUT_DIR = r"/models/experiments/o_net_v3_10_ibal/benchmarks"
 LEARN_STEPS = 50
 LEARN_LR = 1e-3
 SEED = 42
