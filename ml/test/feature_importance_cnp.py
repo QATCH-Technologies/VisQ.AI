@@ -917,10 +917,16 @@ def plot_all_features(all_feat_dict, out_path, baseline_mse, top_n=40):
     stds = []
     cats = []
 
+    first_order_names = set(NUM_COLS_RAW + CAT_COLS)
+    eng_counter = 0
     for name, (mu, sig, cat) in items:
         # Clean display label
-        label = name.replace("num__", "").replace("cat__", "")
-        label = label.replace("_", " ").title()
+        clean = name.replace("num__", "").replace("cat__", "")
+        if clean in first_order_names:
+            label = clean.replace("_", " ").title()
+        else:
+            eng_counter += 1
+            label = f"Engineered Feat #{eng_counter}"
         labels.append(label)
         means.append(mu)
         stds.append(sig)
@@ -967,7 +973,7 @@ def plot_all_features(all_feat_dict, out_path, baseline_mse, top_n=40):
             labelpad=8,
         )
         ax.set_title(
-            f"Feature Importanc (Top {top_n} shown)\n",
+            f"Feature Importance (Top {top_n} shown)\n",
             fontsize=13,
             fontweight="bold",
             pad=14,
