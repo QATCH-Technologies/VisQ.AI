@@ -128,10 +128,10 @@ CONCEPT_DEFS = [
     # New: protein conc, conc nonlinearity, protein×stabilizer cross-term, continuous stab conc
     ("crowding", "Protein_conc", +1),  # pure macromolecular crowding
     ("nonlinear_conc", "conc_sq", +1),  # non-linear concentration effect
-    ("cosolute_interaction", "Crowding_Index", -1),  # conc × stabilizer cross-term
+    ("cosolute_interaction", "Stabilizer_mg_mL", -1),  # conc × stabilizer cross-term
     (
         "cosolute_protection",
-        "Stabilizer_mg_mL",
+        "Crowding_Index",
         -1,
     ),  # continuous stabilizer concentration
 ]
@@ -1582,7 +1582,7 @@ def objective_cv(trial, samples, static_dim, device):
 # ==========================================
 
 if __name__ == "__main__":
-    data = "data/raw/formulation_data_03042026.csv"
+    data = "data/processed/augmented_formulation_data.csv"
     out = "./models/experiments/cbm_cnp_v2"
     trials = 0
 

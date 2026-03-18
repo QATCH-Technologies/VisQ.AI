@@ -280,7 +280,7 @@ def main():
     parser.add_argument(
         "--n_select",
         type=int,
-        default=10,
+        default=5,
         help="How many representative samples to select (default 10)",
     )
     parser.add_argument(

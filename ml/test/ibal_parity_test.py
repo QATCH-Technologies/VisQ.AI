@@ -36,8 +36,6 @@ import numpy as np
 import pandas as pd
 from matplotlib.lines import Line2D
 
-PROFILE_SAMPLE_ID = "263"
-
 warnings.filterwarnings("ignore")
 
 # ── suppress file-handler noise from inference_cnp on import ────────────────
@@ -51,10 +49,10 @@ logging.basicConfig = _orig_basicConfig
 # ──────────────────────────────────────────────────────────────────────────────
 # CONFIG  <- edit here, or pass CLI flags to override
 # ──────────────────────────────────────────────────────────────────────────────
-MODEL_DIR = r"models/experiments/o_net_v3_10_ibal_no_aug"
+MODEL_DIR = r"models/experiments/o_net_v3_5_ibal_no_aug"
 DATA_CSV = r"data/raw/formulation_data_03042026.csv"
 TOP10_CSV = r"ibalizumab_top10.csv"
-OUT_DIR = r"models/experiments/o_net_v3_10_ibal_no_aug/benchmarks"
+OUT_DIR = r"models/experiments/o_net_v3_5_ibal_no_aug/benchmarks"
 PROTEIN_KEY = "Ibalizumab"
 PLOT_ENABLED = True
 
@@ -92,6 +90,7 @@ C_BORDER_LT = "#e8edf4"  # very light grid
 C_BG_LIGHTEST = "#f6f9fc"  # barely-off-white axes bg
 C_WHITE = "#ffffff"
 C_BAND = "#1a85ad"  # 2× tolerance band fill (same family as primary)
+C_CONTEXT = "#f39c12"  # amber — context (top-10) samples overlaid on parity
 
 # Shear-rate colour ramp — sequential hues that read clearly on the light bg
 SHEAR_COLORS = {
@@ -182,7 +181,9 @@ def _apply_style():
     )
 
 
-def make_parity_plot(long_df, shear_subset, title, out_path, single_shear=False):
+def make_parity_plot(
+    long_df, shear_subset, title, out_path, single_shear=False, context_ids=None
+):
     """
     Log-log parity plot matching the project reference style.
 
@@ -193,6 +194,7 @@ def make_parity_plot(long_df, shear_subset, title, out_path, single_shear=False)
     title        : axes title string
     out_path     : PNG save path
     single_shear : if True, suppress the shear-rate colour legend
+    context_ids  : set of IDs that are context samples (plotted in amber diamond)
     """
     _apply_style()
 
@@ -226,21 +228,37 @@ def make_parity_plot(long_df, shear_subset, title, out_path, single_shear=False)
     # Perfect parity line
     ax.plot(parity_x, parity_x, color=C_DEEP_BLUE, lw=1.8, ls="--", zorder=3)
 
-    # Scatter — colour-coded by shear rate
+    # Scatter — colour-coded by shear rate; context samples overlaid in amber
+    ctx_set = set(context_ids) if context_ids is not None else set()
     for sc in shear_subset:
         mask = sub["shear_col"] == sc
         if not mask.any():
             continue
-        ax.scatter(
-            sub.loc[mask, "actual_cP"],
-            sub.loc[mask, "pred_cP"],
-            color=SHEAR_COLORS[sc],
-            s=62,
-            zorder=5,
-            alpha=0.88,
-            edgecolors=C_WHITE,
-            linewidths=0.9,
-        )
+        held_mask = mask & ~sub["ID"].isin(ctx_set)
+        if held_mask.any():
+            ax.scatter(
+                sub.loc[held_mask, "actual_cP"],
+                sub.loc[held_mask, "pred_cP"],
+                color=SHEAR_COLORS[sc],
+                s=62,
+                zorder=5,
+                alpha=0.88,
+                edgecolors=C_WHITE,
+                linewidths=0.9,
+            )
+        ctx_mask = mask & sub["ID"].isin(ctx_set)
+        if ctx_mask.any():
+            ax.scatter(
+                sub.loc[ctx_mask, "actual_cP"],
+                sub.loc[ctx_mask, "pred_cP"],
+                color=C_CONTEXT,
+                s=80,
+                zorder=6,
+                alpha=0.92,
+                edgecolors=C_WHITE,
+                linewidths=0.9,
+                marker="D",
+            )
 
     # ── Axis scales & limits ──────────────────────────────────────────────────
     ax.set_xlim(lo, hi)
@@ -289,10 +307,22 @@ def make_parity_plot(long_df, shear_subset, title, out_path, single_shear=False)
     parity_handle = Line2D(
         [0], [0], color=C_DEEP_BLUE, lw=1.8, ls="--", label="Perfect parity"
     )
+    context_handle = Line2D(
+        [0],
+        [0],
+        marker="D",
+        color="w",
+        markerfacecolor=C_CONTEXT,
+        markersize=8,
+        label="Context (top-10)",
+    )
+    extra_handles = [context_handle] if ctx_set else []
+    extra_labels = ["Context (top-10)"] if ctx_set else []
+
     if single_shear:
         ax.legend(
-            handles=[parity_handle],
-            labels=["Perfect parity"],
+            handles=[parity_handle] + extra_handles,
+            labels=["Perfect parity"] + extra_labels,
             loc="lower right",
             fontsize=12,
             framealpha=0.92,
@@ -314,8 +344,10 @@ def make_parity_plot(long_df, shear_subset, title, out_path, single_shear=False)
             for sc in shear_subset
         ]
         ax.legend(
-            handles=[parity_handle] + shear_handles,
-            labels=["Perfect parity"] + [SHEAR_LABELS[sc] for sc in shear_subset],
+            handles=[parity_handle] + shear_handles + extra_handles,
+            labels=["Perfect parity"]
+            + [SHEAR_LABELS[sc] for sc in shear_subset]
+            + extra_labels,
             loc="lower right",
             fontsize=11,
             framealpha=0.92,
@@ -472,7 +504,7 @@ def make_profile_plot(results_df, sample_id, out_path):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Ibalizumab parity test: top-10 context vs held-out 24."
+        description="Ibalizumab parity test: top-5 context vs held-out 29."
     )
     parser.add_argument("--model_dir", default=MODEL_DIR)
     parser.add_argument("--data", default=DATA_CSV)
@@ -528,34 +560,46 @@ def main():
     logger.info(f"Predicting {len(held_out_df)} held-out samples ...")
     results_df = predictor.predict(held_out_df)
 
-    # ── Build long-form results table ─────────────────────────────────────────
-    rows = []
-    for _, row in results_df.iterrows():
-        for sc in SHEAR_COLS:
-            act = row.get(sc, np.nan)
-            prd = row.get(f"Pred_{sc}", np.nan)
-            valid = pd.notna(act) and pd.notna(prd) and act > 0 and prd > 0
-            rows.append(
-                {
-                    "ID": row["ID"],
-                    "Protein_conc": row.get("Protein_conc", np.nan),
-                    "Buffer_pH": row.get("Buffer_pH", np.nan),
-                    "Salt_type": row.get("Salt_type", np.nan),
-                    "Salt_conc": row.get("Salt_conc", np.nan),
-                    "Stabilizer_type": row.get("Stabilizer_type", np.nan),
-                    "Stabilizer_conc": row.get("Stabilizer_conc", np.nan),
-                    "Surfactant_type": row.get("Surfactant_type", np.nan),
-                    "shear_col": sc,
-                    "shear_label": SHEAR_LABELS[sc],
-                    "actual_cP": act,
-                    "pred_cP": prd,
-                    "log10_error": (np.log10(prd) - np.log10(act)) if valid else np.nan,
-                    "fold_error": (prd / act) if valid else np.nan,
-                    "pct_error": (abs(prd - act) / act * 100) if valid else np.nan,
-                }
-            )
+    # ── Predict context samples (for parity overlay) ──────────────────────────
+    logger.info("Predicting context samples for parity overlay ...")
+    context_pred_df = predictor.predict(context_df)
 
-    long_df = pd.DataFrame(rows)
+    # ── Build long-form results table ─────────────────────────────────────────
+    def _build_rows(pred_df, is_context_flag):
+        rows = []
+        for _, row in pred_df.iterrows():
+            for sc in SHEAR_COLS:
+                act = row.get(sc, np.nan)
+                prd = row.get(f"Pred_{sc}", np.nan)
+                valid = pd.notna(act) and pd.notna(prd) and act > 0 and prd > 0
+                rows.append(
+                    {
+                        "ID": row["ID"],
+                        "Protein_conc": row.get("Protein_conc", np.nan),
+                        "Buffer_pH": row.get("Buffer_pH", np.nan),
+                        "Salt_type": row.get("Salt_type", np.nan),
+                        "Salt_conc": row.get("Salt_conc", np.nan),
+                        "Stabilizer_type": row.get("Stabilizer_type", np.nan),
+                        "Stabilizer_conc": row.get("Stabilizer_conc", np.nan),
+                        "Surfactant_type": row.get("Surfactant_type", np.nan),
+                        "shear_col": sc,
+                        "shear_label": SHEAR_LABELS[sc],
+                        "actual_cP": act,
+                        "pred_cP": prd,
+                        "is_context": is_context_flag,
+                        "log10_error": (
+                            (np.log10(prd) - np.log10(act)) if valid else np.nan
+                        ),
+                        "fold_error": (prd / act) if valid else np.nan,
+                        "pct_error": (abs(prd - act) / act * 100) if valid else np.nan,
+                    }
+                )
+        return rows
+
+    long_df = pd.DataFrame(
+        _build_rows(results_df, False) + _build_rows(context_pred_df, True)
+    )
+    context_id_set = set(str(i) for i in top10_ids)
 
     # ── Save CSV ──────────────────────────────────────────────────────────────
     csv_path = os.path.join(args.out_dir, "ibalizumab_parity_results.csv")
@@ -603,9 +647,10 @@ def main():
     make_parity_plot(
         long_df,
         shear_subset=SHEAR_COLS,
-        title=("Ibalizumab \u2014 All Shear Rates\n" "10 context  |  24 ablated"),
+        title=("Ibalizumab \u2014 All Shear Rates\n" "5 context  |  29 ablated"),
         out_path=os.path.join(args.out_dir, "parity_ibal_all_shears.png"),
         single_shear=False,
+        context_ids=context_id_set,
     )
 
     make_parity_plot(
@@ -613,26 +658,47 @@ def main():
         shear_subset=["Viscosity_1000"],
         title=(
             "Viscosity @ 1 000 s\u207b\u00b9 \u2014 Ibalizumab\n"
-            "10 context  |  24 ablated"
+            "5 context  |  29 ablated"
         ),
         out_path=os.path.join(args.out_dir, "parity_ibal_1000.png"),
         single_shear=True,
+        context_ids=context_id_set,
     )
 
-    # Fresh single-sample prediction from the encoded context (memory already set)
-    profile_row_df = iba_df[iba_df["ID"] == str(PROFILE_SAMPLE_ID)].copy()
+    # ── Auto-select profile sample: non-context Ibal with Viscosity_1000 > 5 cP
+    v1000 = pd.to_numeric(held_out_df["Viscosity_1000"], errors="coerce")
+    candidates = held_out_df[v1000 > 5]
+    if candidates.empty:
+        # fallback: any held-out sample where any shear viscosity > 5
+        any_high = (
+            held_out_df[SHEAR_COLS].apply(pd.to_numeric, errors="coerce") > 5
+        ).any(axis=1)
+        candidates = held_out_df[any_high]
+    if candidates.empty:
+        candidates = held_out_df
+
+    profile_sample_id = str(
+        candidates.loc[
+            pd.to_numeric(candidates["Viscosity_1000"], errors="coerce")
+            .fillna(0)
+            .idxmax(),
+            "ID",
+        ]
+    )
+    logger.info(f"Auto-selected profile sample ID: {profile_sample_id}")
+
+    profile_row_df = iba_df[iba_df["ID"] == profile_sample_id].copy()
     if profile_row_df.empty:
         logger.warning(
-            f"PROFILE_SAMPLE_ID '{PROFILE_SAMPLE_ID}' not found — skipping profile plot."
+            f"Profile sample ID '{profile_sample_id}' not found — skipping profile plot."
         )
     else:
-        # predictor.learn(profile_row_df)
         profile_pred_df = predictor.predict(profile_row_df)
         make_profile_plot(
             results_df=profile_pred_df,
-            sample_id=PROFILE_SAMPLE_ID,
+            sample_id=profile_sample_id,
             out_path=os.path.join(
-                args.out_dir, f"profile_ibal_{PROFILE_SAMPLE_ID}.png"
+                args.out_dir, f"profile_ibal_{profile_sample_id}.png"
             ),
         )
 
