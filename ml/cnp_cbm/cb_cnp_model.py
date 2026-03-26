@@ -1,45 +1,56 @@
 import torch
 import torch.nn as nn
 
-# ==========================================
-# [CBM-2] Concept definitions
-# ==========================================
-# Each entry: (concept_name, proxy_column, sign, activation)
-#   proxy_column: column in df AFTER feature engineering but BEFORE scaling
-#   sign: +1 if high proxy value → concept activation should be positive
-#         -1 if high proxy value → concept activation should be negative
-#   activation: "tanh" → [-1, 1] for concepts that can be pos or neg
-#               "sigmoid" → [0, 1] for inherently non-negative concepts
-#
-# [v3] Changes from v2:
-#   - Per-concept activation functions (tanh vs sigmoid) based on physics.
-#   - Replaced three r>0.99 pass-through proxies (kP, HCI, C_Class) with
-#     interaction-term proxies so the concept learns something the raw
-#     feature in query_static doesn't already capture.
-#   - Added learned concept gates + DeCov decorrelation loss.
-#   - lambda_concept_sup is now annealed (high early, low late).
-#
-# Physical interpretation of each concept:
-#   self_interaction    — concentration-dependent attractive self-interaction
-#   hydrophobicity      — concentration-enhanced hydrophobic patch association
-#   charge_environment  — charge–ionic strength interplay driving repulsion
-#   ionic_screening     — Debye screening of protein-protein charge repulsion
-#   crowding            — macromolecular crowding / volume exclusion effects
-#   nonlinear_conc      — non-linear concentration effect (approach to jamming)
-#   cosolute_interaction— concentration × stabilizer cross-term
-#   cosolute_protection — cosolute-mediated steric/entropic viscosity reduction
-#
-# These are SOFT priors. lambda_concept_sup is annealed from ~0.3 → ~0.01
-# so the viscosity MSE signal can override the proxy when the data warrants it.
 CONCEPT_DEFS = [
+    # tanh used for polarity range between -1 to +1 to simulate repulsion and attraction.
+    # sigmoid used for intensities to between 0 to +1.
+    # +1 and -1 signal directional and inversly proportional interactions.
+    # ------------------------------------------------------------------------- #
+    # PROTEIN-PROTEIN CONCEPTS
+    # kP measures protein-protein interaction. Multiplying it by concentration
+    # (conc) gives the total interaction potential in the vial.
+    # We use tanh because interactions can be attractive (-) or repulsive (+).
+    # We use -1 so that the concept activates strongly for sticky, attractive proteins.
     ("self_interaction", "conc_x_kP", -1, "tanh"),
+    # HCI (Hydrophobic Contact Index) estimates exposed sticky patches.
+    # Multiplying by concentration scales it to the whole solution.
+    # It is a sigmoid because you either have hydrophobic patches or you don't;
+    # you can't have "anti-hydrophobicity."
     ("hydrophobicity", "conc_x_HCI", +1, "sigmoid"),
+    # A protein's net charge interacts heavily with the salt/ions in the buffer.
+    # It uses tanh because the charge state can swing from deeply acidic (-) to
+    # highly basic (+).
+    # ------------------------------------------------------------------------- #
+    # ENVIRONMENTAL CONCEPTS
+    # A protein's net charge interacts heavily with the salt/ions in the buffer.
+    # It uses tanh because the charge state can swing from deeply acidic (-)
+    # to highly basic (+).
     ("charge_environment", "charge_x_ionic", +1, "tanh"),
+    # Salts act as a "screen" that hides protein charges from each other.
+    # This targets the raw ionic strength proxy. It is a sigmoid because
+    # screening goes from 0 (pure water) to 1 (highly saturated salt buffer).
+    # Tying it to sqrt([SALT]) allows for nonlinear scaling factor to be tracked.
     ("ionic_screening", "Ionic_Strength_Proxy", +1, "sigmoid"),
+    # ------------------------------------------------------------------------- #
+    # VOLUME AND SPACING CONCEPTS
+    # The simplest physical rule. The higher the mg/mL,
+    # the less free space there is (excluded volume).
     ("crowding", "Protein_conc", +1, "sigmoid"),
+    # Viscosity doesn't rise in a straight line; it curves upwards aggressively
+    # at high concentrations (due to jamming and multi-body collisions).
+    # The square of the concentration c^2 proxies this exponential "wall."
     ("nonlinear_conc", "conc_sq", +1, "sigmoid"),
+    # ------------------------------------------------------------------------- #
+    # ADDITIVE CONCEPTS
+    # Excipients (like sucrose or arginine) are added to interact with the protein.
+    # Because they can either bind to the protein or be preferentially excluded from it,
+    # they can drive the system in two different directions (tanh).
     ("cosolute_interaction", "Stabilizer_mg_mL", -1, "tanh"),
+    # This represents how much "padding" the stabilizers provide to prevent the proteins
+    # from crashing into each other. Crowding between stabilizers * proteins in terms of mg/mL
+    # is what is tracked here.
     ("cosolute_protection", "Crowding_Index", -1, "sigmoid"),
+    # ------------------------------------------------------------------------- #
 ]
 
 N_CONCEPTS_SUPERVISED = len(CONCEPT_DEFS)
@@ -116,13 +127,13 @@ class PhysicsBottleneck(nn.Module):
         return activated
 
     def forward(self, r):
-        # 1. Project to raw concept scores
+        # Project to raw concept scores
         raw = self.concept_proj(r)
 
-        # 2. Bound values based on physics (tanh/sigmoid)
+        # Bound values based on physics (tanh/sigmoid)
         c_activated = self._apply_per_concept_activation(raw)
 
-        # 3. Apply learned L1 sparsity gates
+        # Apply learned L1 sparsity gates
         gates = torch.sigmoid(self.concept_gate_logits)
         c_final = c_activated * gates
 
@@ -153,11 +164,6 @@ class ViscosityDecoder(nn.Module):
 
         # Predict Log-Viscosity
         return self.mlp(decoder_input)
-
-
-# ==========================================
-# 3. The Top-Level Model
-# ==========================================
 
 
 class ConceptBottleneckCNP(nn.Module):
