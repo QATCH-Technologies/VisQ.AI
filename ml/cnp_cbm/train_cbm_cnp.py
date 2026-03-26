@@ -1,59 +1,3 @@
-"""
-train_cbm_cnp.py
-================
-Concept Bottleneck Machine (CBM) extension of CrossSampleCNP.
-
-All [FIX-N] changes from train_cnp_3.py are preserved UNCHANGED.
-New additions are labeled [CBM-N].
-
-  [CBM-1] ConceptBottleneckCNP: hard concept bottleneck architecture.
-          The latent vector r (latent_dim) is projected through a linear
-          layer to n_concepts named scalars c = tanh(W·r + b) before the
-          decoder. The decoder receives [query_shear | query_static | c]
-          instead of [query_shear | query_static | r]. No skip connection —
-          all context knowledge MUST route through the named concepts.
-          The first N_CONCEPTS_SUPERVISED concepts have soft proxy targets;
-          any additional concepts are free/latent (unsupervised capacity).
-
-  [CBM-2] Physical concept definitions (CONCEPT_DEFS).
-          Eight domain-grounded concepts with proxy labels derived from
-          engineered features already computed in load_and_preprocess:
-          crowding, ionic_screening, self_interaction, hydrophobicity,
-          excluded_volume, viscosity_divergence, cosolute_protection,
-          charge_environment. Proxies are soft — the model may deviate
-          from them when the viscosity signal provides a stronger gradient.
-
-  [CBM-3] Concept supervision loss (lambda_concept_sup, default 0.10).
-          Per-iteration MSE between concept activations and the mean
-          normalized proxy values of the context samples. Applied only to
-          the first N_CONCEPTS_SUPERVISED dimensions. Proxy targets are
-          z-scored then tanh-compressed to [-1, 1] to match tanh output.
-
-  [CBM-4] Concept consistency loss (lambda_concept_consist, default 0.05).
-          Two random halves of the same protein's context should produce
-          similar concept activations. Cosine-distance loss in concept space,
-          analogous to the latent consistency loss [FIX-4] in train_cnp_3.py.
-
-  [CBM-5] Concept analysis and intervention (post-training).
-          After training: per-group concept heatmap, concept-proxy
-          correlation table, and an intervention demo that clamps each
-          concept one at a time and reports the viscosity delta.
-          Saved to: concept_activations.csv, concept_heatmap.png,
-          concept_intervention.csv.
-
-  [CBM-6] encode_memory / decode_from_memory API preserved.
-          For CBM, encode_memory returns the concept vector c (not r),
-          so inference_cnp.py works without changes — the "memory vector"
-          is now the concept vector. decode_from_memory takes concept
-          vectors. An additional encode_latent() method exposes r when
-          needed (e.g., log_latent_variance diagnostic).
-
-Data pipeline (load_and_preprocess) is UNCHANGED except:
-  - concept proxy values extracted pre-scaling and stored as
-    sample["concept_targets"] ([N_CONCEPTS_SUPERVISED] float tensor).
-  - concept_scaler.pkl saved alongside preprocessor.pkl.
-"""
-
 import copy
 import os
 from collections import defaultdict
@@ -96,48 +40,57 @@ NON_PROTEIN_GROUPS = {"none"}
 # ==========================================
 # [CBM-2] Concept definitions
 # ==========================================
-# Each entry: (concept_name, proxy_column, sign)
+# Each entry: (concept_name, proxy_column, sign, activation)
 #   proxy_column: column in df AFTER feature engineering but BEFORE scaling
 #   sign: +1 if high proxy value → concept activation should be positive
 #         -1 if high proxy value → concept activation should be negative
+#   activation: "tanh" → [-1, 1] for concepts that can be pos or neg
+#               "sigmoid" → [0, 1] for inherently non-negative concepts
+#
+# [v3] Changes from v2:
+#   - Per-concept activation functions (tanh vs sigmoid) based on physics.
+#   - Replaced three r>0.99 pass-through proxies (kP, HCI, C_Class) with
+#     interaction-term proxies so the concept learns something the raw
+#     feature in query_static doesn't already capture.
+#   - Added learned concept gates + DeCov decorrelation loss.
+#   - lambda_concept_sup is now annealed (high early, low late).
 #
 # Physical interpretation of each concept:
-#   crowding            — macromolecular crowding / volume exclusion effects
+#   self_interaction    — concentration-dependent attractive self-interaction
+#   hydrophobicity      — concentration-enhanced hydrophobic patch association
+#   charge_environment  — charge–ionic strength interplay driving repulsion
 #   ionic_screening     — Debye screening of protein-protein charge repulsion
-#   self_interaction    — attractive self-interaction (kP > 0 = net attractive)
-#   hydrophobicity      — hydrophobic patch exposure driving association
-#   excluded_volume     — total occupied volume fraction (approach to jamming)
-#   viscosity_divergence— KD crowding enhancement, diverges near phi_max
+#   crowding            — macromolecular crowding / volume exclusion effects
+#   nonlinear_conc      — non-linear concentration effect (approach to jamming)
+#   cosolute_interaction— concentration × stabilizer cross-term
 #   cosolute_protection — cosolute-mediated steric/entropic viscosity reduction
-#   charge_environment  — net charge-concentration class driving repulsion
 #
-# These are SOFT priors. The concept loss weight (lambda_concept_sup=0.10)
-# is intentionally small so the viscosity MSE signal can override the proxy
-# when the data warrants it.
+# These are SOFT priors. lambda_concept_sup is annealed from ~0.3 → ~0.01
+# so the viscosity MSE signal can override the proxy when the data warrants it.
 
 CONCEPT_DEFS = [
-    # --- Three confirmed pass-throughs (r>0.99, keep unchanged) ---
-    ("self_interaction", "kP", -1),  # high kP → attractive → high visc
-    ("hydrophobicity", "HCI", +1),  # high HCI → hydrophobic patches
-    ("charge_environment", "C_Class", +1),  # high C_Class → charge drives visc
+    # --- v3: replaced pass-through proxies with interaction terms ---
+    # Old: kP alone (r>0.99, just memorized the feature)
+    # New: kP × Protein_conc — captures concentration-dependent self-interaction
+    ("self_interaction", "conc_x_kP", -1, "tanh"),  # attractive/repulsive → signed
+    # Old: HCI alone (r>0.99, pass-through)
+    # New: HCI × Protein_conc — hydrophobic association scales with crowding
+    ("hydrophobicity", "conc_x_HCI", +1, "sigmoid"),  # non-negative association
+    # Old: C_Class alone (r>0.99, pass-through)
+    # New: C_Class × sqrt(Ionic_Strength) — charge-screening interplay
+    ("charge_environment", "charge_x_ionic", +1, "tanh"),  # can be pos or neg
     # --- Moderate proxy (r=0.51, keep) ---
-    ("ionic_screening", "Ionic_Strength_Proxy", +1),  # Debye screening of repulsion
-    # --- Replaced: four collinear Phi_Total derivatives → four orthogonal signals ---
-    # Old: Exp_Crowding, Phi_Total, KD_Asymptote all = f(Phi_Total) → r≈0.26 each
-    # Old: prior_stabilizer sparse ordinal → r=0.16
-    # New: protein conc, conc nonlinearity, protein×stabilizer cross-term, continuous stab conc
-    ("crowding", "Protein_conc", +1),  # pure macromolecular crowding
-    ("nonlinear_conc", "conc_sq", +1),  # non-linear concentration effect
-    ("cosolute_interaction", "Stabilizer_mg_mL", -1),  # conc × stabilizer cross-term
-    (
-        "cosolute_protection",
-        "Crowding_Index",
-        -1,
-    ),  # continuous stabilizer concentration
+    ("ionic_screening", "Ionic_Strength_Proxy", +1, "sigmoid"),  # non-negative screening
+    # --- Concentration-derived concepts ---
+    ("crowding", "Protein_conc", +1, "sigmoid"),  # non-negative crowding
+    ("nonlinear_conc", "conc_sq", +1, "sigmoid"),  # non-negative jamming approach
+    ("cosolute_interaction", "Stabilizer_mg_mL", -1, "tanh"),  # can reduce or increase
+    ("cosolute_protection", "Crowding_Index", -1, "sigmoid"),  # non-negative protection
 ]
 
 N_CONCEPTS_SUPERVISED = len(CONCEPT_DEFS)  # 8 — these get proxy supervision
 CONCEPT_NAMES = [cd[0] for cd in CONCEPT_DEFS]
+CONCEPT_ACTIVATIONS = [cd[3] for cd in CONCEPT_DEFS]  # per-concept activation type
 
 
 # ==========================================
@@ -203,19 +156,28 @@ class CrossSampleCNP(nn.Module):
 
 class ConceptBottleneckCNP(nn.Module):
     """
-    [CBM-1] Hard Concept Bottleneck CNP.
+    [CBM-1] Hard Concept Bottleneck CNP — v3 with learned gates and per-concept activations.
 
     Data flow:
         context_tensor
             → encoder (2 + static_dim → hidden_dim → latent_dim)
             → AttentionPool → r  [B, latent_dim]
-            → concept_proj + tanh → c  [B, n_concepts]    ← inspectable
+            → concept_proj → per-concept activation → c_raw  [B, n_concepts]
+            → concept_gate (sigmoid) → c = c_raw * gate  [B, n_concepts]
             → decoder (1 + static_dim + n_concepts → hidden_dim → 1)
             → log-viscosity prediction
 
+    [v3] Changes:
+      - Per-concept activation: tanh for signed concepts, sigmoid for non-negative.
+        Activation type is determined by CONCEPT_ACTIVATIONS for supervised dims;
+        free dims default to tanh.
+      - Learned concept gates: sigmoid gate per dimension scales each concept's
+        contribution. Post-training, gates near zero indicate unused concepts.
+      - decov_loss() method: off-diagonal penalty on concept correlation matrix
+        to prevent redundant concepts.
+
     The decoder has NO access to r. Every bit of context knowledge must
-    be expressed as one of the n_concepts concept scalars. The tanh keeps
-    all concepts in [-1, 1], making activation magnitudes comparable.
+    be expressed as one of the n_concepts concept scalars.
 
     First N_CONCEPTS_SUPERVISED concepts correspond to named physical
     phenomena and receive soft proxy supervision (lambda_concept_sup).
@@ -234,6 +196,7 @@ class ConceptBottleneckCNP(nn.Module):
         latent_dim=128,
         n_concepts=N_CONCEPTS_SUPERVISED,
         concept_names=None,
+        concept_activations=None,
         dropout=0.0,
     ):
         super().__init__()
@@ -246,6 +209,14 @@ class ConceptBottleneckCNP(nn.Module):
             + [f"latent_{i}" for i in range(max(0, n_concepts - N_CONCEPTS_SUPERVISED))]
         )
 
+        # [v3] Per-concept activation types: "tanh" or "sigmoid"
+        if concept_activations is not None:
+            self._concept_activations = concept_activations
+        else:
+            self._concept_activations = CONCEPT_ACTIVATIONS[
+                : min(n_concepts, N_CONCEPTS_SUPERVISED)
+            ] + ["tanh"] * max(0, n_concepts - N_CONCEPTS_SUPERVISED)
+
         # Encoder + pooler: identical to CrossSampleCNP
         self.encoder = nn.Sequential(
             nn.Linear(2 + static_dim, hidden_dim),
@@ -257,11 +228,21 @@ class ConceptBottleneckCNP(nn.Module):
         )
         self.pooler = AttentionPool(latent_dim)
 
-        # [CBM-1] Concept projection: linear + tanh → c in [-1, 1]
-        # Linear keeps concepts interpretable as weighted combinations of r;
-        # tanh bounds prevent scale explosion and makes values readable as
-        # directional effect size.
+        # [CBM-1] Concept projection: linear → per-concept activation
         self.concept_proj = nn.Linear(latent_dim, n_concepts)
+
+        # [v4] Learned concept gates initialization:
+        # Supervised gates start near-open (logit(0.9) ≈ 2.2).
+        # Free/latent gates start near-closed (logit(0.1) ≈ -2.2) to force
+        # the model to rely on physical concepts first.
+        init_logits = torch.empty(n_concepts)
+        n_sup = min(n_concepts, N_CONCEPTS_SUPERVISED)
+        init_logits[:n_sup] = 2.2  # Supervised dimensions
+
+        if n_concepts > N_CONCEPTS_SUPERVISED:
+            init_logits[n_sup:] = -2.2  # Free dimensions
+
+        self.concept_gate_logits = nn.Parameter(init_logits)
 
         # Decoder: takes n_concepts instead of latent_dim
         self.decoder = nn.Sequential(
@@ -273,9 +254,54 @@ class ConceptBottleneckCNP(nn.Module):
             nn.Linear(hidden_dim, 1),
         )
 
+    def _apply_per_concept_activation(self, raw):
+        """
+        [v3] Apply tanh or sigmoid per concept dimension.
+        raw: [B, n_concepts] — unbounded linear projection output.
+        Returns: [B, n_concepts] with each dim in [-1,1] or [0,1].
+        """
+        activated = torch.empty_like(raw)
+        for i, act_type in enumerate(self._concept_activations):
+            if act_type == "sigmoid":
+                activated[:, i] = torch.sigmoid(raw[:, i])
+            else:  # tanh (default for free/latent dims)
+                activated[:, i] = torch.tanh(raw[:, i])
+        return activated
+
     def _project_concepts(self, r):
-        """r [B, latent_dim] → c [B, n_concepts] via linear + tanh."""
-        return torch.tanh(self.concept_proj(r))
+        """
+        r [B, latent_dim] → c [B, n_concepts].
+        [v3] Per-concept activation + learned gating.
+        """
+        raw = self.concept_proj(r)
+        c_activated = self._apply_per_concept_activation(raw)
+        gates = torch.sigmoid(self.concept_gate_logits)  # [n_concepts]
+        return c_activated * gates
+
+    def concept_gates(self):
+        """Return current gate values [n_concepts] in [0, 1] (detached)."""
+        return torch.sigmoid(self.concept_gate_logits).detach()
+
+    def decov_loss(self, concepts):
+        """
+        [v3] DeCov (Decorrelation) loss on concept activations.
+        Penalizes off-diagonal elements of the concept correlation matrix
+        to encourage each concept dimension to explain unique variance.
+
+        Args:
+            concepts: [B, n_concepts] — concept activations from a batch.
+        Returns:
+            Scalar loss (Frobenius norm of off-diagonal covariance).
+        """
+        if concepts.size(0) < 2:
+            return torch.tensor(0.0, device=concepts.device)
+        # Center
+        c_centered = concepts - concepts.mean(dim=0, keepdim=True)
+        # Covariance matrix [n_concepts, n_concepts]
+        cov = (c_centered.T @ c_centered) / (concepts.size(0) - 1)
+        # Zero out diagonal, penalize off-diagonal
+        off_diag = cov - torch.diag(torch.diag(cov))
+        return (off_diag**2).sum() / (self.n_concepts * (self.n_concepts - 1))
 
     def forward(self, context_tensor, query_shear, query_static):
         r = self.pooler(self.encoder(context_tensor))
@@ -304,16 +330,14 @@ class ConceptBottleneckCNP(nn.Module):
         c_exp = concept_vector.unsqueeze(1).repeat(1, n_q, 1)
         return self.decoder(torch.cat([query_shear, query_static, c_exp], dim=-1))
 
-    def intervene(
-        self, context_tensor, query_shear, query_static, concept_idx, concept_value
-    ):
+    def intervene(self, context_tensor, query_shear, query_static, concept_idx, concept_value):
         """
         [CBM-5] Causal intervention: clamp concept_idx to concept_value, re-decode.
         This is do(c_i = v) in the Pearl causal sense — not merely correlation.
 
         Args:
             concept_idx:   Index into concept vector (int or list of ints).
-            concept_value: Scalar value to clamp to (float, in [-1, 1]).
+            concept_value: Scalar value to clamp to (float, in activation range).
 
         Returns:
             Predictions under the intervention [B, n_queries, 1].
@@ -681,11 +705,7 @@ def load_and_preprocess(csv_path, save_dir=None):
         return (
             chemical_series.astype(str)
             .str.lower()
-            .map(
-                lambda x: next(
-                    (mw for name, mw in MW_MAP.items() if name in x), default_mw
-                )
-            )
+            .map(lambda x: next((mw for name, mw in MW_MAP.items() if name in x), default_mw))
         )
 
     stabilizer_mw = get_mw(df["Stabilizer_type"], default_mw=342.3)
@@ -723,14 +743,14 @@ def load_and_preprocess(csv_path, save_dir=None):
     df["Phi_Total"] = (
         df["Phi_Protein"] + df["Phi_Stabilizer"] + df["Phi_Salt"] + df["Phi_Excipient"]
     )
-    df["Effective_Protein_Fraction"] = df["Protein_conc"] / df[
-        "Total_Solute_Mass"
-    ].replace(0, 1e-6)
+    df["Effective_Protein_Fraction"] = df["Protein_conc"] / df["Total_Solute_Mass"].replace(0, 1e-6)
     PHI_MAX = 0.65
     safe_phi = df["Phi_Total"].clip(upper=PHI_MAX - 0.01)
     df["KD_Asymptote"] = (1.0 - (safe_phi / PHI_MAX)) ** -2.0
     df["Exp_Crowding"] = np.exp(safe_phi * 2.5)
     df["Ionic_Strength_Proxy"] = np.sqrt(df["Salt_conc"] / 1000.0)
+    # [v3] Charge × ionic strength interaction for charge_environment concept
+    df["charge_x_ionic"] = df["C_Class"] * df["Ionic_Strength_Proxy"]
 
     engineered_cols = [
         "log_conc",
@@ -746,6 +766,7 @@ def load_and_preprocess(csv_path, save_dir=None):
         "Phi_Protein",
         "Phi_Stabilizer",
         "Phi_Total",
+        "charge_x_ionic",  # [v3] C_Class × sqrt(ionic_strength) interaction
     ]
 
     def process_row_features(row):
@@ -815,9 +836,7 @@ def load_and_preprocess(csv_path, save_dir=None):
                 priors[f"prior_{t_key}"] = regime_dict.get(t_key, 0)
 
             for target_ing, threshold in CONC_THRESHOLDS.items():
-                match = (target_ing in ing_name) or (
-                    target_ing == "arginine" and "arg" in ing_name
-                )
+                match = (target_ing in ing_name) or (target_ing == "arginine" and "arg" in ing_name)
                 if match:
                     concs[f"{target_ing}_low"] = min(ing_conc, threshold)
                     concs[f"{target_ing}_high"] = max(ing_conc - threshold, 0)
@@ -834,11 +853,13 @@ def load_and_preprocess(csv_path, save_dir=None):
 
     # ---------------------------------------------------------------
     # [CBM-2] Extract concept proxy values BEFORE scaling.
-    # These are raw domain values; we z-score then tanh-compress to
-    # [-1, 1] so they match the tanh-bounded concept outputs.
+    # [v3] Per-concept normalization respecting activation type:
+    #   tanh concepts: z-score then tanh(z/2) → [-1, 1]
+    #   sigmoid concepts: z-score then sigmoid(z) → [0, 1]
     # ---------------------------------------------------------------
     proxy_cols = [cd[1] for cd in CONCEPT_DEFS]
     proxy_signs = np.array([cd[2] for cd in CONCEPT_DEFS], dtype=float)
+    proxy_activations = [cd[3] for cd in CONCEPT_DEFS]
 
     concept_raw = np.zeros((len(df), N_CONCEPTS_SUPERVISED), dtype=np.float64)
     for j, col in enumerate(proxy_cols):
@@ -847,17 +868,28 @@ def load_and_preprocess(csv_path, save_dir=None):
     # Apply sign convention: negative sign means high value → negative concept
     concept_raw_signed = concept_raw * proxy_signs
 
-    # Z-score, then apply tanh(z/2) → compresses ±2σ outliers to ±0.76,
-    # saturates extreme outliers to ±1, matches the concept layer tanh output.
     c_mean = concept_raw_signed.mean(axis=0)
     c_std = concept_raw_signed.std(axis=0) + 1e-8
-    concept_normalized = np.tanh((concept_raw_signed - c_mean) / c_std / 2.0)
+    z_scored = (concept_raw_signed - c_mean) / c_std
+
+    # [v3] Per-concept activation-aware normalization
+    concept_normalized = np.zeros_like(z_scored)
+    for j, act_type in enumerate(proxy_activations):
+        if act_type == "sigmoid":
+            # sigmoid(z) → [0, 1], matching the sigmoid activation in the model
+            concept_normalized[:, j] = 1.0 / (1.0 + np.exp(-z_scored[:, j]))
+        else:
+            # tanh(z/2) → [-1, 1], matching the tanh activation in the model
+            concept_normalized[:, j] = np.tanh(z_scored[:, j] / 2.0)
 
     if save_dir:
         os.makedirs(save_dir, exist_ok=True)
         np.save(os.path.join(save_dir, "concept_proxy_mean.npy"), c_mean)
         np.save(os.path.join(save_dir, "concept_proxy_std.npy"), c_std)
         np.save(os.path.join(save_dir, "concept_proxy_signs.npy"), proxy_signs)
+        np.save(
+            os.path.join(save_dir, "concept_proxy_activations.npy"), np.array(proxy_activations)
+        )
         print(f"Concept proxy scaler saved to {save_dir}/concept_proxy_*.npy")
 
     # ---------------------------------------------------------------
@@ -933,9 +965,7 @@ def load_and_preprocess(csv_path, save_dir=None):
 
         dense_x_list = []
         for j in range(len(interval_endpoints) - 1):
-            interval_pts = np.linspace(
-                interval_endpoints[j], interval_endpoints[j + 1], 10
-            )
+            interval_pts = np.linspace(interval_endpoints[j], interval_endpoints[j + 1], 10)
             dense_x_list.append(
                 interval_pts[:-1] if j < len(interval_endpoints) - 2 else interval_pts
             )
@@ -957,9 +987,7 @@ def load_and_preprocess(csv_path, save_dir=None):
                     "group": df.iloc[i]["Protein_type"],
                     "id": df.iloc[i]["ID"],
                     # [CBM-2] Normalized concept proxy targets for this sample
-                    "concept_targets": torch.tensor(
-                        concept_normalized[i], dtype=torch.float32
-                    ),
+                    "concept_targets": torch.tensor(concept_normalized[i], dtype=torch.float32),
                 }
             )
 
@@ -1034,21 +1062,25 @@ def train_epoch(
     norm_target=5.0,
     lambda_concept_sup=0.10,  # [CBM-3] concept supervision (proxy labels)
     lambda_concept_consist=0.05,  # [CBM-4] concept consistency (intra-group)
-    lambda_antisat=0.05,  # [v2-CBM] anti-saturation on free concept dims
+    lambda_decov=0.03,  # [v3] DeCov decorrelation loss on concept dims
+    lambda_sparsity=0.01,  # [v3] L1 sparsity on free concept activations
 ):
     """
-    Train one epoch. Extends train_cnp_3.py with [CBM-3] and [CBM-4] losses.
+    Train one epoch. Extends train_cnp_3.py with CBM losses.
 
     All [FIX-N] losses from train_cnp_3.py are preserved UNCHANGED.
     CBM losses activate only when model is ConceptBottleneckCNP and
     concept_targets are present in the sample dicts. Plain CrossSampleCNP
     training is unaffected.
 
-    [v2] lambda_triplet reduced to 0.10 (was 0.30) — free latents were
-    saturating at ±1 because the contrastive loss dominated.
-    [v2] lambda_antisat=0.05 soft penalty keeps free concept dims off ±1.
-         Applied only to the N_CONCEPTS_SUPERVISED:n_concepts slice so the
-         supervised concepts are not penalized for having sharp values.
+    [v3] Changes from v2:
+      - DeCov loss (lambda_decov): penalizes off-diagonal concept covariance.
+      - L1 sparsity (lambda_sparsity): encourages free concepts to be sparse,
+        improving post-hoc interpretability.
+      - Concept consistency now uses MSE instead of cosine (matches proxy loss metric).
+      - Anti-saturation penalty removed — replaced by learned gates + L1 sparsity
+        which achieve the same goal without hardcoded threshold.
+      - lambda_concept_sup should be annealed externally (caller passes current value).
     """
     model.train()
     total_loss = 0
@@ -1073,6 +1105,9 @@ def train_epoch(
 
     group_loss_accum = defaultdict(float)
     group_loss_count = defaultdict(int)
+
+    # [v3] Accumulate concept vectors across batch for DeCov loss
+    batch_concepts = []
 
     for _ in range(iterations):
         if len(protein_list) < 2:
@@ -1114,12 +1149,9 @@ def train_epoch(
         norm_penalty = torch.mean(torch.clamp(r_norm - norm_target, min=0.0) ** 2)
 
         # ---- [CBM-3] Concept supervision loss ----
-        # Mean context proxy targets vs. model concept activations.
         concept_sup_loss = torch.tensor(0.0, device=device)
         if is_cbm and concepts_A is not None:
-            ctx_concept_targets = _build_concept_targets(
-                task_A, idx_A[:n_ctx_A], device
-            )
+            ctx_concept_targets = _build_concept_targets(task_A, idx_A[:n_ctx_A], device)
             if ctx_concept_targets is not None:
                 n_sup = min(N_CONCEPTS_SUPERVISED, model.n_concepts)
                 concept_sup_loss = F.mse_loss(
@@ -1127,20 +1159,36 @@ def train_epoch(
                     ctx_concept_targets[:, :n_sup],
                 )
 
-        # ---- [v2-CBM] Anti-saturation penalty on free concept dimensions ----
-        # Penalizes concept activations that exceed ±0.9 on the FREE (unsupervised)
-        # dimensions only. Keeps gradient flow alive in those dimensions.
-        # Formula: mean( ReLU(|c| - 0.9)^2 ) — zero below 0.9, quadratic above.
-        antisat_loss = torch.tensor(0.0, device=device)
-        if (
-            is_cbm
-            and concepts_A is not None
-            and model.n_concepts > N_CONCEPTS_SUPERVISED
-        ):
-            free_concepts = concepts_A[:, N_CONCEPTS_SUPERVISED:]
-            antisat_loss = torch.mean(
-                torch.clamp(free_concepts.abs() - 0.90, min=0.0) ** 2
-            )
+        # ---- [v3] DeCov decorrelation loss ----
+        # Accumulated across batch and computed at end of epoch for better
+        # covariance estimates. Also computed per-iteration as online estimate.
+        decov_loss = torch.tensor(0.0, device=device)
+        if is_cbm and concepts_A is not None:
+            batch_concepts.append(concepts_A.detach())
+            decov_loss = model.decov_loss(concepts_A)
+
+        # ---- [v3] L1 sparsity on free concept dimensions ----
+        # Encourages each sample to only use a few free dims, making them
+        # more interpretable post-hoc. Only applied to unsupervised dims.
+        # ---- [v4] L1 sparsity on concept gates ----
+        # Replaces the L1 on free concept activations.
+        # We penalize the actual gate values (sigmoid of logits) so that
+        # unused concepts are pushed to 0 (fully closed).
+        sparsity_loss = torch.tensor(0.0, device=device)
+        if is_cbm:
+            gates = torch.sigmoid(model.concept_gate_logits)
+
+            # Apply heavy sparsity to free latents to keep them closed unless necessary
+            if model.n_concepts > N_CONCEPTS_SUPERVISED:
+                free_gates = gates[N_CONCEPTS_SUPERVISED:]
+                sparsity_loss = free_gates.abs().mean()
+
+                # Optional: apply a mild penalty to supervised gates too
+                # so the model drops truly useless physical proxies
+                sup_gates = gates[:N_CONCEPTS_SUPERVISED]
+                sparsity_loss += 0.1 * sup_gates.abs().mean()
+            else:
+                sparsity_loss = gates.abs().mean()
 
         # ---- Triplet [FIX-3] + latent consistency [FIX-4]
         #      + [CBM-4] concept consistency ----
@@ -1165,12 +1213,11 @@ def train_epoch(
             r_pos = _encode_latent(model, ctx_pos)
 
             # [CBM-4] Concept consistency: same protein → similar concept activations
+            # [v3] Uses MSE instead of cosine — consistent with proxy supervision metric.
             if is_cbm:
-                c_anchor = model.encode_memory(ctx_anchor)  # returns c
+                c_anchor = model.encode_memory(ctx_anchor)
                 c_pos = model.encode_memory(ctx_pos)
-                concept_consist_loss = (
-                    1.0 - F.cosine_similarity(c_anchor, c_pos, dim=-1).mean()
-                )
+                concept_consist_loss = F.mse_loss(c_anchor, c_pos)
 
             # [FIX-3] Triplet loss with hard negative mining
             class_A = PROTEIN_CLASS_MAP.get(prot_A, "unknown")
@@ -1191,9 +1238,7 @@ def train_epoch(
             task_B = groups[prot_B]
             idx_B = np.random.permutation(len(task_B))
             n_ctx_B = np.random.randint(1, min(8, len(idx_B)))
-            r_neg = _encode_latent(
-                model, _build_ctx_tensor(task_B, idx_B[:n_ctx_B], device)
-            )
+            r_neg = _encode_latent(model, _build_ctx_tensor(task_B, idx_B[:n_ctx_B], device))
 
             d_pos = torch.sum((r_anchor - r_pos) ** 2, dim=-1).sqrt()
             d_neg = torch.sum((r_anchor - r_neg) ** 2, dim=-1).sqrt()
@@ -1206,9 +1251,10 @@ def train_epoch(
             + lambda_triplet * triplet_loss
             + lambda_consistency * consistency_loss
             + lambda_norm * norm_penalty
-            + lambda_concept_sup * concept_sup_loss  # [CBM-3]
+            + lambda_concept_sup * concept_sup_loss  # [CBM-3] (annealed externally)
             + lambda_concept_consist * concept_consist_loss  # [CBM-4]
-            + lambda_antisat * antisat_loss  # [v2-CBM]
+            + lambda_decov * decov_loss  # [v3] DeCov decorrelation
+            + lambda_sparsity * sparsity_loss  # [v3] L1 sparsity on free dims
         )
 
         if torch.isnan(loss):
@@ -1275,9 +1321,7 @@ def validate(model, samples, device, n_repeats=3):
                     s = task_samples[i]
                     tgt_shear.append(s["points"][:, [0]])
                     tgt_y.append(s["points"][:, [1]])
-                    tgt_stat.append(
-                        s["static"].unsqueeze(0).repeat(s["points"].shape[0], 1)
-                    )
+                    tgt_stat.append(s["static"].unsqueeze(0).repeat(s["points"].shape[0], 1))
 
                 q_x = torch.cat(tgt_shear, dim=0).unsqueeze(0).to(device)
                 q_stat = torch.cat(tgt_stat, dim=0).unsqueeze(0).to(device)
@@ -1330,9 +1374,7 @@ def log_latent_variance(model, samples, device):
 
     vecs = np.stack(list(group_r.values()))
     dists = [
-        np.linalg.norm(vecs[i] - vecs[j])
-        for i in range(len(vecs))
-        for j in range(i + 1, len(vecs))
+        np.linalg.norm(vecs[i] - vecs[j]) for i in range(len(vecs)) for j in range(i + 1, len(vecs))
     ]
     return float(np.mean(dists))
 
@@ -1420,13 +1462,17 @@ def run_concept_intervention_demo(
     save_dir,
 ):
     """
-    [CBM-5] Sweep each concept independently from -1 → +1 and record
-    the mean change in predicted log-viscosity at 100 s⁻¹.
+    [CBM-5] [v3] Sweep each concept independently from min → max activation and
+    record the mean change in predicted log-viscosity at MULTIPLE shear rates.
 
     For each protein group:
       - Encode group context → baseline concept vector c
-      - For each concept i: clamp c_i to {-1, -0.5, 0, 0.5, 1}
-      - Report Δlog-viscosity relative to baseline
+      - For each concept i: clamp c_i to sweep values (respecting activation type)
+      - Report Δlog-viscosity relative to baseline at each shear rate
+
+    This enables identifying shear-rate-specific concept sensitivity:
+    a concept that heavily influences high-shear but not low-shear viscosity
+    has learned a shear-thinning correction.
 
     Saves concept_intervention.csv.
     """
@@ -1440,17 +1486,28 @@ def run_concept_intervention_demo(
     visc_mean = physics_scaler.mean_[1]
     visc_scale = physics_scaler.scale_[1]
 
-    # Predict at 100 s⁻¹
-    log_shear_100 = np.log10(100.0)
-    shear_scaled = (log_shear_100 - shear_mean) / shear_scale
-    query_shear = torch.tensor([[[shear_scaled]]], dtype=torch.float32).to(device)
+    # [v3] Predict at multiple shear rates
+    intervention_shears = {
+        100.0: "100",
+        1000.0: "1k",
+        10000.0: "10k",
+        100000.0: "100k",
+        15000000.0: "15M",
+    }
+    shear_tensors = {}
+    for shear_val, shear_label in intervention_shears.items():
+        log_shear = np.log10(shear_val)
+        shear_scaled = (log_shear - shear_mean) / shear_scale
+        shear_tensors[shear_label] = torch.tensor([[[shear_scaled]]], dtype=torch.float32).to(
+            device
+        )
 
     model.eval()
     groups = defaultdict(list)
     for s in samples:
         groups[s["group"]].append(s)
 
-    intervention_values = [-1.0, -0.5, 0.0, 0.5, 1.0]
+    # [v3] Per-concept intervention values respect activation type
     records = []
 
     with torch.no_grad():
@@ -1458,57 +1515,73 @@ def run_concept_intervention_demo(
             if len(task_samples) < 2 or prot in NON_PROTEIN_GROUPS:
                 continue
 
-            # Build full-group context
             ctx_items = []
             for s in task_samples:
                 stat = s["static"].unsqueeze(0).repeat(s["points"].shape[0], 1)
                 ctx_items.append(torch.cat([s["points"], stat], dim=1))
             ctx_t = torch.cat(ctx_items, dim=0).unsqueeze(0).to(device)
 
-            # Representative static features (mean of group)
             q_static = torch.stack([s["static"] for s in task_samples]).mean(0)
-            q_static = (
-                q_static.unsqueeze(0).unsqueeze(0).to(device)
-            )  # [1, 1, static_dim]
+            q_static = q_static.unsqueeze(0).unsqueeze(0).to(device)
 
-            # Baseline prediction
-            c_base = model.encode_memory(ctx_t)  # [1, n_concepts]
-            pred_base_sc = model.decode_from_memory(c_base, query_shear, q_static)
-            pred_base_lv = float(pred_base_sc.squeeze()) * visc_scale + visc_mean
+            c_base = model.encode_memory(ctx_t)
 
-            for ci, cname in enumerate(model.concept_names):
-                for cval in intervention_values:
-                    c_mod = c_base.clone()
-                    c_mod[:, ci] = cval
-                    pred_int_sc = model.decode_from_memory(c_mod, query_shear, q_static)
-                    pred_int_lv = float(pred_int_sc.squeeze()) * visc_scale + visc_mean
-                    records.append(
-                        {
-                            "Group": prot,
-                            "Concept": cname,
-                            "Concept_idx": ci,
-                            "Intervention_value": cval,
-                            "Baseline_log_visc": pred_base_lv,
-                            "Predicted_log_visc": pred_int_lv,
-                            "Delta_log_visc": pred_int_lv - pred_base_lv,
-                        }
-                    )
+            for shear_label, query_shear in shear_tensors.items():
+                pred_base_sc = model.decode_from_memory(c_base, query_shear, q_static)
+                pred_base_lv = float(pred_base_sc.squeeze()) * visc_scale + visc_mean
+
+                for ci, cname in enumerate(model.concept_names):
+                    # Sweep values appropriate for the activation type
+                    act_type = model._concept_activations[ci]
+                    if act_type == "sigmoid":
+                        intervention_values = [0.0, 0.25, 0.5, 0.75, 1.0]
+                    else:  # tanh
+                        intervention_values = [-1.0, -0.5, 0.0, 0.5, 1.0]
+
+                    for cval in intervention_values:
+                        c_mod = c_base.clone()
+                        c_mod[:, ci] = cval
+                        pred_int_sc = model.decode_from_memory(c_mod, query_shear, q_static)
+                        pred_int_lv = float(pred_int_sc.squeeze()) * visc_scale + visc_mean
+                        records.append(
+                            {
+                                "Group": prot,
+                                "Shear_rate": shear_label,
+                                "Concept": cname,
+                                "Concept_idx": ci,
+                                "Activation_type": act_type,
+                                "Intervention_value": cval,
+                                "Baseline_log_visc": pred_base_lv,
+                                "Predicted_log_visc": pred_int_lv,
+                                "Delta_log_visc": pred_int_lv - pred_base_lv,
+                            }
+                        )
 
     df_int = pd.DataFrame(records)
     save_path = os.path.join(save_dir, "concept_intervention.csv")
     df_int.to_csv(save_path, index=False)
     print(f"Concept intervention results saved to {save_path}")
 
-    # Print summary: which concepts have largest effect magnitude
-    effect = (
-        df_int.groupby("Concept")["Delta_log_visc"]
+    # [v3] Print per-shear sensitivity summary
+    print("\nMean |Δlog-visc| per concept × shear rate (intervention sensitivity):")
+    pivot = (
+        df_int.groupby(["Concept", "Shear_rate"])["Delta_log_visc"]
         .apply(lambda x: x.abs().mean())
-        .sort_values(ascending=False)
+        .unstack(fill_value=0.0)
     )
-    print("\nMean |Δlog-visc| per concept (intervention sensitivity):")
-    for cname, mag in effect.items():
-        bar = "█" * int(mag * 40)
-        print(f"  {cname:<28s} {mag:.4f}  {bar}")
+    # Reorder shear columns
+    shear_order = [l for l in intervention_shears.values() if l in pivot.columns]
+    pivot = pivot.reindex(columns=shear_order)
+    # Sort by overall magnitude
+    pivot["_total"] = pivot.sum(axis=1)
+    pivot = pivot.sort_values("_total", ascending=False).drop(columns=["_total"])
+
+    header = f"  {'Concept':<28}" + "".join(f"{s:>10}" for s in shear_order)
+    print(header)
+    print("  " + "-" * (28 + 10 * len(shear_order)))
+    for cname, row in pivot.iterrows():
+        vals = "".join(f"{row[s]:>10.4f}" for s in shear_order)
+        print(f"  {cname:<28}{vals}")
 
 
 # ==========================================
@@ -1525,9 +1598,9 @@ def objective_cv(trial, samples, static_dim, device):
     n_free = trial.suggest_int("n_free_concepts", 0, 8, step=2)
     n_concepts = N_CONCEPTS_SUPERVISED + n_free
     lambda_concept_sup = trial.suggest_float("lambda_concept_sup", 0.02, 0.3, log=True)
-    # [v2] Triplet upper bound tightened from 0.30 → 0.15 to prevent free-latent saturation
     lambda_triplet = trial.suggest_float("lambda_triplet", 0.03, 0.15, log=True)
-    lambda_antisat = trial.suggest_float("lambda_antisat", 0.02, 0.15, log=True)
+    lambda_decov = trial.suggest_float("lambda_decov", 0.01, 0.10, log=True)
+    lambda_sparsity = trial.suggest_float("lambda_sparsity", 0.005, 0.05, log=True)
 
     hard_groups = ["etanercept", "vudalimab", "pembrolizumab", "ibalizumab"]
     medium_groups = ["adalimumab", "poly-higg", "nivolumab"]
@@ -1544,7 +1617,7 @@ def objective_cv(trial, samples, static_dim, device):
         if len(val_fold) < 2:
             continue
 
-        # [CBM-1] Use ConceptBottleneckCNP in Optuna search
+        # [v3] ConceptBottleneckCNP with per-concept activations
         model = ConceptBottleneckCNP(
             static_dim,
             hidden_dim,
@@ -1552,20 +1625,25 @@ def objective_cv(trial, samples, static_dim, device):
             n_concepts=n_concepts,
             dropout=dropout,
         ).to(device)
-        optimizer = torch.optim.AdamW(
-            model.parameters(), lr=lr, weight_decay=weight_decay
-        )
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
         for epoch in range(40):
+            # [v3] Anneal concept supervision: cosine from lambda_concept_sup → 0.01
+            anneal_frac = epoch / 40.0
+            annealed_sup = lambda_concept_sup * (
+                0.1 + 0.9 * 0.5 * (1 + np.cos(np.pi * anneal_frac))
+            )
+
             train_loss, _ = train_epoch(
                 model,
                 train_fold,
                 optimizer,
                 device,
                 iterations=50,
-                lambda_concept_sup=lambda_concept_sup,
+                lambda_concept_sup=annealed_sup,
                 lambda_triplet=lambda_triplet,
-                lambda_antisat=lambda_antisat,
+                lambda_decov=lambda_decov,
+                lambda_sparsity=lambda_sparsity,
             )
             val_loss = validate(model, val_fold, device, n_repeats=2)
             trial.report(val_loss, fold_idx * 40 + epoch)
@@ -1583,7 +1661,7 @@ def objective_cv(trial, samples, static_dim, device):
 
 if __name__ == "__main__":
     data = "data/raw/formulation_data_03042026.csv"
-    out = "./models/experiments/cbm_cnp_v2"
+    out = "./models/experiments/cbm_cnp_v3"
     trials = 0
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1594,10 +1672,13 @@ if __name__ == "__main__":
         "dropout": 0.15,
         "lr": 5e-4,
         "weight_decay": 1e-4,
-        "n_free_concepts": 4,
-        "lambda_concept_sup": 0.10,
-        "lambda_triplet": 0.10,  # [v2] reduced from 0.30
-        "lambda_antisat": 0.05,  # [v2] new: prevents free-latent tanh saturation
+        "n_free_concepts": 1,
+        "lambda_concept_sup_init": 0.30,  # [v3] annealed: starts at 0.30
+        "lambda_concept_sup_min": 0.10,  # [v4] annealed: increase decay from 0.01 to 0.10
+        "lambda_triplet": 0.10,
+        "lambda_decov": 0.03,  # [v3] DeCov decorrelation
+        "lambda_sparsity": 0.05,  # [v4] L1 sparsity on free concepts increased from 0.01 to 0.5
+        "sup_anneal_epochs": 80,  # [v3] cosine anneal over first 80 epochs
         "epochs": 150,
     }
 
@@ -1633,15 +1714,23 @@ if __name__ == "__main__":
         print("Default params:", best_params)
 
     n_concepts = N_CONCEPTS_SUPERVISED + best_params.get("n_free_concepts", 4)
-    lambda_concept_sup = best_params.get("lambda_concept_sup", 0.10)
+    lambda_sup_init = best_params.get("lambda_concept_sup_init", 0.30)
+    lambda_sup_min = best_params.get("lambda_concept_sup_min", 0.01)
+    sup_anneal_epochs = best_params.get("sup_anneal_epochs", 80)
 
     # ==========================================
     # Final retraining
     # ==========================================
+    print(f"\nRetraining final ConceptBottleneckCNP " f"(n_concepts={n_concepts}) on ALL data...")
     print(
-        f"\nRetraining final ConceptBottleneckCNP "
-        f"(n_concepts={n_concepts}) on ALL data..."
+        f"Concept supervision annealing: {lambda_sup_init:.3f} → {lambda_sup_min:.3f} "
+        f"over {sup_anneal_epochs} epochs (cosine)"
     )
+
+    # [v3] Build per-concept activation list including free dims
+    all_concept_activations = CONCEPT_ACTIVATIONS[: min(n_concepts, N_CONCEPTS_SUPERVISED)] + [
+        "tanh"
+    ] * max(0, n_concepts - N_CONCEPTS_SUPERVISED)
 
     final_model = ConceptBottleneckCNP(
         static_dim,
@@ -1650,6 +1739,7 @@ if __name__ == "__main__":
         n_concepts=n_concepts,
         concept_names=CONCEPT_NAMES
         + [f"latent_{i}" for i in range(max(0, n_concepts - N_CONCEPTS_SUPERVISED))],
+        concept_activations=all_concept_activations,
         dropout=best_params["dropout"],
     ).to(device)
 
@@ -1694,6 +1784,15 @@ if __name__ == "__main__":
     ema_alpha = 0.3
 
     for ep in range(500):
+        # [v3] Cosine annealing of concept supervision weight
+        if ep < sup_anneal_epochs:
+            anneal_frac = ep / sup_anneal_epochs
+            current_lambda_sup = lambda_sup_min + (lambda_sup_init - lambda_sup_min) * (
+                0.5 * (1 + np.cos(np.pi * anneal_frac))
+            )
+        else:
+            current_lambda_sup = lambda_sup_min
+
         train_loss, per_group_mse = train_epoch(
             final_model,
             final_train_set,
@@ -1701,9 +1800,10 @@ if __name__ == "__main__":
             device,
             iterations=100,
             group_weights=group_weights,
-            lambda_concept_sup=lambda_concept_sup,
+            lambda_concept_sup=current_lambda_sup,
             lambda_triplet=best_params.get("lambda_triplet", 0.10),
-            lambda_antisat=best_params.get("lambda_antisat", 0.05),
+            lambda_decov=best_params.get("lambda_decov", 0.03),
+            lambda_sparsity=best_params.get("lambda_sparsity", 0.01),
         )
 
         # [FIX-6] EMA difficulty reweighting
@@ -1721,28 +1821,29 @@ if __name__ == "__main__":
             current_lr = optimizer.param_groups[0]["lr"]
             latent_var = log_latent_variance(final_model, final_train_set, device)
 
+            # [v3] Concept gate diagnostics
+            gate_vals = final_model.concept_gates().cpu().numpy()
+            gate_str = " ".join(
+                f"{final_model.concept_names[i][:8]}:{gate_vals[i]:.2f}"
+                for i in range(min(len(gate_vals), 6))
+            )
+            if len(gate_vals) > 6:
+                gate_str += f" +{len(gate_vals)-6} more"
+
             # Pembrolizumab latent diagnostics [FIX-PRIORITY 2]
-            pembro_samples = [
-                s for s in final_train_set if s["group"] == "pembrolizumab"
-            ]
+            pembro_samples = [s for s in final_train_set if s["group"] == "pembrolizumab"]
             pembro_norm_str = "N/A"
             pembro_spread_str = "N/A"
 
             if len(pembro_samples) > 1:
                 final_model.eval()
                 with torch.no_grad():
-                    idx = np.random.permutation(len(pembro_samples))[
-                        : min(10, len(pembro_samples))
-                    ]
+                    idx = np.random.permutation(len(pembro_samples))[: min(10, len(pembro_samples))]
                     r_list = []
                     for i in idx:
                         s = pembro_samples[i]
                         stat = s["static"].unsqueeze(0).repeat(s["points"].shape[0], 1)
-                        ctx_item = (
-                            torch.cat([s["points"], stat], dim=1)
-                            .unsqueeze(0)
-                            .to(device)
-                        )
+                        ctx_item = torch.cat([s["points"], stat], dim=1).unsqueeze(0).to(device)
                         r_list.append(_encode_latent(final_model, ctx_item))
                     if r_list:
                         r_pembro = torch.cat(r_list, dim=0)
@@ -1763,9 +1864,13 @@ if __name__ == "__main__":
             print(
                 f"Epoch {ep:3d}: Train {train_loss:.4f} | Val {val_loss:.4f} | "
                 f"LR {current_lr:.2e} | LatentVar {latent_var:.3f} | "
+                f"λ_sup {current_lambda_sup:.3f} | "
                 f"Pembro [Norm: {pembro_norm_str} | Spread: {pembro_spread_str}] | "
                 f"Top hard: [{hard_str}]"
             )
+            # [v3] Print gate values periodically
+            if ep % 30 == 0:
+                print(f"  Gates: [{gate_str}]")
 
             if ep >= 30 and latent_var < 0.2:
                 print(
@@ -1787,7 +1892,7 @@ if __name__ == "__main__":
     if best_state is not None:
         final_model.load_state_dict(best_state)
 
-    # Save checkpoint — extended config includes CBM fields
+    # Save checkpoint — extended config includes CBM v3 fields
     save_path = os.path.join(out, "best_model.pth")
     torch.save(
         {
@@ -1796,6 +1901,8 @@ if __name__ == "__main__":
             "static_dim": static_dim,
             "n_concepts": n_concepts,  # [CBM-6]
             "concept_names": final_model.concept_names,
+            "concept_activations": final_model._concept_activations,  # [v3]
+            "concept_gate_values": final_model.concept_gates().cpu().numpy().tolist(),  # [v3]
             "model_class": "ConceptBottleneckCNP",
         },
         save_path,
@@ -1810,8 +1917,28 @@ if __name__ == "__main__":
     # [CBM-5] Concept analysis
     # ==========================================
     print("\n" + "=" * 60)
-    print("CONCEPT ANALYSIS")
+    print("CONCEPT ANALYSIS (v3)")
     print("=" * 60)
+
+    # [v3] Gate analysis — which concepts is the model actually using?
+    gate_vals = final_model.concept_gates().cpu().numpy()
+    print("\nLearned concept gates (0=unused, 1=fully open):")
+    print(f"  {'Concept':<28} {'Gate':>8} {'Status':>12}")
+    print("  " + "-" * 50)
+    for i, (cname, gval) in enumerate(zip(final_model.concept_names, gate_vals)):
+        status = "OPEN" if gval > 0.5 else ("PARTIAL" if gval > 0.1 else "CLOSED")
+        bar = "█" * int(gval * 20)
+        print(f"  {cname:<28} {gval:>8.3f} {status:>12}  {bar}")
+
+    # Save gate values
+    gate_df = pd.DataFrame(
+        {
+            "Concept": final_model.concept_names,
+            "Gate_value": gate_vals,
+            "Activation_type": final_model._concept_activations,
+        }
+    )
+    gate_df.to_csv(os.path.join(out, "concept_gates.csv"), index=False)
 
     group_concepts, concept_matrix, group_names = log_concept_activations(
         final_model,
@@ -1854,27 +1981,61 @@ if __name__ == "__main__":
             row = f"  {gname:<22}" + "".join(f"{v:>{col_w}.3f}" for v in vals)
             print(row)
 
-        # Concept-proxy correlation (only supervised concepts)
-        print("\nConcept-proxy correlation summary:")
-        proxy_vals_all = []
-        concept_vals_all = []
-        for s in samples:
-            if "concept_targets" in s:
-                proxy_vals_all.append(s["concept_targets"].numpy())
-                g = s["group"]
-                if g in group_concepts:
-                    concept_vals_all.append(group_concepts[g][:N_CONCEPTS_SUPERVISED])
-        if proxy_vals_all and concept_vals_all:
-            proxy_arr = np.stack(proxy_vals_all)  # [N, N_sup]
-            concept_arr = np.stack(concept_vals_all)  # [N, N_sup]
-            print(f"  {'Concept':<28} {'Proxy column':<26} {'Pearson r':>10}")
-            print("  " + "-" * 66)
-            for ci, (cname, pcol, _) in enumerate(CONCEPT_DEFS):
-                if concept_arr.shape[0] > 1:
-                    r = np.corrcoef(proxy_arr[:, ci], concept_arr[:, ci])[0, 1]
-                    print(f"  {cname:<28} {pcol:<26} {r:>10.3f}")
+        # [v3] Per-SAMPLE concept-proxy correlation (honest, not group-level)
+        # Encodes each sample individually to get its concept activation,
+        # then correlates with per-sample proxy targets.
+        print("\nPer-sample concept-proxy correlation (individual encoding):")
+        final_model.eval()
+        per_sample_concepts = []
+        per_sample_proxies = []
+        with torch.no_grad():
+            for s in samples:
+                if "concept_targets" not in s:
+                    continue
+                # Encode single sample
+                stat = s["static"].unsqueeze(0).repeat(s["points"].shape[0], 1)
+                ctx_single = torch.cat([s["points"], stat], dim=1).unsqueeze(0).to(device)
+                c_single = final_model.encode_memory(ctx_single).squeeze(0).cpu().numpy()
+                per_sample_concepts.append(c_single[:N_CONCEPTS_SUPERVISED])
+                per_sample_proxies.append(s["concept_targets"].numpy())
 
-    # Concept intervention demo
+        if per_sample_concepts:
+            concept_arr = np.stack(per_sample_concepts)  # [N, N_sup]
+            proxy_arr = np.stack(per_sample_proxies)  # [N, N_sup]
+            print(f"  {'Concept':<28} {'Proxy column':<22} {'Act':>6} {'Pearson r':>10}")
+            print("  " + "-" * 70)
+            for ci, (cname, pcol, _, act_type) in enumerate(CONCEPT_DEFS):
+                if concept_arr.shape[0] > 2:
+                    r_val = np.corrcoef(proxy_arr[:, ci], concept_arr[:, ci])[0, 1]
+                    print(f"  {cname:<28} {pcol:<22} {act_type:>6} {r_val:>10.3f}")
+
+        # [v3] Free concept information analysis — mutual info with residual
+        # Compute per-sample residuals and correlate with free concept dims
+        if n_concepts > N_CONCEPTS_SUPERVISED and per_sample_concepts:
+            print("\nFree concept residual correlation (candidates for naming):")
+            # Re-encode to get full concept vectors including free dims
+            free_concepts_all = []
+            with torch.no_grad():
+                for s in samples:
+                    stat = s["static"].unsqueeze(0).repeat(s["points"].shape[0], 1)
+                    ctx_single = torch.cat([s["points"], stat], dim=1).unsqueeze(0).to(device)
+                    c_full = final_model.encode_memory(ctx_single).squeeze(0).cpu().numpy()
+                    free_concepts_all.append(c_full[N_CONCEPTS_SUPERVISED:])
+
+            if free_concepts_all:
+                free_arr = np.stack(free_concepts_all)  # [N, n_free]
+                # Correlate each free dim with mean absolute concept value
+                # (proxy for how much the concept "fires")
+                print(f"  {'Free concept':<20} {'Gate':>8} {'Mean |c|':>10} {'Std':>8}")
+                print("  " + "-" * 48)
+                for fi in range(free_arr.shape[1]):
+                    fname = final_model.concept_names[N_CONCEPTS_SUPERVISED + fi]
+                    fgate = gate_vals[N_CONCEPTS_SUPERVISED + fi]
+                    fmean = np.abs(free_arr[:, fi]).mean()
+                    fstd = free_arr[:, fi].std()
+                    print(f"  {fname:<20} {fgate:>8.3f} {fmean:>10.3f} {fstd:>8.3f}")
+
+    # Concept intervention demo (multi-shear)
     run_concept_intervention_demo(
         final_model,
         samples,
@@ -1940,13 +2101,7 @@ if __name__ == "__main__":
             ctx_tensor = torch.cat(ctx_items, dim=0).unsqueeze(0).to(device)
 
             q_shear = scaled_log_shears.view(1, n_shears, 1)
-            q_static = (
-                sample["static"]
-                .unsqueeze(0)
-                .unsqueeze(0)
-                .repeat(1, n_shears, 1)
-                .to(device)
-            )
+            q_static = sample["static"].unsqueeze(0).unsqueeze(0).repeat(1, n_shears, 1).to(device)
 
             # encode_memory returns concept vector c; decode_from_memory takes c
             memory = final_model.encode_memory(ctx_tensor)
@@ -2044,8 +2199,7 @@ if __name__ == "__main__":
         ax.set_xlabel("log₁₀(Actual Viscosity)")
         ax.set_ylabel("log₁₀(Predicted Viscosity)")
         ax.set_title(
-            f"Parity Plot — All Samples & Shear Rates\n"
-            f"RMSE={rmse_log:.4f}, R²={r2_log:.4f}"
+            f"Parity Plot — All Samples & Shear Rates\n" f"RMSE={rmse_log:.4f}, R²={r2_log:.4f}"
         )
         ax.legend(fontsize=7, markerscale=1.5, loc="upper left", ncol=2)
         ax.set_aspect("equal")
@@ -2094,11 +2248,7 @@ if __name__ == "__main__":
             if row_mask.any():
                 row_fi = raw_df[row_mask].iloc[0]
                 for j, col in enumerate(parity_shear_map):
-                    if (
-                        col in raw_df.columns
-                        and pd.notna(row_fi[col])
-                        and row_fi[col] > 0
-                    ):
+                    if col in raw_df.columns and pd.notna(row_fi[col]) and row_fi[col] > 0:
                         true_lv[j] = np.log10(float(row_fi[col]))
                         valid[j] = True
             fi_true_log_visc.append(true_lv)
@@ -2124,18 +2274,9 @@ if __name__ == "__main__":
             ):
                 if not any(valid):
                     continue
-                q_st = (
-                    static_mat[i]
-                    .unsqueeze(0)
-                    .unsqueeze(0)
-                    .repeat(1, n_shears, 1)
-                    .to(device)
-                )
+                q_st = static_mat[i].unsqueeze(0).unsqueeze(0).repeat(1, n_shears, 1).to(device)
                 pred_sc = (
-                    final_model.decode_from_memory(mem, q_shear_fi, q_st)
-                    .squeeze()
-                    .cpu()
-                    .numpy()
+                    final_model.decode_from_memory(mem, q_shear_fi, q_st).squeeze().cpu().numpy()
                 )
                 pred_lv = pred_sc * visc_scale + visc_mean
                 for j in range(5):
@@ -2177,11 +2318,7 @@ if __name__ == "__main__":
         if fname.startswith("cat__"):
             rest = fname[5:]
             matched = next(
-                (
-                    col
-                    for col in cat_cols_fi
-                    if rest.startswith(col + "_") or rest == col
-                ),
+                (col for col in cat_cols_fi if rest.startswith(col + "_") or rest == col),
                 None,
             )
             grouped_imp[matched if matched else rest] += imp
@@ -2208,8 +2345,6 @@ if __name__ == "__main__":
     ).sort_values("Importance_dMSE", ascending=False)
     fi_df.to_csv(os.path.join(out, "feature_importance.csv"), index=False)
 
-    fi_grp_df = pd.DataFrame(
-        grouped_ranked, columns=["Feature_Group", "Importance_dMSE"]
-    )
+    fi_grp_df = pd.DataFrame(grouped_ranked, columns=["Feature_Group", "Importance_dMSE"])
     fi_grp_df.to_csv(os.path.join(out, "feature_importance_grouped.csv"), index=False)
     print(f"\nFeature importance saved to {out}/feature_importance*.csv")
