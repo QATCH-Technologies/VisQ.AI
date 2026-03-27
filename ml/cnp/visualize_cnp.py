@@ -97,9 +97,9 @@ def load_model(model_path=None, static_dim=32, hidden_dim=128, latent_dim=128):
     """Load from checkpoint if given, else build a fresh model with dummy weights.
 
     Handles multiple checkpoint formats:
-      - train_cnp_3.py  →  keys: 'state_dict', 'config', 'static_dim'
-      - older scripts   →  keys: 'model_state_dict', 'config', 'static_dim'
-      - bare state dict →  top-level keys are parameter names
+      - train_cnp_3.py  ->  keys: 'state_dict', 'config', 'static_dim'
+      - older scripts   ->  keys: 'model_state_dict', 'config', 'static_dim'
+      - bare state dict ->  top-level keys are parameter names
     """
     if model_path and os.path.exists(model_path):
         print(f"[model] Loading checkpoint: {model_path}")
@@ -109,9 +109,7 @@ def load_model(model_path=None, static_dim=32, hidden_dim=128, latent_dim=128):
         if isinstance(ckpt, dict):
             print(f"[model] Checkpoint keys: {list(ckpt.keys())}")
         else:
-            print(
-                f"[model] Checkpoint is a raw state_dict (OrderedDict / dict of tensors)"
-            )
+            print(f"[model] Checkpoint is a raw state_dict (OrderedDict / dict of tensors)")
 
         # ── Resolve state dict ──────────────────────────────────────────────
         STATE_DICT_KEYS = ("state_dict", "model_state_dict", "model")
@@ -137,18 +135,14 @@ def load_model(model_path=None, static_dim=32, hidden_dim=128, latent_dim=128):
 
         model = CrossSampleCNP(static_dim, hidden_dim, latent_dim)
         model.load_state_dict(state_dict)
-        print(
-            f"[model] Loaded  static_dim={static_dim}  hidden={hidden_dim}  latent={latent_dim}"
-        )
+        print(f"[model] Loaded  static_dim={static_dim}  hidden={hidden_dim}  latent={latent_dim}")
     else:
         if model_path:
             print(
                 f"[model] WARNING: {model_path} not found — using untrained model (static_dim={static_dim})"
             )
         else:
-            print(
-                f"[model] No checkpoint given — using untrained model (static_dim={static_dim})"
-            )
+            print(f"[model] No checkpoint given — using untrained model (static_dim={static_dim})")
         model = CrossSampleCNP(static_dim, hidden_dim, latent_dim)
 
     model.eval()
@@ -203,15 +197,13 @@ def run_torchviz(model, static_dim):
     # Always save the raw .dot source — works even without graphviz installed
     dot_src_path = out_path + ".dot"
     dot.save(dot_src_path)
-    print(f"[torchviz] .dot source saved → {dot_src_path}")
+    print(f"[torchviz] .dot source saved -> {dot_src_path}")
 
     # Try to render to PDF — requires graphviz system executable ('dot' on PATH)
     try:
         dot.render(out_path, format="pdf", cleanup=True)
-        print(f"[torchviz] PDF saved → {out_path}.pdf")
-        print(
-            "           Note: torchviz shows every tensor op — great for grad debugging,"
-        )
+        print(f"[torchviz] PDF saved -> {out_path}.pdf")
+        print("           Note: torchviz shows every tensor op — great for grad debugging,")
         print("           but typically too dense for presentations.")
     except Exception as e:
         print(f"[torchviz] WARNING: Could not render PDF — {e}")
@@ -219,18 +211,12 @@ def run_torchviz(model, static_dim):
         print("           The Graphviz system executable ('dot') is not on your PATH.")
         print("           Fix options:")
         print("             conda:   conda install -c conda-forge graphviz")
-        print(
-            "             winget:  winget install graphviz.graphviz  (restart terminal after)"
-        )
-        print(
-            "             manual:  https://graphviz.org/download/ — check 'Add to PATH'"
-        )
+        print("             winget:  winget install graphviz.graphviz  (restart terminal after)")
+        print("             manual:  https://graphviz.org/download/ — check 'Add to PATH'")
         print()
         print(f"           Once installed, render manually:")
         print(f"             dot -Tpdf {dot_src_path} -o {out_path}.pdf")
-        print(
-            f"           Or open {dot_src_path} at https://dreampuf.github.io/GraphvizOnline"
-        )
+        print(f"           Or open {dot_src_path} at https://dreampuf.github.io/GraphvizOnline")
 
 
 # ─────────────────────────────────────────────
@@ -257,7 +243,7 @@ def run_netron(model, static_dim, open_browser=True):
         },
         opset_version=14,
     )
-    print(f"[netron] ONNX saved → {onnx_path}")
+    print(f"[netron] ONNX saved -> {onnx_path}")
 
     if open_browser:
         try:
@@ -298,12 +284,12 @@ def run_networkx():
     nodes = [
         # id                  display label               group       col row
         ("ctx_in", "Context Input\n(c, logη, static)", "input", 0, 0),
-        ("enc", "Encoder MLP\n3×Linear+ReLU", "encoder", 0, 1),
+        ("enc", "Encoder MLP\n3xLinear+ReLU", "encoder", 0, 1),
         ("pool", "MultiheadAttention\nn_heads=4", "pooler", 0, 2),
-        ("ln", "LayerNorm\n→ r", "pooler", 0, 3),
+        ("ln", "LayerNorm\n-> r", "pooler", 0, 3),
         ("qry_in", "Query Input\n(shear, static)", "input", 2, 1),
         ("cat", "Concatenate\nshear ‖ static ‖ r", "decoder", 1, 4),
-        ("dec", "Decoder MLP\n3×Linear+ReLU", "decoder", 1, 5),
+        ("dec", "Decoder MLP\n3xLinear+ReLU", "decoder", 1, 5),
         ("out", "log η̂\n(viscosity)", "output", 1, 6),
     ]
 
@@ -422,7 +408,7 @@ def run_networkx():
     out_path = os.path.join(OUT_DIR, "cnp_networkx.png")
     plt.savefig(out_path, dpi=180, bbox_inches="tight", facecolor="#0a0e1a")
     plt.close()
-    print(f"[networkx] Saved → {out_path}")
+    print(f"[networkx] Saved -> {out_path}")
 
 
 def main():

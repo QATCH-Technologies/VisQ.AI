@@ -576,9 +576,7 @@ def logo_cv(all_samples, static_dim, model_cfg, device, n_epochs=200, iterations
             lr=model_cfg.get("lr", 1e-3),
             weight_decay=model_cfg.get("weight_decay", 1e-4),
         )
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=n_epochs
-        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_epochs)
 
         # --- Train (v3: triplet loss + consistency + utility losses) ---
         train_groups = defaultdict(list)
@@ -630,9 +628,7 @@ def logo_cv(all_samples, static_dim, model_cfg, device, n_epochs=200, iterations
                 with torch.no_grad():
                     pred_null = model(null_ctx, qx, qstat)
                 mse_null = F.mse_loss(pred_null, ty).detach()
-                utility_loss = torch.clamp(
-                    F.mse_loss(pred, ty) - mse_null + 1e-3, min=0.0
-                )
+                utility_loss = torch.clamp(F.mse_loss(pred, ty) - mse_null + 1e-3, min=0.0)
 
                 # [v3] Triplet loss replacing cosine contrastive
                 triplet_loss = torch.tensor(0.0, device=device)
@@ -644,14 +640,10 @@ def logo_cv(all_samples, static_dim, model_cfg, device, n_epochs=200, iterations
                     r_anchor = model.encode_memory(
                         _build_ctx_tensor(task_A, perm_full[:half], device)
                     )
-                    r_pos = model.encode_memory(
-                        _build_ctx_tensor(task_A, perm_full[half:], device)
-                    )
+                    r_pos = model.encode_memory(_build_ctx_tensor(task_A, perm_full[half:], device))
 
                     # Consistency (same protein, different context subsets)
-                    consistency_loss = (
-                        1.0 - F.cosine_similarity(r_anchor, r_pos, dim=-1)
-                    ).mean()
+                    consistency_loss = (1.0 - F.cosine_similarity(r_anchor, r_pos, dim=-1)).mean()
 
                     # Hard negative mining: same class preferred as negative
                     class_A = PROTEIN_CLASS.get(prot_A, "unknown")
@@ -671,9 +663,7 @@ def logo_cv(all_samples, static_dim, model_cfg, device, n_epochs=200, iterations
                     task_B = train_groups[prot_B]
                     idx_B = np.random.permutation(len(task_B))
                     r_neg = model.encode_memory(
-                        _build_ctx_tensor(
-                            task_B, idx_B[: max(1, len(idx_B) // 2)], device
-                        )
+                        _build_ctx_tensor(task_B, idx_B[: max(1, len(idx_B) // 2)], device)
                     )
 
                     d_pos = torch.sum((r_anchor - r_pos) ** 2, dim=-1).sqrt()
@@ -681,10 +671,7 @@ def logo_cv(all_samples, static_dim, model_cfg, device, n_epochs=200, iterations
                     triplet_loss = torch.clamp(d_pos - d_neg + 0.5, min=0.0).mean()
 
                 loss = (
-                    mse_loss
-                    + 0.10 * utility_loss
-                    + 0.10 * triplet_loss
-                    + 0.02 * consistency_loss
+                    mse_loss + 0.10 * utility_loss + 0.10 * triplet_loss + 0.02 * consistency_loss
                 )
 
                 if torch.isnan(loss):
@@ -797,9 +784,7 @@ def bootstrap_ci(model, all_samples, device, B=1000, n_ctx_frac=0.5):
     boot_rmse, boot_mae = [], []
 
     for b in range(B):
-        sampled_groups = np.random.choice(
-            group_names, size=len(group_names), replace=True
-        )
+        sampled_groups = np.random.choice(group_names, size=len(group_names), replace=True)
         all_pred, all_true = [], []
         for g in sampled_groups:
             samps = groups[g]
@@ -948,7 +933,7 @@ def latent_variance_diagnostic(model, all_samples, device, n_ctx=5, n_repeats=10
 
     # [v3] Compute inter-group distances SEPARATELY for protein-only and all groups.
     # In v2, "none" (buffer-only) had norm 7.49 while all proteins clustered at 7.01.
-    # The reported separation ratio of 18× was dominated by these trivial 12 none-vs-protein
+    # The reported separation ratio of 18x was dominated by these trivial 12 none-vs-protein
     # pairs. The meaningful metric is protein-to-protein separation only.
     group_names = list(centroids.keys())
     protein_names = [g for g in group_names if g not in {"none"}]
@@ -962,23 +947,17 @@ def latent_variance_diagnostic(model, all_samples, device, n_ctx=5, n_repeats=10
     protein_inter_dists = []
     for i in range(len(protein_names)):
         for j in range(i + 1, len(protein_names)):
-            d = np.linalg.norm(
-                centroids[protein_names[i]] - centroids[protein_names[j]]
-            )
+            d = np.linalg.norm(centroids[protein_names[i]] - centroids[protein_names[j]])
             protein_inter_dists.append(d)
 
     mean_inter_all = float(np.mean(all_inter_dists)) if all_inter_dists else 0.0
-    mean_inter_protein = (
-        float(np.mean(protein_inter_dists)) if protein_inter_dists else 0.0
-    )
+    mean_inter_protein = float(np.mean(protein_inter_dists)) if protein_inter_dists else 0.0
     mean_intra = float(np.mean([r["intra_spread"] for r in rows]))
 
     # Norm clustering diagnostic: in a collapsed model all protein norms will be within 0.05
     protein_norms = [r["latent_norm"] for r in rows if r["is_protein"]]
     norm_spread = (
-        float(np.max(protein_norms) - np.min(protein_norms))
-        if len(protein_norms) > 1
-        else 0.0
+        float(np.max(protein_norms) - np.min(protein_norms)) if len(protein_norms) > 1 else 0.0
     )
 
     df = pd.DataFrame(rows).sort_values("latent_norm", ascending=False)
@@ -987,9 +966,7 @@ def latent_variance_diagnostic(model, all_samples, device, n_ctx=5, n_repeats=10
     df["mean_intra_group_spread"] = mean_intra
     # [v3] separation_ratio now uses PROTEIN-only inter distance
     # A ratio based on all groups (including "none") was misleading in v2.
-    df["separation_ratio_protein_only"] = round(
-        mean_inter_protein / (mean_intra + 1e-9), 3
-    )
+    df["separation_ratio_protein_only"] = round(mean_inter_protein / (mean_intra + 1e-9), 3)
     df["protein_norm_spread"] = round(norm_spread, 5)
     df["collapse_flag"] = norm_spread < 0.05  # True = all proteins still at same norm
 
@@ -1145,9 +1122,7 @@ def main():
     sweep_df.to_csv(os.path.join(out, "fewshot_sweep.csv"), index=False)
 
     # Aggregate: RMSE vs context size across all groups
-    agg = (
-        sweep_df.groupby("context_size")[["rmse_mean", "mae_mean"]].mean().reset_index()
-    )
+    agg = sweep_df.groupby("context_size")[["rmse_mean", "mae_mean"]].mean().reset_index()
     lines += [
         "",
         "=" * 60,
@@ -1217,9 +1192,7 @@ def main():
     # NEW: Latent Variance Diagnostic (v3 - protein-only separation)
     # ----------------------------------------------------------------
     print("\n====== Latent Variance Diagnostic ======")
-    latent_df, mean_inter_protein, mean_intra = latent_variance_diagnostic(
-        model, samples, device
-    )
+    latent_df, mean_inter_protein, mean_intra = latent_variance_diagnostic(model, samples, device)
     latent_df.to_csv(os.path.join(out, "latent_variance.csv"), index=False)
 
     sep_ratio = mean_inter_protein / (mean_intra + 1e-9)
@@ -1264,9 +1237,7 @@ def main():
             "May improve with longer training or higher lambda_triplet. ***"
         )
     else:
-        lines.append(
-            " Separation ratio indicates proteins are meaningfully discriminated."
-        )
+        lines.append(" Separation ratio indicates proteins are meaningfully discriminated.")
 
     # ----------------------------------------------------------------
     # NEW: Context Utility Diagnostic (v2 utility-loss verification)

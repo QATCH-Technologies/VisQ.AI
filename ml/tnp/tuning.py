@@ -5,7 +5,7 @@ Optuna hyperparameter search objective for TransformerNP.  [TNP-3]
 
 Public API
 ----------
-objective_cv(trial, samples, static_dim, device) → float
+objective_cv(trial, samples, static_dim, device) -> float
     Group-held-out cross-validation objective.  Returns mean validation MSE
     across up to 6 folds on priority-hard protein groups.
 
@@ -72,9 +72,7 @@ def objective_cv(
 
     # ---- Fold selection: prioritise hard generalisers ----
     priority_groups = [
-        g
-        for g in _HARD_GROUPS + _MEDIUM_GROUPS
-        if any(s["group"] == g for s in samples)
+        g for g in _HARD_GROUPS + _MEDIUM_GROUPS if any(s["group"] == g for s in samples)
     ]
     held_out_groups = priority_groups[:6]
 
@@ -92,9 +90,7 @@ def objective_cv(
             n_heads=n_heads,
             dropout=dropout,
         ).to(device)
-        optimizer = torch.optim.AdamW(
-            model.parameters(), lr=lr, weight_decay=weight_decay
-        )
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
         for epoch in range(40):
             train_epoch(

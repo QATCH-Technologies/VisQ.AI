@@ -8,7 +8,7 @@ Algorithm
 ---------
 At each of 10 steps, evaluate every candidate not yet selected:
   1. Build context tensor from (selected ∪ {candidate}).
-  2. Encode → memory vector via model.encode_memory().
+  2. Encode -> memory vector via model.encode_memory().
   3. Predict the 5 shear-rate viscosities for every *held-out* ibalizumab
      sample using model.decode_from_memory().
   4. Score = mean RMSE over all held-out samples (in physics-scaled space,
@@ -154,13 +154,10 @@ def greedy_select(
     if verbose:
         print(f"\n[Preprocessing] {n} ibalizumab samples …", flush=True)
     t0 = time.perf_counter()
-    all_ctx_t, all_static_t, all_shear_t, all_visc_t = preprocess_ibalizumab(
-        predictor, iba_df
-    )
+    all_ctx_t, all_static_t, all_shear_t, all_visc_t = preprocess_ibalizumab(predictor, iba_df)
     if verbose:
         print(
-            f"  Done in {time.perf_counter()-t0:.1f}s  "
-            f"(ctx shape: {all_ctx_t.shape})",
+            f"  Done in {time.perf_counter()-t0:.1f}s  " f"(ctx shape: {all_ctx_t.shape})",
             flush=True,
         )
 
@@ -174,8 +171,7 @@ def greedy_select(
 
         if verbose:
             print(
-                f"\n[Step {step+1}/{n_select}] Evaluating "
-                f"{len(remaining)} candidates …",
+                f"\n[Step {step+1}/{n_select}] Evaluating " f"{len(remaining)} candidates …",
                 flush=True,
             )
 
@@ -194,7 +190,7 @@ def greedy_select(
             # Held-out = everything not in candidate_set
             held_out = [i for i in range(n) if i not in candidate_set]
             if not held_out:
-                # All samples selected: no held-out data → score = 0
+                # All samples selected: no held-out data -> score = 0
                 best_idx, best_score = cand, 0.0
                 continue
 
@@ -224,8 +220,7 @@ def greedy_select(
         if verbose:
             imp_str = f"  Δ={improvement:+.5f}" if improvement is not None else ""
             print(
-                f"  → Added {sample_id:>6} | "
-                f"held-out RMSE = {best_score:.5f}{imp_str}",
+                f"  -> Added {sample_id:>6} | " f"held-out RMSE = {best_score:.5f}{imp_str}",
                 flush=True,
             )
 
@@ -269,8 +264,7 @@ def main():
     parser.add_argument(
         "--model_dir",
         default="models/experiments/o_net_v3_debug_aug",
-        help="Path to directory with best_model.pth, "
-        "preprocessor.pkl, physics_scaler.pkl",
+        help="Path to directory with best_model.pth, " "preprocessor.pkl, physics_scaler.pkl",
     )
     parser.add_argument(
         "--data",
@@ -327,10 +321,7 @@ def main():
     print(f"Found {len(iba_df)} '{args.protein_key}' samples.")
 
     if len(iba_df) < args.n_select:
-        sys.exit(
-            f"ERROR: Only {len(iba_df)} samples available, "
-            f"cannot select {args.n_select}."
-        )
+        sys.exit(f"ERROR: Only {len(iba_df)} samples available, " f"cannot select {args.n_select}.")
 
     # ── Greedy selection ─────────────────────────────────────────────────────
     t_start = time.perf_counter()
@@ -390,10 +381,7 @@ def main():
     if log_errors:
         mae_log = np.mean(log_errors)
         rmse_log = np.sqrt(np.mean(np.array(log_errors) ** 2))
-        print(
-            f"  MAE  (log10 cP): {mae_log:.4f}   "
-            f"({10**mae_log - 1:.0%} median fold error)"
-        )
+        print(f"  MAE  (log10 cP): {mae_log:.4f}   " f"({10**mae_log - 1:.0%} median fold error)")
         print(f"  RMSE (log10 cP): {rmse_log:.4f}")
 
     print("\nDone.")

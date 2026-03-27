@@ -89,7 +89,7 @@ C_BORDER = "#cbd5e1"  # cool light border
 C_BORDER_LT = "#e8edf4"  # very light grid
 C_BG_LIGHTEST = "#f6f9fc"  # barely-off-white axes bg
 C_WHITE = "#ffffff"
-C_BAND = "#1a85ad"  # 2× tolerance band fill (same family as primary)
+C_BAND = "#1a85ad"  # 2x tolerance band fill (same family as primary)
 C_CONTEXT = "#f39c12"  # amber — context (top-10) samples overlaid on parity
 
 # Shear-rate colour ramp — sequential hues that read clearly on the light bg
@@ -181,9 +181,7 @@ def _apply_style():
     )
 
 
-def make_parity_plot(
-    long_df, shear_subset, title, out_path, single_shear=False, context_ids=None
-):
+def make_parity_plot(long_df, shear_subset, title, out_path, single_shear=False, context_ids=None):
     """
     Log-log parity plot matching the project reference style.
 
@@ -199,9 +197,7 @@ def make_parity_plot(
     _apply_style()
 
     sub = long_df[long_df["shear_col"].isin(shear_subset)].copy()
-    sub = sub[(sub["actual_cP"] > 0) & (sub["pred_cP"] > 0)].dropna(
-        subset=["actual_cP", "pred_cP"]
-    )
+    sub = sub[(sub["actual_cP"] > 0) & (sub["pred_cP"] > 0)].dropna(subset=["actual_cP", "pred_cP"])
 
     if sub.empty:
         logger.warning(f"No valid data for {out_path} — skipping.")
@@ -280,9 +276,7 @@ def make_parity_plot(
 
     # ── Metrics box — log-scale metrics, top-left ────────────────────────────
     metrics_text = (
-        f"MAE   {m['mae']:.2f} cP\n"
-        f"RMSE  {m['rmse']:.2f} cP\n"
-        f"R\u00b2    {m['r2']:.3f}"
+        f"MAE   {m['mae']:.2f} cP\n" f"RMSE  {m['rmse']:.2f} cP\n" f"R\u00b2    {m['r2']:.3f}"
     )
     ax.text(
         0.04,
@@ -304,9 +298,7 @@ def make_parity_plot(
     )
 
     # ── Legend ────────────────────────────────────────────────────────────────
-    parity_handle = Line2D(
-        [0], [0], color=C_DEEP_BLUE, lw=1.8, ls="--", label="Perfect parity"
-    )
+    parity_handle = Line2D([0], [0], color=C_DEEP_BLUE, lw=1.8, ls="--", label="Perfect parity")
     context_handle = Line2D(
         [0],
         [0],
@@ -345,9 +337,7 @@ def make_parity_plot(
         ]
         ax.legend(
             handles=[parity_handle] + shear_handles + extra_handles,
-            labels=["Perfect parity"]
-            + [SHEAR_LABELS[sc] for sc in shear_subset]
-            + extra_labels,
+            labels=["Perfect parity"] + [SHEAR_LABELS[sc] for sc in shear_subset] + extra_labels,
             loc="lower right",
             fontsize=11,
             framealpha=0.92,
@@ -357,9 +347,7 @@ def make_parity_plot(
         )
 
     # ── Title ─────────────────────────────────────────────────────────────────
-    ax.set_title(
-        title, fontsize=16, pad=14, color=C_TEXT, loc="left", fontweight="semibold"
-    )
+    ax.set_title(title, fontsize=16, pad=14, color=C_TEXT, loc="left", fontweight="semibold")
 
     plt.tight_layout()
     fig.savefig(out_path, dpi=160, bbox_inches="tight", facecolor=C_WHITE)
@@ -413,17 +401,13 @@ def make_profile_plot(results_df, sample_id, out_path):
 
     # ── Fill between measured and predicted ───────────────────────────────────
     valid_idx = [
-        i
-        for i in range(len(SHEAR_RATES))
-        if pd.notna(measured[i]) and pd.notna(predicted[i])
+        i for i in range(len(SHEAR_RATES)) if pd.notna(measured[i]) and pd.notna(predicted[i])
     ]
     if valid_idx:
         xs = [SHEAR_RATES[i] for i in valid_idx]
         ms = [measured[i] for i in valid_idx]
         ps = [predicted[i] for i in valid_idx]
-        ax.fill_between(
-            xs, ms, ps, color=C_DEEP_BLUE, alpha=0.08, linewidth=0, zorder=1
-        )
+        ax.fill_between(xs, ms, ps, color=C_DEEP_BLUE, alpha=0.08, linewidth=0, zorder=1)
 
     ax.plot(
         SHEAR_RATES,
@@ -519,9 +503,7 @@ def main():
     logger.info(f"Loading formulation data: {args.data}")
     df = prepare_df(pd.read_csv(args.data))
     iba_df = (
-        df[df["Protein_type"].str.lower() == args.protein_key.lower()]
-        .copy()
-        .reset_index(drop=True)
+        df[df["Protein_type"].str.lower() == args.protein_key.lower()].copy().reset_index(drop=True)
     )
     logger.info(f"  Total {args.protein_key} samples: {len(iba_df)}")
 
@@ -587,18 +569,14 @@ def main():
                         "actual_cP": act,
                         "pred_cP": prd,
                         "is_context": is_context_flag,
-                        "log10_error": (
-                            (np.log10(prd) - np.log10(act)) if valid else np.nan
-                        ),
+                        "log10_error": ((np.log10(prd) - np.log10(act)) if valid else np.nan),
                         "fold_error": (prd / act) if valid else np.nan,
                         "pct_error": (abs(prd - act) / act * 100) if valid else np.nan,
                     }
                 )
         return rows
 
-    long_df = pd.DataFrame(
-        _build_rows(results_df, False) + _build_rows(context_pred_df, True)
-    )
+    long_df = pd.DataFrame(_build_rows(results_df, False) + _build_rows(context_pred_df, True))
     context_id_set = set(str(i) for i in top10_ids)
 
     # ── Save CSV ──────────────────────────────────────────────────────────────
@@ -656,10 +634,7 @@ def main():
     make_parity_plot(
         long_df,
         shear_subset=["Viscosity_1000"],
-        title=(
-            "Viscosity @ 1 000 s\u207b\u00b9 \u2014 Ibalizumab\n"
-            "5 context  |  29 ablated"
-        ),
+        title=("Viscosity @ 1 000 s\u207b\u00b9 \u2014 Ibalizumab\n" "5 context  |  29 ablated"),
         out_path=os.path.join(args.out_dir, "parity_ibal_1000.png"),
         single_shear=True,
         context_ids=context_id_set,
@@ -670,18 +645,14 @@ def main():
     candidates = held_out_df[v1000 > 5]
     if candidates.empty:
         # fallback: any held-out sample where any shear viscosity > 5
-        any_high = (
-            held_out_df[SHEAR_COLS].apply(pd.to_numeric, errors="coerce") > 5
-        ).any(axis=1)
+        any_high = (held_out_df[SHEAR_COLS].apply(pd.to_numeric, errors="coerce") > 5).any(axis=1)
         candidates = held_out_df[any_high]
     if candidates.empty:
         candidates = held_out_df
 
     profile_sample_id = str(
         candidates.loc[
-            pd.to_numeric(candidates["Viscosity_1000"], errors="coerce")
-            .fillna(0)
-            .idxmax(),
+            pd.to_numeric(candidates["Viscosity_1000"], errors="coerce").fillna(0).idxmax(),
             "ID",
         ]
     )
@@ -697,9 +668,7 @@ def main():
         make_profile_plot(
             results_df=profile_pred_df,
             sample_id=profile_sample_id,
-            out_path=os.path.join(
-                args.out_dir, f"profile_ibal_{profile_sample_id}.png"
-            ),
+            out_path=os.path.join(args.out_dir, f"profile_ibal_{profile_sample_id}.png"),
         )
 
     logger.info("\nDone.")

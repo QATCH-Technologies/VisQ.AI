@@ -75,7 +75,7 @@ def _importance_colour(val, vmax):
     if vmax <= 0:
         return PAL_GREY
     frac = np.clip(val / vmax, 0, 1)
-    # Interpolate GREY → BLUE
+    # Interpolate GREY -> BLUE
     r = int(168 + frac * (46 - 168))
     g = int(178 + frac * (134 - 178))
     b = int(193 + frac * (171 - 193))
@@ -186,7 +186,7 @@ NUM_COLS_RAW = [
 
 # ============================================================
 # 3.  First-order attribution map
-#     Engineered / derived features → source input column
+#     Engineered / derived features -> source input column
 #     Features that depend on two inputs are split 50/50 (fractional_weight).
 # ============================================================
 # Format:  "model_feature_name": ("first_order_column", weight)
@@ -228,7 +228,7 @@ FIRST_ORDER_MAP = {
     "stabilizer_low": ("Stabilizer_conc", 1.0),
     "stabilizer_high": ("Stabilizer_conc", 1.0),
     "prior_stabilizer": ("Stabilizer_conc", 1.0),
-    # ── Crowding: Protein_conc × Stabilizer_mg_mL ────────────────
+    # ── Crowding: Protein_conc x Stabilizer_mg_mL ────────────────
     "Crowding_Index": ("Protein_conc", 0.5),  # 50 % each
     # ── Surfactant / Tween ───────────────────────────────────────
     "Surfactant_mg_mL": ("Surfactant_conc", 1.0),
@@ -258,7 +258,7 @@ FIRST_ORDER_MAP = {
     "KD_Asymptote": ("Protein_conc", 0.5),
     "Exp_Crowding": ("Protein_conc", 0.5),
     # ── Categorical OHE columns are handled dynamically ──────────
-    #    (feature names like "cat__Protein_type_adalimumab" → "Protein_type")
+    #    (feature names like "cat__Protein_type_adalimumab" -> "Protein_type")
 }
 
 # Duplicate 50/50 split entries for the *second* parent
@@ -414,9 +414,7 @@ def get_mw(chemical_series, default_mw=342.3):
     return (
         chemical_series.astype(str)
         .str.lower()
-        .map(
-            lambda x: next((mw for name, mw in MW_MAP.items() if name in x), default_mw)
-        )
+        .map(lambda x: next((mw for name, mw in MW_MAP.items() if name in x), default_mw))
     )
 
 
@@ -459,9 +457,7 @@ def load_and_preprocess(csv_path, preprocessor, physics_scaler):
         + df["Salt_mg_mL"]
         + df["Surfactant_mg_mL"]
     )
-    V_BAR = dict(
-        protein=0.73 / 1000, stab=0.62 / 1000, salt=0.30 / 1000, excip=0.70 / 1000
-    )
+    V_BAR = dict(protein=0.73 / 1000, stab=0.62 / 1000, salt=0.30 / 1000, excip=0.70 / 1000)
     df["Phi_Protein"] = df["Protein_conc"] * V_BAR["protein"]
     df["Phi_Stabilizer"] = df["Stabilizer_mg_mL"] * V_BAR["stab"]
     df["Phi_Salt"] = df["Salt_mg_mL"] * V_BAR["salt"]
@@ -469,9 +465,7 @@ def load_and_preprocess(csv_path, preprocessor, physics_scaler):
     df["Phi_Total"] = (
         df["Phi_Protein"] + df["Phi_Stabilizer"] + df["Phi_Salt"] + df["Phi_Excipient"]
     )
-    df["Effective_Protein_Fraction"] = df["Protein_conc"] / df[
-        "Total_Solute_Mass"
-    ].replace(0, 1e-6)
+    df["Effective_Protein_Fraction"] = df["Protein_conc"] / df["Total_Solute_Mass"].replace(0, 1e-6)
     PHI_MAX = 0.65
     safe_phi = df["Phi_Total"].clip(upper=PHI_MAX - 0.01)
     df["KD_Asymptote"] = (1.0 - (safe_phi / PHI_MAX)) ** -2.0
@@ -588,10 +582,7 @@ def load_and_preprocess(csv_path, preprocessor, physics_scaler):
         dense_x = np.array(dense_x)
         dense_y = interp(dense_x)
         pts_np = np.stack(
-            [
-                physics_scaler.transform([[dx, dy]])[0]
-                for dx, dy in zip(dense_x, dense_y)
-            ]
+            [physics_scaler.transform([[dx, dy]])[0] for dx, dy in zip(dense_x, dense_y)]
         )
         samples.append(
             {
@@ -686,13 +677,9 @@ def compute_permutation_importance(
             for i, (r, tl, vm) in enumerate(zip(r_list, true_lv, valid_mask)):
                 if not any(vm):
                     continue
-                q_st = (
-                    mat[i].unsqueeze(0).unsqueeze(0).repeat(1, n_shears, 1).to(device)
-                )
+                q_st = mat[i].unsqueeze(0).unsqueeze(0).repeat(1, n_shears, 1).to(device)
                 r_exp = r.unsqueeze(1).repeat(1, n_shears, 1)
-                pred_sc = (
-                    model.decode_from_memory(r, q_shear, q_st).squeeze().cpu().numpy()
-                )
+                pred_sc = model.decode_from_memory(r, q_shear, q_st).squeeze().cpu().numpy()
                 pred_lv = pred_sc * visc_scale + visc_mean
                 for j in range(n_shears):
                     if vm[j]:
@@ -701,7 +688,7 @@ def compute_permutation_importance(
 
     baseline = _mse(static_matrix)
     print(f"  Baseline decoder MSE (log₁₀ space): {baseline:.6f}")
-    print(f"  Permuting {static_dim} features × {n_repeats} repeats …")
+    print(f"  Permuting {static_dim} features x {n_repeats} repeats …")
 
     importances = np.zeros((static_dim, n_repeats))
     for j in range(static_dim):
@@ -746,9 +733,7 @@ def group_to_all_features(importances_mean, importances_std, feature_names):
             parent = next((c for c in CAT_COLS if rest.startswith(c)), rest)
             cat = _all_feat_category(parent)
             grouped[parent][0] += mu
-            grouped[parent][
-                1
-            ] += sig  # approximate: sum of stds (conservative upper bound)
+            grouped[parent][1] += sig  # approximate: sum of stds (conservative upper bound)
             grouped[parent][2] = cat
         elif fname.startswith("num__"):
             short = fname[5:]
@@ -1043,9 +1028,7 @@ def main():
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
-    device = torch.device(
-        "cpu" if args.no_cuda or not torch.cuda.is_available() else "cuda"
-    )
+    device = torch.device("cpu" if args.no_cuda or not torch.cuda.is_available() else "cuda")
     print(f"Device: {device}")
 
     # ── Load saved artefacts ───────────────────────────────────
@@ -1064,9 +1047,7 @@ def main():
     else:
         # Fallback: first .pt/.pth in dir
         _candidates = [
-            f
-            for f in os.listdir(args.model_dir)
-            if f.endswith(".pt") or f.endswith(".pth")
+            f for f in os.listdir(args.model_dir) if f.endswith(".pt") or f.endswith(".pth")
         ]
         if not _candidates:
             raise FileNotFoundError(f"No .pt/.pth checkpoint found in {args.model_dir}")
@@ -1095,9 +1076,7 @@ def main():
         latent_dim = args.latent_dim
         state_dict = ckpt
 
-    print(
-        f"  hidden_dim={hidden_dim}  latent_dim={latent_dim}  static_dim={static_dim}"
-    )
+    print(f"  hidden_dim={hidden_dim}  latent_dim={latent_dim}  static_dim={static_dim}")
     model = CrossSampleCNP(static_dim, hidden_dim, latent_dim).to(device)
     model.load_state_dict(state_dict)
     model.eval()
@@ -1105,9 +1084,7 @@ def main():
 
     # ── Preprocess data ────────────────────────────────────────
     print("\n[2/5] Preprocessing data …")
-    samples, sdim, raw_df = load_and_preprocess(
-        args.data_csv, preprocessor, physics_scaler
-    )
+    samples, sdim, raw_df = load_and_preprocess(args.data_csv, preprocessor, physics_scaler)
     print(f"  Samples: {len(samples)}")
 
     # ── Permutation importance ─────────────────────────────────
@@ -1162,11 +1139,7 @@ def main():
     fo_df.to_csv(os.path.join(args.out_dir, "importance_first_order.csv"), index=False)
 
     print("\n  Top 10 first-order features:")
-    print(
-        fo_df[["display", "delta_mse_mean", "delta_mse_std"]]
-        .head(10)
-        .to_string(index=False)
-    )
+    print(fo_df[["display", "delta_mse_mean", "delta_mse_std"]].head(10).to_string(index=False))
 
     # ── Plots ──────────────────────────────────────────────────
     print("\n[5/5] Generating plots …")

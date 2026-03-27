@@ -16,9 +16,7 @@ import torch.nn.functional as F
 # 0. Logging Configuration
 # ==========================================
 # Create a timestamped log file
-log_filename = (
-    f"debug_inference_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-)
+log_filename = f"debug_inference_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -76,7 +74,7 @@ class CarreauYasudaCNP(nn.Module):
         )
         self.pooler = AttentionPool(latent_dim)
 
-        # Maps (static + latent r) → 5 raw CY parameters. No shear input here;
+        # Maps (static + latent r) -> 5 raw CY parameters. No shear input here;
         # shear enters through the physics equation below.
         self.param_net = nn.Sequential(
             nn.Linear(static_dim + latent_dim, hidden_dim),
@@ -111,7 +109,7 @@ class CarreauYasudaCNP(nn.Module):
         a = F.softplus(raw_params[..., 3:4]) + 1e-3
         n = torch.sigmoid(raw_params[..., 4:5])
 
-        # Unscale shear z-scores → raw physical values (s⁻¹)
+        # Unscale shear z-scores -> raw physical values (s⁻¹)
         log10_shear_raw = query_shear * self.shear_std + self.shear_mean
         shear_raw = 10.0**log10_shear_raw
 
@@ -423,9 +421,7 @@ class ViscosityPredictorCNP:
 
         if not os.path.exists(self.preprocessor_path):
             logger.error(f"Preprocessor not found at {self.preprocessor_path}")
-            raise FileNotFoundError(
-                f"Preprocessor not found at {self.preprocessor_path}"
-            )
+            raise FileNotFoundError(f"Preprocessor not found at {self.preprocessor_path}")
         if not os.path.exists(self.scaler_path):
             logger.error(f"Physics Scaler not found at {self.scaler_path}")
             raise FileNotFoundError(f"Physics Scaler not found at {self.scaler_path}")
@@ -505,9 +501,7 @@ class ViscosityPredictorCNP:
             ph = float(row.get("Buffer_pH", 7.0))
             pi = float(row.get("PI_mean", 7.0))
         except ValueError as e:
-            logger.warning(
-                f"Error converting CCI inputs to float: {e}. Row: {row.to_dict()}"
-            )
+            logger.warning(f"Error converting CCI inputs to float: {e}. Row: {row.to_dict()}")
             c_class, ph, pi = 1.0, 7.0, 7.0
 
         if pd.isna(ph):
@@ -588,18 +582,14 @@ class ViscosityPredictorCNP:
 
             # Map to Concentration Splits
             for target_ing, threshold in CONC_THRESHOLDS.items():
-                match = (target_ing in ing_name) or (
-                    target_ing == "arginine" and "arg" in ing_name
-                )
+                match = (target_ing in ing_name) or (target_ing == "arginine" and "arg" in ing_name)
                 if match:
                     concs[f"{target_ing}_low"] = min(ing_conc, threshold)
                     concs[f"{target_ing}_high"] = max(ing_conc - threshold, 0)
 
         return {**priors, **concs}
 
-    def _preprocess(
-        self, df: pd.DataFrame
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _preprocess(self, df: pd.DataFrame) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         logger.debug(f"--- PREPROCESSING START ---")
         logger.debug(f"Input DataFrame Shape: {df.shape}")
         logger.debug(f"Input DataFrame Columns: {df.columns.tolist()}")
@@ -613,17 +603,13 @@ class ViscosityPredictorCNP:
             logger.warning("Protein_conc column MISSING!")
 
         if "Protein_class_type" in df.columns:
-            logger.debug(
-                f"Protein_class_type sample: {df['Protein_class_type'].unique()[:5]}"
-            )
+            logger.debug(f"Protein_class_type sample: {df['Protein_class_type'].unique()[:5]}")
         else:
             logger.warning("Protein_class_type column MISSING!")
 
         df_proc = df.copy()
         for col in df_proc.select_dtypes(include=["object"]):
-            df_proc[col] = df_proc[col].apply(
-                lambda x: x.value if hasattr(x, "value") else x
-            )
+            df_proc[col] = df_proc[col].apply(lambda x: x.value if hasattr(x, "value") else x)
         # 1. Normalize Categories
         if "ID" in df_proc.columns:
             df_proc.drop(columns=["ID"], inplace=True)
@@ -637,9 +623,7 @@ class ViscosityPredictorCNP:
 
         # 2. Compute New Features
         logger.debug("Computing physics features...")
-        new_features = df_proc.apply(
-            self._calculate_physics_features, axis=1, result_type="expand"
-        )
+        new_features = df_proc.apply(self._calculate_physics_features, axis=1, result_type="expand")
         df_proc = pd.concat([df_proc, new_features], axis=1)
 
         # 3. Static Features Transformation
@@ -682,14 +666,10 @@ class ViscosityPredictorCNP:
                 static_list.append(X_static[i])
 
         static_t = (
-            torch.tensor(np.array(static_list), dtype=torch.float32)
-            .unsqueeze(0)
-            .to(self.device)
+            torch.tensor(np.array(static_list), dtype=torch.float32).unsqueeze(0).to(self.device)
         )
         points_t = (
-            torch.tensor(np.array(points_list), dtype=torch.float32)
-            .unsqueeze(0)
-            .to(self.device)
+            torch.tensor(np.array(points_list), dtype=torch.float32).unsqueeze(0).to(self.device)
         )
 
         shear_t = points_t[:, :, [0]]
@@ -820,9 +800,7 @@ class ViscosityPredictorCNP:
         with torch.no_grad():
             for i in range(n_samples):
                 # Use decode_from_memory loop
-                out_scaled = self.model.decode_from_memory(
-                    memory_vector, q_shear, q_static
-                )
+                out_scaled = self.model.decode_from_memory(memory_vector, q_shear, q_static)
 
                 # Inverse Transform per sample
                 q_shear_np = q_shear.cpu().numpy().reshape(-1, 1)
@@ -868,23 +846,17 @@ if __name__ == "__main__":
     if os.path.exists(training_file):
         print(f"Loading context from {training_file}...")
         full_train_df = pd.read_csv(training_file)
-        int_cols = full_train_df.select_dtypes(
-            include=["int", "int64", "int32"]
-        ).columns
+        int_cols = full_train_df.select_dtypes(include=["int", "int64", "int32"]).columns
 
         # Convert them to float
         for col in int_cols:
-            if (
-                col != "ID"
-            ):  # specific exception for ID if you want to keep it as int/string
+            if col != "ID":  # specific exception for ID if you want to keep it as int/string
                 full_train_df[col] = full_train_df[col].astype(float)
 
         # Check if ID should be string to avoid issues
         full_train_df["ID"] = full_train_df["ID"].astype(str)
         molecule_name = "Ibalizumab"
-        history_df = full_train_df[
-            full_train_df["Protein_type"] == molecule_name
-        ].copy()
+        history_df = full_train_df[full_train_df["Protein_type"] == molecule_name].copy()
 
         if not history_df.empty:
             print(f"Adapting to {molecule_name} ({len(history_df)} samples)...")
@@ -894,23 +866,17 @@ if __name__ == "__main__":
     if os.path.exists(training_file):
         print(f"Loading context from {training_file}...")
         full_train_df = pd.read_csv(training_file)
-        int_cols = full_train_df.select_dtypes(
-            include=["int", "int64", "int32"]
-        ).columns
+        int_cols = full_train_df.select_dtypes(include=["int", "int64", "int32"]).columns
 
         # Convert them to float
         for col in int_cols:
-            if (
-                col != "ID"
-            ):  # specific exception for ID if you want to keep it as int/string
+            if col != "ID":  # specific exception for ID if you want to keep it as int/string
                 full_train_df[col] = full_train_df[col].astype(float)
 
         # Check if ID should be string to avoid issues
         full_train_df["ID"] = full_train_df["ID"].astype(str)
         molecule_name = "Nivolumab"
-        history_df = full_train_df[
-            full_train_df["Protein_type"] == molecule_name
-        ].copy()
+        history_df = full_train_df[full_train_df["Protein_type"] == molecule_name].copy()
 
         if not history_df.empty:
             print(f"Adapting to {molecule_name} ({len(history_df)} samples)...")

@@ -1,0 +1,17 @@
+Concept,Gate_value,Activation_type
+self_interaction,0.8850181,tanh
+hydrophobicity,0.901138,sigmoid
+charge_environment,0.8762203,tanh
+ionic_screening,0.9003738,sigmoid
+crowding,0.9027383,sigmoid
+nonlinear_conc,0.9017346,sigmoid
+cosolute_interaction,0.88352716,tanh
+cosolute_protection,0.90269,sigmoid
+interfacial_shielding,0.90786695,sigmoid
+surface_stability,0.9001246,sigmoid
+chemical_modulation,0.8781926,tanh
+electrostatic_screening,0.8957157,sigmoid
+latent_0,0.099173896,tanh
+latent_1,0.09378265,tanh
+latent_2,0.10489166,tanh
+latent_3,0.105461895,tanh

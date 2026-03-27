@@ -12,7 +12,7 @@ figure styled after the panel-A/B/C analysis:
   - Annotated with stabilizer type and concentration
 
 Also produces a summary heatmap (prior_accuracy_summary.png) showing
-% correct across all protein × regime cells.
+% correct across all protein x regime cells.
 
 Outputs (written to ./stabilizer_regime_plots/):
   <protein>_stabilizer_prior.png   — per-protein regime breakdown
@@ -134,7 +134,7 @@ def find_baseline(
 ) -> float | None:
     """
     Returns mean viscosity at shear_col for no-stabilizer rows within
-    ±window mg/mL of target_conc.  Falls back to ±2×window, then all
+    ±window mg/mL of target_conc.  Falls back to ±2xwindow, then all
     no-stabilizer rows if still empty.
     """
     no_stab = prot_df[~prot_df["has_stabilizer"]]
@@ -175,7 +175,7 @@ def build_audit(df: pd.DataFrame) -> pd.DataFrame:
                 continue
 
             delta_log10 = np.log10(obs_visc) - np.log10(base)
-            prior_correct = delta_log10 > 0  # prior says +1 → expects increase
+            prior_correct = delta_log10 > 0  # prior says +1 -> expects increase
 
             records.append(
                 {
@@ -279,9 +279,7 @@ def make_protein_figure(
             )
 
             # Annotate concentration
-            label_txt = (
-                f"{STAB_LABELS.get(rec['Stabilizer'], '?')}\n{rec['Stab_conc_M']:.2f}M"
-            )
+            label_txt = f"{STAB_LABELS.get(rec['Stabilizer'], '?')}\n{rec['Stab_conc_M']:.2f}M"
             ax.annotate(
                 label_txt,
                 (x_jitter, max(yb, yo)),
@@ -401,18 +399,14 @@ def make_summary_heatmap(
                     pct_matrix[pi, ri] = nc / nt * 100
                     count_matrix[pi, ri] = nt
 
-    fig, ax = plt.subplots(
-        figsize=(8, max(5, len(proteins) * 0.7 + 2.5)), constrained_layout=True
-    )
+    fig, ax = plt.subplots(figsize=(8, max(5, len(proteins) * 0.7 + 2.5)), constrained_layout=True)
     fig.patch.set_facecolor("#f8f9fa")
     ax.set_facecolor("#f0f0f0")
 
-    # Custom colormap: red (0%) → white (50%) → green (100%)
+    # Custom colormap: red (0%) -> white (50%) -> green (100%)
     from matplotlib.colors import LinearSegmentedColormap
 
-    cmap = LinearSegmentedColormap.from_list(
-        "rwg", [PRIOR_COLOR, "#ffffff", CORRECT_COLOR], N=256
-    )
+    cmap = LinearSegmentedColormap.from_list("rwg", [PRIOR_COLOR, "#ffffff", CORRECT_COLOR], N=256)
 
     masked = np.ma.masked_where(np.isnan(pct_matrix), pct_matrix)
     im = ax.imshow(masked, cmap=cmap, vmin=0, vmax=100, aspect="auto")
@@ -435,9 +429,7 @@ def make_summary_heatmap(
                     fontweight="bold",
                 )
             else:
-                ax.text(
-                    ri, pi, "—", ha="center", va="center", fontsize=10, color="#aaaaaa"
-                )
+                ax.text(ri, pi, "—", ha="center", va="center", fontsize=10, color="#aaaaaa")
 
     # Axes
     ax.set_xticks(range(len(regimes)))
@@ -461,7 +453,7 @@ def make_summary_heatmap(
         ax.axhline(y, color="#cccccc", linewidth=0.8)
 
     ax.set_title(
-        "Stabilizer Prior (+1) Accuracy by Protein × Regime\n"
+        "Stabilizer Prior (+1) Accuracy by Protein x Regime\n"
         "Green = prior correct (stabilizer raised η)  |  Red = prior wrong (stabilizer reduced η)",
         fontsize=11,
         fontweight="bold",
@@ -470,7 +462,7 @@ def make_summary_heatmap(
 
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"  Summary heatmap → {out_path}")
+    print(f"  Summary heatmap -> {out_path}")
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
@@ -491,14 +483,12 @@ def main():
     # Save full audit CSV
     csv_path = os.path.join(OUT_DIR, "stabilizer_prior_audit.csv")
     audit.to_csv(csv_path, index=False, float_format="%.4f")
-    print(f"  Audit table → {csv_path}")
+    print(f"  Audit table -> {csv_path}")
 
     # Overall accuracy summary in console
     n_correct = audit["Prior_correct"].sum()
     n_total = len(audit)
-    print(
-        f"\n  Overall prior accuracy: {n_correct}/{n_total} = {n_correct/n_total*100:.1f}%"
-    )
+    print(f"\n  Overall prior accuracy: {n_correct}/{n_total} = {n_correct/n_total*100:.1f}%")
     print(f"\n  Per-protein accuracy:")
     for prot, grp in audit.groupby("Protein"):
         nc, nt = grp["Prior_correct"].sum(), len(grp)
@@ -518,17 +508,13 @@ def main():
     for prot in proteins:
         prot_class = df[df["Protein_type"] == prot]["Protein_class_type"].iloc[0]
         prot_raw = df[df["Protein_type"] == prot]
-        out_path = os.path.join(
-            OUT_DIR, f"{prot.replace(' ', '_')}_stabilizer_prior.png"
-        )
+        out_path = os.path.join(OUT_DIR, f"{prot.replace(' ', '_')}_stabilizer_prior.png")
 
         acc = make_protein_figure(prot, prot_class, audit, prot_raw, out_path)
         accuracy_table[prot] = acc
 
         regime_strs = [f"{r}:{v[0]}/{v[1]}" for r, v in acc.items()]
-        print(
-            f"  {prot:20s}  {' | '.join(regime_strs)}  → {os.path.basename(out_path)}"
-        )
+        print(f"  {prot:20s}  {' | '.join(regime_strs)}  -> {os.path.basename(out_path)}")
 
     # Summary heatmap
     print("\nGenerating summary heatmap ...")

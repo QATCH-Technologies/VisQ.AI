@@ -1028,7 +1028,7 @@ def log_latent_variance(model, samples, device):
             if len(task_samples) < 2:
                 continue
             # [FIX-B] Skip non-protein groups — their easy separability
-            # was inflating the v2 separation ratio to a false 18×
+            # was inflating the v2 separation ratio to a false 18x
             if prot in NON_PROTEIN_GROUPS:
                 continue
             idx = np.random.permutation(len(task_samples))[: min(5, len(task_samples))]

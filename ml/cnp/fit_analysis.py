@@ -70,9 +70,7 @@ def fit_power_law(x, y):
         if len(xf) < 3:
             return None
         p0 = [1.0, 1.0]
-        popt, _ = curve_fit(
-            power_law, xf, yf, p0=p0, bounds=([0, 0], [np.inf, 10]), maxfev=5000
-        )
+        popt, _ = curve_fit(power_law, xf, yf, p0=p0, bounds=([0, 0], [np.inf, 10]), maxfev=5000)
         a, b = popt
         y_pred = power_law(xf, a, b)
         ss_res = np.sum((yf - y_pred) ** 2)
@@ -98,7 +96,7 @@ for (protein, buf_type, buf_ph, buf_conc), grp in groups:
 
     label_str = f"{protein}  |  {buf_type} pH {buf_ph}  " f"({int(buf_conc)} mM)"
     print(
-        f"  • {label_str}  →  {len(grp)} sample(s), "
+        f"  • {label_str}  ->  {len(grp)} sample(s), "
         f"conc range {concentrations.min():.1f}-{concentrations.max():.1f} mg/mL"
     )
 
@@ -136,9 +134,7 @@ for (protein, buf_type, buf_ph, buf_conc), grp in groups:
 
     ax.set_xlabel("Protein Concentration (mg/mL)", fontsize=11)
     ax.set_ylabel("Viscosity (cP)", fontsize=11)
-    ax.set_title(
-        f"Viscosity vs. Concentration\n{label_str}", fontsize=11, fontweight="bold"
-    )
+    ax.set_title(f"Viscosity vs. Concentration\n{label_str}", fontsize=11, fontweight="bold")
     ax.legend(fontsize=8, loc="upper left", framealpha=0.85)
     ax.xaxis.set_minor_locator(ticker.AutoMinorLocator())
     ax.yaxis.set_minor_locator(ticker.AutoMinorLocator())
@@ -154,6 +150,6 @@ for (protein, buf_type, buf_ph, buf_conc), grp in groups:
     fig_path = os.path.join(OUTPUT_DIR, f"{safe}.png")
     fig.savefig(fig_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print(f"    Saved → {fig_path}")
+    print(f"    Saved -> {fig_path}")
 
 print("\nDone. All plots saved to:", OUTPUT_DIR)

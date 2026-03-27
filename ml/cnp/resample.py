@@ -20,7 +20,7 @@ Lysine, and Proline.
 
 PASS 3 - Protein concentration interpolation (new)
 ---------------------------------------------------
-For each unique (protein_type × buffer_type × buffer_pH × buffer_conc) group
+For each unique (protein_type x buffer_type x buffer_pH x buffer_conc) group
 that has at least MIN_CONC_POINTS_PASS3 distinct protein concentration
 measurements, fits an exponential model
 
@@ -34,7 +34,7 @@ duplicates.
 
 Strategy
 ~~~~~~~~
-For each (protein_type × component) pair where at least one
+For each (protein_type x component) pair where at least one
 (no-component, with-component) matched pair exists:
 
 1. Collect "anchor pairs" — rows of the same protein at similar protein
@@ -100,7 +100,7 @@ N_CONCENTRATION_BINS: int = 5
 # Proteins below this threshold receive transferred curves instead.
 MIN_ANCHOR_PAIRS: int = 2
 
-# Number of noisy draw variants per (anchor_pair × target_conc).
+# Number of noisy draw variants per (anchor_pair x target_conc).
 # Kept low (2) to avoid overwhelming real data with one anchor's signal.
 N_NOISE_DRAWS: int = 2
 
@@ -116,7 +116,7 @@ TRANSFER_NOISE_FRAC: float = 0.35
 CONC_MATCH_TOL: float = 20.0  # mg/mL — protein concentration window
 PH_MATCH_TOL: float = 0.0  # pH units
 
-# Maximum samples to generate per (protein × component) pair in Pass 2.
+# Maximum samples to generate per (protein x component) pair in Pass 2.
 # Prevents any one protein/component from dominating the synthetic pool.
 MAX_PER_PROTEIN_COMPONENT: int = 120
 
@@ -154,7 +154,7 @@ EXCIPIENT_TARGET_CONCS: list[float] = [
 
 # --- Pass 3 settings ---
 
-# Minimum unique protein concentrations in a (protein × buffer) group before
+# Minimum unique protein concentrations in a (protein x buffer) group before
 # attempting an interpolation fit.
 # [ENHANCEMENT-1] Reduced to 1 because the buffer-viscosity anchor (below)
 # always provides a second point, so even a single measurement is sufficient
@@ -178,7 +178,7 @@ INTERP_EXCLUSION_FRAC_PASS3: float = 0.05
 # At zero protein concentration the solution viscosity approaches that of the
 # pure buffer.  Adding this as a synthetic anchor point:
 #   (a) allows the extended low-concentration range to be interpolated without
-#       a log-linear extrapolation singularity at c→0, and
+#       a log-linear extrapolation singularity at c->0, and
 #   (b) constrains the PCHIP curve to a physically correct baseline, preventing
 #       it from curving below buffer viscosity at low concentrations.
 # Value: 15 mM Histidine, pH 6.0, 25 °C ≈ 0.91 cP (literature).
@@ -186,7 +186,7 @@ INTERP_EXCLUSION_FRAC_PASS3: float = 0.05
 # the effect is small since we only use the anchor to guide the low-conc region.
 BUFFER_VISCOSITY_CP: float = 0.91
 
-# Protein concentration used to represent the "c → 0" anchor in log space.
+# Protein concentration used to represent the "c -> 0" anchor in log space.
 # Must be positive (log cannot accept 0).  1 mg/mL is well below any observed
 # protein concentration in the dataset and places the anchor firmly outside
 # the training distribution so the model learns the dilute-solution limit.
@@ -202,7 +202,7 @@ INTERP_LOWER_BOUND_MG_ML: float = BUFFER_ANCHOR_CONC_MG_ML
 # [ENHANCEMENT-5] Gap-targeted point placement.
 # Concentration gaps wider than this threshold receive additional interpolated
 # points proportional to their width, ensuring large under-sampled regions
-# (e.g. Nivolumab 168→240 mg/mL, 72 mg/mL gap) are explicitly covered.
+# (e.g. Nivolumab 168->240 mg/mL, 72 mg/mL gap) are explicitly covered.
 GAP_FILL_THRESHOLD_MG_ML: float = 30.0
 # Extra points allocated per unit of gap above the threshold (per 30 mg/mL).
 GAP_FILL_DENSITY: float = 2.0  # points per 30 mg/mL of gap
@@ -598,7 +598,7 @@ def _apply_delta_to_profile(
     # Try CY-based propagation (preserves shear-thinning character).
     fit_ok, popt = fit_carreau_yasuda(base_visc, shear_rates)
     if fit_ok and popt is not None:
-        eta_0_new = popt[0] / (10**actual_delta)  # positive Δ → lower η
+        eta_0_new = popt[0] / (10**actual_delta)  # positive Δ -> lower η
         eta_0_new = max(eta_0_new, 1e-3)
         new_popt = popt.copy()
         new_popt[0] = eta_0_new
@@ -608,7 +608,7 @@ def _apply_delta_to_profile(
     else:
         # Fallback: uniform log-space shift.
         log_base = np.log10(base_visc)
-        log_new = log_base - actual_delta  # subtract → lower η for positive Δ
+        log_new = log_base - actual_delta  # subtract -> lower η for positive Δ
         # Preserve relative monotonicity.
         for j in range(1, len(log_new)):
             if log_new[j] > log_new[j - 1]:
@@ -734,7 +734,7 @@ def _fit_response_curve(
 
     if len(xs) == 1:
         # Single point: slope estimated assuming the effect is zero at
-        # a concentration 100× smaller than the observed point.
+        # a concentration 100x smaller than the observed point.
         slope = ys_arr[0] / (xs_arr[0] - (xs_arr[0] - 2.0))
         intercept = ys_arr[0] - slope * xs_arr[0]
     else:
@@ -776,7 +776,7 @@ def build_response_curves(
 
     Returns
     -------
-    dict mapping (protein_type_lower, component_name) → ComponentResponseCurve
+    dict mapping (protein_type_lower, component_name) -> ComponentResponseCurve
     """
     all_proteins = [
         pt.lower()
@@ -923,7 +923,7 @@ def generate_component_response_samples(
 
     CY fits are pre-computed once per base row and reused across all
     (component, target_conc, draw) combinations for that row — this avoids
-    the dominant O(n_concs × n_draws) fitting cost.
+    the dominant O(n_concs x n_draws) fitting cost.
 
     Returns a flat list of synthetic rows.
     """
@@ -1087,7 +1087,7 @@ def generate_protein_conc_interpolation_samples(
     [ENHANCEMENT-2] Buffer-viscosity anchor at c = BUFFER_ANCHOR_CONC_MG_ML.
         All five shear-rate viscosity columns are anchored to BUFFER_VISCOSITY_CP
         (≈0.91 cP for 15 mM His pH 6 at 25 °C), reflecting the physical
-        boundary condition that η → η_buffer as c_protein → 0.  This prevents
+        boundary condition that η -> η_buffer as c_protein -> 0.  This prevents
         the interpolator from producing sub-buffer viscosities and gives the
         model accurate training signal in the dilute-solution regime.
 
@@ -1109,7 +1109,7 @@ def generate_protein_conc_interpolation_samples(
     [ENHANCEMENT-5] Gap-targeted point placement.
         Concentration gaps wider than GAP_FILL_THRESHOLD_MG_ML are allocated
         additional interpolation points proportional to their width.  This
-        ensures that large under-sampled regions (e.g. Nivolumab 168→240 mg/mL)
+        ensures that large under-sampled regions (e.g. Nivolumab 168->240 mg/mL)
         receive explicit synthetic training data rather than relying on the
         sliding-window context to bridge them.
     """
@@ -1156,7 +1156,7 @@ def generate_protein_conc_interpolation_samples(
             continue
 
         # ── [ENHANCEMENT-2] Inject buffer-viscosity anchor ──────────────
-        # Represent c → 0 as BUFFER_ANCHOR_CONC_MG_ML (in log space).
+        # Represent c -> 0 as BUFFER_ANCHOR_CONC_MG_ML (in log space).
         # All shear-rate columns get the same buffer viscosity because at
         # this concentration the protein has negligible effect on flow.
         anchor_conc = BUFFER_ANCHOR_CONC_MG_ML
@@ -1456,9 +1456,9 @@ def main() -> None:
     for p in sorted(type_core_counts):
         n = type_core_counts[p]
         status = (
-            f"→ needs {TARGET_SAMPLES_PER_TYPE - n} synthetic"
+            f"-> needs {TARGET_SAMPLES_PER_TYPE - n} synthetic"
             if n < TARGET_SAMPLES_PER_TYPE
-            else "→ already at/above target"
+            else "-> already at/above target"
         )
         print(f"    {p:<30s}  core={n:4d}  {status}")
 

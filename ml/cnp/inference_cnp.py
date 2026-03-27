@@ -17,9 +17,7 @@ import torch.nn.functional as F
 # 0. Logging Configuration
 # ==========================================
 # Create a timestamped log file
-log_filename = (
-    f"debug_inference_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-)
+log_filename = f"debug_inference_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -350,12 +348,8 @@ class ViscosityPredictorCNP:
         # of the module-level logger used elsewhere in this file.
         self._logger = logging.getLogger(f"VisQ_Inference.{id(self)}")
         if not verbose:
-            self._logger.setLevel(
-                logging.CRITICAL
-            )  # suppress everything below CRITICAL
-        self._logger.info(
-            f"Initializing ViscosityPredictorCNP with model_dir: {model_dir}"
-        )
+            self._logger.setLevel(logging.CRITICAL)  # suppress everything below CRITICAL
+        self._logger.info(f"Initializing ViscosityPredictorCNP with model_dir: {model_dir}")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._logger.info(f"Using device: {self.device}")
         self.model_dir = model_dir
@@ -367,9 +361,7 @@ class ViscosityPredictorCNP:
 
         if not os.path.exists(self.preprocessor_path):
             self._logger.error(f"Preprocessor not found at {self.preprocessor_path}")
-            raise FileNotFoundError(
-                f"Preprocessor not found at {self.preprocessor_path}"
-            )
+            raise FileNotFoundError(f"Preprocessor not found at {self.preprocessor_path}")
         if not os.path.exists(self.scaler_path):
             self._logger.error(f"Physics Scaler not found at {self.scaler_path}")
             raise FileNotFoundError(f"Physics Scaler not found at {self.scaler_path}")
@@ -454,9 +446,7 @@ class ViscosityPredictorCNP:
             ph = float(row.get("Buffer_pH", 7.0))
             pi = float(row.get("PI_mean", 7.0))
         except ValueError as e:
-            self._logger.warning(
-                f"Error converting CCI inputs to float: {e}. Row: {row.to_dict()}"
-            )
+            self._logger.warning(f"Error converting CCI inputs to float: {e}. Row: {row.to_dict()}")
             c_class, ph, pi = 1.0, 7.0, 7.0
 
         if pd.isna(ph):
@@ -537,18 +527,14 @@ class ViscosityPredictorCNP:
 
             # Map to Concentration Splits
             for target_ing, threshold in CONC_THRESHOLDS.items():
-                match = (target_ing in ing_name) or (
-                    target_ing == "arginine" and "arg" in ing_name
-                )
+                match = (target_ing in ing_name) or (target_ing == "arginine" and "arg" in ing_name)
                 if match:
                     concs[f"{target_ing}_low"] = min(ing_conc, threshold)
                     concs[f"{target_ing}_high"] = max(ing_conc - threshold, 0)
 
         return {**priors, **concs}
 
-    def _preprocess(
-        self, df: pd.DataFrame
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _preprocess(self, df: pd.DataFrame) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         self._logger.debug(f"--- PREPROCESSING START ---")
         self._logger.debug(f"Input DataFrame Shape: {df.shape}")
 
@@ -556,9 +542,7 @@ class ViscosityPredictorCNP:
 
         # 0. Extract objects to values if needed
         for col in df_proc.select_dtypes(include=["object"]):
-            df_proc[col] = df_proc[col].apply(
-                lambda x: x.value if hasattr(x, "value") else x
-            )
+            df_proc[col] = df_proc[col].apply(lambda x: x.value if hasattr(x, "value") else x)
 
         if "ID" in df_proc.columns:
             df_proc.drop(columns=["ID"], inplace=True)
@@ -589,9 +573,7 @@ class ViscosityPredictorCNP:
         # ---------------------------------------------------------
         # 2. Add Missing Feature Engineering & Unit Normalization
         # ---------------------------------------------------------
-        self._logger.debug(
-            "Normalizing units to mg/mL and calculating Physics Features..."
-        )
+        self._logger.debug("Normalizing units to mg/mL and calculating Physics Features...")
 
         MW_MAP = {
             "sucrose": 342.3,
@@ -607,11 +589,7 @@ class ViscosityPredictorCNP:
             return (
                 chemical_series.astype(str)
                 .str.lower()
-                .map(
-                    lambda x: next(
-                        (mw for name, mw in MW_MAP.items() if name in x), default_mw
-                    )
-                )
+                .map(lambda x: next((mw for name, mw in MW_MAP.items() if name in x), default_mw))
             )
 
         # Unit conversions to mg/mL
@@ -641,9 +619,7 @@ class ViscosityPredictorCNP:
         df_proc["conc_x_kP"] = df_proc["Protein_conc"] * df_proc["kP"]
         df_proc["conc_x_HCI"] = df_proc["Protein_conc"] * df_proc["HCI"]
 
-        df_proc["Crowding_Index"] = (
-            df_proc["Protein_conc"] * df_proc["Stabilizer_mg_mL"]
-        )
+        df_proc["Crowding_Index"] = df_proc["Protein_conc"] * df_proc["Stabilizer_mg_mL"]
         df_proc["Stabilizer_Squared"] = df_proc["Stabilizer_mg_mL"] ** 2
 
         df_proc["Total_Solute_Mass"] = (
@@ -693,9 +669,7 @@ class ViscosityPredictorCNP:
 
         # 4. Compute New Prior Features
         self._logger.debug("Computing physics priors...")
-        new_features = df_proc.apply(
-            self._calculate_physics_features, axis=1, result_type="expand"
-        )
+        new_features = df_proc.apply(self._calculate_physics_features, axis=1, result_type="expand")
         df_proc = pd.concat([df_proc, new_features], axis=1)
 
         # 5. Handle missing statically expected features
@@ -712,9 +686,7 @@ class ViscosityPredictorCNP:
         actual_missing = [col for col in missing_feats if col not in expected_missing]
 
         if actual_missing:
-            self._logger.warning(
-                f"Missing static features filled with 0.0: {actual_missing}"
-            )
+            self._logger.warning(f"Missing static features filled with 0.0: {actual_missing}")
         for col in missing_feats:
             df_proc[col] = 0.0
 
@@ -722,9 +694,7 @@ class ViscosityPredictorCNP:
 
         # Ensure no NaNs leaked into the matrix
         if np.isnan(X_static).any():
-            self._logger.warning(
-                "NaNs found in X_static after preprocessing! Replacing with 0."
-            )
+            self._logger.warning("NaNs found in X_static after preprocessing! Replacing with 0.")
             X_static = np.nan_to_num(X_static)
 
         self._logger.debug(f"Static features transformed shape: {X_static.shape}")
@@ -756,13 +726,9 @@ class ViscosityPredictorCNP:
         scaled_points = self.physics_scaler.transform(raw_points)
 
         static_t = (
-            torch.tensor(np.array(static_list), dtype=torch.float32)
-            .unsqueeze(0)
-            .to(self.device)
+            torch.tensor(np.array(static_list), dtype=torch.float32).unsqueeze(0).to(self.device)
         )
-        points_t = (
-            torch.tensor(scaled_points.astype(np.float32)).unsqueeze(0).to(self.device)
-        )
+        points_t = torch.tensor(scaled_points.astype(np.float32)).unsqueeze(0).to(self.device)
 
         shear_t = points_t[:, :, [0]]
         visc_t = points_t[:, :, [1]]
@@ -834,9 +800,7 @@ class ViscosityPredictorCNP:
         with torch.no_grad():
             if n_ctx <= k_eff:
                 # Not enough context for subsampling — encode everything once
-                self._logger.debug(
-                    f"n_ctx={n_ctx} <= k={k_eff}: encoding full context once."
-                )
+                self._logger.debug(f"n_ctx={n_ctx} <= k={k_eff}: encoding full context once.")
                 self.memory_vector = self.model.encode_memory(context_t)
                 self._logger.info(
                     f" > Encoding complete (single pass). "
@@ -855,17 +819,14 @@ class ViscosityPredictorCNP:
                     f"idx={idx.tolist()}, norm={r.norm().item():.3f}"
                 )
 
-        # Average across draws → stable latent representation
+        # Average across draws -> stable latent representation
         self.memory_vector = torch.stack(memory_draws, dim=0).mean(dim=0)
         self._logger.info(
             f" > Encoding complete ({n_draws} draws averaged). "
             f"Memory norm: {self.memory_vector.norm().item():.3f}, "
             f"shape: {self.memory_vector.shape}"
         )
-        print(
-            f" > Encoding complete. "
-            f"Memory norm: {self.memory_vector.norm().item():.3f}"
-        )
+        print(f" > Encoding complete. " f"Memory norm: {self.memory_vector.norm().item():.3f}")
 
     def predict(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -975,18 +936,14 @@ class ViscosityPredictorCNP:
             else torch.zeros((1, self.config["latent_dim"]), device=self.device)
         )
         if self.memory_vector is None:
-            self._logger.warning(
-                "No memory vector (zero-shot). CI reflects decoder noise only."
-            )
+            self._logger.warning("No memory vector (zero-shot). CI reflects decoder noise only.")
 
         # 3. Run n_samples stochastic decoder passes with dropout active
         self.model.train()  # activates dropout masks
         preds_log = []
         with torch.no_grad():
             for i in range(n_samples):
-                out_scaled = self.model.decode_from_memory(
-                    memory_fixed, q_shear, q_static
-                )
+                out_scaled = self.model.decode_from_memory(memory_fixed, q_shear, q_static)
                 log_vals = self._inverse_to_log(q_shear, out_scaled)
                 preds_log.append(log_vals)
                 if (i + 1) % 25 == 0:
@@ -1020,9 +977,7 @@ class ViscosityPredictorCNP:
     # ------------------------------------------------------------------
     # Internal helper: inverse-transform a scaled decoder output to log10 visc
     # ------------------------------------------------------------------
-    def _inverse_to_log(
-        self, q_shear: torch.Tensor, out_scaled: torch.Tensor
-    ) -> np.ndarray:
+    def _inverse_to_log(self, q_shear: torch.Tensor, out_scaled: torch.Tensor) -> np.ndarray:
         """Inverse-scales a decoder output tensor to log10 viscosity values."""
         q_shear_np = q_shear.cpu().numpy().reshape(-1, 1)
         out_np = out_scaled.cpu().numpy().reshape(-1, 1)
@@ -1090,8 +1045,7 @@ if __name__ == "__main__":
 
         # Build history strictly EXCLUDING the target samples to avoid data leakage
         history_df = full_train_df[
-            (full_train_df["Protein_type"] == protein)
-            & (~full_train_df["ID"].isin(target_ids))
+            (full_train_df["Protein_type"] == protein) & (~full_train_df["ID"].isin(target_ids))
         ].copy()
 
         if not history_df.empty:
@@ -1101,9 +1055,7 @@ if __name__ == "__main__":
             predictor.context_t = None
             predictor.learn(history_df)
         else:
-            print(
-                f"Warning: No history found for {protein}. Falling back to Zero-Shot."
-            )
+            print(f"Warning: No history found for {protein}. Falling back to Zero-Shot.")
             predictor.memory_vector = None
             predictor.context_t = None
 
@@ -1124,9 +1076,7 @@ if __name__ == "__main__":
 
     for _, row in final_results.iterrows():
         print(f"\nSample ID: {row['ID']} | Protein: {row['Protein_type']}")
-        print(
-            f"{'Shear Rate':>12} | {'Actual cP':>10} | {'Pred cP':>10} | {'% Error':>10}"
-        )
+        print(f"{'Shear Rate':>12} | {'Actual cP':>10} | {'Pred cP':>10} | {'% Error':>10}")
         print("-" * 52)
 
         for shear in shear_cols:
@@ -1139,9 +1089,7 @@ if __name__ == "__main__":
 
             if pd.notna(actual_val) and pd.notna(pred_val) and actual_val > 0:
                 error = abs(pred_val - actual_val) / actual_val * 100
-                print(
-                    f"{shear:>12} | {actual_val:10.2f} | {pred_val:10.2f} | {error:9.1f}%"
-                )
+                print(f"{shear:>12} | {actual_val:10.2f} | {pred_val:10.2f} | {error:9.1f}%")
             else:
                 print(f"{shear:>12} | {'N/A':>10} | {pred_val:10.2f} | {'N/A':>10}")
 
@@ -1156,8 +1104,7 @@ if __name__ == "__main__":
 
         # Re-build context (same as above, excluding targets)
         history_df = full_train_df[
-            (full_train_df["Protein_type"] == protein)
-            & (~full_train_df["ID"].isin(target_ids))
+            (full_train_df["Protein_type"] == protein) & (~full_train_df["ID"].isin(target_ids))
         ].copy()
 
         predictor.memory_vector = None
@@ -1165,9 +1112,7 @@ if __name__ == "__main__":
 
         if not history_df.empty:
             predictor.learn(history_df)
-            mean_pred, stats = predictor.predict_with_uncertainty(
-                prot_target_df, n_samples=100
-            )
+            mean_pred, stats = predictor.predict_with_uncertainty(prot_target_df, n_samples=100)
 
             pred_ids = prot_target_df["ID"].tolist()
             n_shears = len(predictor.shear_map)

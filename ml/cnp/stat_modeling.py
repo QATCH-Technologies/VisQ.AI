@@ -101,15 +101,11 @@ def load_and_preprocess(path="data/raw/formulation_data_02162026.csv"):
             p33, p66 = np.percentile(x, 33.33), np.percentile(x, 66.67)
             if p33 == p66:
                 return pd.cut(x, bins=3, labels=["Low", "Medium", "High"])
-            return x.apply(
-                lambda v: "Low" if v <= p33 else ("Medium" if v <= p66 else "High")
-            )
+            return x.apply(lambda v: "Low" if v <= p33 else ("Medium" if v <= p66 else "High"))
         except Exception:
             return pd.Series(["Medium"] * len(x), index=x.index)
 
-    df["Conc_Level"] = df.groupby("Protein_type")["Protein_conc"].transform(
-        categorize_conc
-    )
+    df["Conc_Level"] = df.groupby("Protein_type")["Protein_conc"].transform(categorize_conc)
 
     def is_baseline(row):
         return (
@@ -200,9 +196,7 @@ def _fit_with_bootstrap(X, y):
         pb.fit(Xb, yb)
         boot_preds.append(pb.predict(X))
 
-    mean_boot_std = (
-        float(np.mean(np.std(boot_preds, axis=0))) if boot_preds else residual_std
-    )
+    mean_boot_std = float(np.mean(np.std(boot_preds, axis=0))) if boot_preds else residual_std
     return pipe, r2, residual_std, mean_boot_std
 
 
@@ -257,8 +251,8 @@ def _fit_group(modeling_data):
         "boot_std_K": bstd_K,
         "boot_std_n": bstd_n,
         # Augmentation parameters
-        # dlogK_dc > 0  → ingredient raises viscosity magnitude
-        # dn_dc    < 0  → ingredient increases shear-thinning
+        # dlogK_dc > 0  -> ingredient raises viscosity magnitude
+        # dn_dc    < 0  -> ingredient increases shear-thinning
         "dlogK_dc": _local_derivative(pipe_K, median_conc),
         "dn_dc": _local_derivative(pipe_n, median_conc),
         # Data provenance
@@ -336,9 +330,7 @@ def process_cell(task):
             source_proteins = "all"
             if not baseline_rows.empty:
                 fit["mean_prot_conc"] = float(baseline_rows["Protein_conc"].mean())
-                fit["bl_logK_mean"] = float(
-                    np.log(baseline_rows["K"].clip(lower=1e-10)).mean()
-                )
+                fit["bl_logK_mean"] = float(np.log(baseline_rows["K"].clip(lower=1e-10)).mean())
                 fit["bl_n_mean"] = float(baseline_rows["n"].mean())
 
     if fit is None:
@@ -356,7 +348,7 @@ def process_cell(task):
 def _build_prediction_grid(fit):
     """
     Evaluate the model on N_PRED_POINTS across the observed concentration range.
-    Returns a dict keyed by shear rate (as string) → list of
+    Returns a dict keyed by shear rate (as string) -> list of
     {"added_conc": float, "viscosity_cP": float} dicts.
     """
     conc_grid = np.linspace(fit["conc_min"], fit["conc_max"], N_PRED_POINTS)
@@ -443,10 +435,10 @@ def _fit_to_record(
         # dlogK_dc_at_median:
         #   Rate of change of delta_log(K) per unit ingredient concentration,
         #   evaluated at the median observed concentration.
-        #   Positive → ingredient increases overall viscosity magnitude.
+        #   Positive -> ingredient increases overall viscosity magnitude.
         # dn_dc_at_median:
         #   Rate of change of delta_n per unit ingredient concentration.
-        #   Negative → ingredient increases shear-thinning (flow index decreases).
+        #   Negative -> ingredient increases shear-thinning (flow index decreases).
         "augmentation_params": {
             "dlogK_dc_at_median": round(fit["dlogK_dc"], 8),
             "dn_dc_at_median": round(fit["dn_dc"], 8),
@@ -501,9 +493,7 @@ if __name__ == "__main__":
     raw_results = {}
     with ProcessPoolExecutor(max_workers=N_WORKERS) as executor:
         futures = {executor.submit(process_cell, t): t for t in tasks}
-        with tqdm(
-            total=len(tasks), desc="Fitting models", unit="cell", dynamic_ncols=True
-        ) as pbar:
+        with tqdm(total=len(tasks), desc="Fitting models", unit="cell", dynamic_ncols=True) as pbar:
             for future in as_completed(futures):
                 key, fit, model_source, source_class, source_proteins = future.result()
                 raw_results[key] = (fit, model_source, source_class, source_proteins)
@@ -546,8 +536,7 @@ if __name__ == "__main__":
     all_sources = [raw_results[k][1] for k in raw_results]
     total = len(all_sources)
     counts = {
-        s: all_sources.count(s)
-        for s in ["direct", "class_inferred", "global_average", "no_model"]
+        s: all_sources.count(s) for s in ["direct", "class_inferred", "global_average", "no_model"]
     }
 
     print(f"\nGrid summary ({total} total combinations):")

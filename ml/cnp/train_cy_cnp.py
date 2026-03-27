@@ -547,11 +547,7 @@ def load_and_preprocess(csv_path, save_dir=None):
         return (
             chemical_series.astype(str)
             .str.lower()
-            .map(
-                lambda x: next(
-                    (mw for name, mw in MW_MAP.items() if name in x), default_mw
-                )
-            )
+            .map(lambda x: next((mw for name, mw in MW_MAP.items() if name in x), default_mw))
         )
 
     # 1. Convert everything to mg/mL
@@ -564,9 +560,7 @@ def load_and_preprocess(csv_path, save_dir=None):
     df["Salt_mg_mL"] = (df["Salt_conc"] * salt_mw) / 1000.0
 
     # Excipient (mM -> mg/mL): mM * MW / 1000
-    excipient_mw = get_mw(
-        df["Excipient_type"], default_mw=150.0
-    )  # generic amino acid guess
+    excipient_mw = get_mw(df["Excipient_type"], default_mw=150.0)  # generic amino acid guess
     df["Excipient_mg_mL"] = (df["Excipient_conc"] * excipient_mw) / 1000.0
     df["Surfactant_mg_mL"] = df["Surfactant_conc"] * 10.0
     df["log_conc"] = np.log1p(df["Protein_conc"])
@@ -595,9 +589,7 @@ def load_and_preprocess(csv_path, save_dir=None):
     df["Phi_Total"] = (
         df["Phi_Protein"] + df["Phi_Stabilizer"] + df["Phi_Salt"] + df["Phi_Excipient"]
     )
-    df["Effective_Protein_Fraction"] = df["Protein_conc"] / df[
-        "Total_Solute_Mass"
-    ].replace(0, 1e-6)
+    df["Effective_Protein_Fraction"] = df["Protein_conc"] / df["Total_Solute_Mass"].replace(0, 1e-6)
     PHI_MAX = 0.65
     safe_phi = df["Phi_Total"].clip(upper=PHI_MAX - 0.01)
     df["KD_Asymptote"] = (1.0 - (safe_phi / PHI_MAX)) ** -2.0
@@ -693,9 +685,7 @@ def load_and_preprocess(csv_path, save_dir=None):
                 priors[f"prior_{t_key}"] = regime_dict.get(t_key, 0)
 
             for target_ing, threshold in CONC_THRESHOLDS.items():
-                match = (target_ing in ing_name) or (
-                    target_ing == "arginine" and "arg" in ing_name
-                )
+                match = (target_ing in ing_name) or (target_ing == "arginine" and "arg" in ing_name)
                 if match:
                     concs[f"{target_ing}_low"] = min(ing_conc, threshold)
                     concs[f"{target_ing}_high"] = max(ing_conc - threshold, 0)
@@ -788,9 +778,7 @@ def load_and_preprocess(csv_path, save_dir=None):
 
         dense_x_list = []
         for j in range(len(interval_endpoints) - 1):
-            interval_pts = np.linspace(
-                interval_endpoints[j], interval_endpoints[j + 1], 10
-            )
+            interval_pts = np.linspace(interval_endpoints[j], interval_endpoints[j + 1], 10)
             if j < len(interval_endpoints) - 2:
                 dense_x_list.append(interval_pts[:-1])
             else:
@@ -930,9 +918,7 @@ def train_epoch(
         # unconditionally applying it to all groups (including "none").
         r_current = model.encode_memory(ctx_A)
         r_norm_current = torch.norm(r_current, p=2, dim=-1)
-        norm_penalty = torch.mean(
-            torch.clamp(r_norm_current - norm_target, min=0.0) ** 2
-        )
+        norm_penalty = torch.mean(torch.clamp(r_norm_current - norm_target, min=0.0) ** 2)
 
         # ---- Triplet loss & Consistency Loss ----
         triplet_loss = torch.tensor(0.0, device=device)
@@ -976,9 +962,7 @@ def train_epoch(
             task_B = groups[prot_B]
             idx_B = np.random.permutation(len(task_B))
             n_ctx_B = np.random.randint(1, min(8, len(idx_B)))
-            r_neg = model.encode_memory(
-                _build_ctx_tensor(task_B, idx_B[:n_ctx_B], device)
-            )
+            r_neg = model.encode_memory(_build_ctx_tensor(task_B, idx_B[:n_ctx_B], device))
 
             d_pos = torch.sum((r_anchor - r_pos) ** 2, dim=-1).sqrt()
             d_neg = torch.sum((r_anchor - r_neg) ** 2, dim=-1).sqrt()
@@ -1056,9 +1040,7 @@ def validate(model, samples, device, n_repeats=3):
                     s = task_samples[i]
                     tgt_shear.append(s["points"][:, [0]])
                     tgt_y.append(s["points"][:, [1]])
-                    tgt_stat.append(
-                        s["static"].unsqueeze(0).repeat(s["points"].shape[0], 1)
-                    )
+                    tgt_stat.append(s["static"].unsqueeze(0).repeat(s["points"].shape[0], 1))
 
                 q_x = torch.cat(tgt_shear, dim=0).unsqueeze(0).to(device)
                 q_stat = torch.cat(tgt_stat, dim=0).unsqueeze(0).to(device)
@@ -1099,7 +1081,7 @@ def log_latent_variance(model, samples, device):
             if len(task_samples) < 2:
                 continue
             # [FIX-B] Skip non-protein groups — their easy separability
-            # was inflating the v2 separation ratio to a false 18×
+            # was inflating the v2 separation ratio to a false 18x
             if prot in NON_PROTEIN_GROUPS:
                 continue
             idx = np.random.permutation(len(task_samples))[: min(5, len(task_samples))]
@@ -1147,14 +1129,10 @@ def objective_cv(trial, samples, static_dim, device):
             continue
 
         model = CrossSampleCNP(static_dim, hidden_dim, latent_dim, dropout).to(device)
-        optimizer = torch.optim.AdamW(
-            model.parameters(), lr=lr, weight_decay=weight_decay
-        )
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
         for epoch in range(40):
-            train_loss, _ = train_epoch(
-                model, train_fold, optimizer, device, iterations=50
-            )
+            train_loss, _ = train_epoch(model, train_fold, optimizer, device, iterations=50)
             val_loss = validate(model, val_fold, device, n_repeats=2)
             trial.report(val_loss, fold_idx * 40 + epoch)
             if trial.should_prune():
@@ -1296,27 +1274,19 @@ if __name__ == "__main__":
             latent_var = log_latent_variance(final_model, final_train_set, device)
 
             # [FIX-PRIORITY 2] Track both Pembro Norm AND Intra-Group Spread
-            pembro_samples = [
-                s for s in final_train_set if s["group"] == "pembrolizumab"
-            ]
+            pembro_samples = [s for s in final_train_set if s["group"] == "pembrolizumab"]
             pembro_norm_str = "N/A"
             pembro_spread_str = "N/A"
 
             if len(pembro_samples) > 1:
                 final_model.eval()
                 with torch.no_grad():
-                    idx = np.random.permutation(len(pembro_samples))[
-                        : min(10, len(pembro_samples))
-                    ]
+                    idx = np.random.permutation(len(pembro_samples))[: min(10, len(pembro_samples))]
                     r_list = []
                     for i in idx:
                         s = pembro_samples[i]
                         stat = s["static"].unsqueeze(0).repeat(s["points"].shape[0], 1)
-                        ctx_item = (
-                            torch.cat([s["points"], stat], dim=1)
-                            .unsqueeze(0)
-                            .to(device)
-                        )
+                        ctx_item = torch.cat([s["points"], stat], dim=1).unsqueeze(0).to(device)
                         r_list.append(final_model.encode_memory(ctx_item))
 
                     if r_list:
@@ -1328,9 +1298,7 @@ if __name__ == "__main__":
                         dists = []
                         for i in range(len(r_pembro)):
                             for j in range(i + 1, len(r_pembro)):
-                                dists.append(
-                                    torch.norm(r_pembro[i] - r_pembro[j], p=2).item()
-                                )
+                                dists.append(torch.norm(r_pembro[i] - r_pembro[j], p=2).item())
                         if dists:
                             pembro_spread = np.mean(dists)
                             pembro_spread_str = f"{pembro_spread:.3f}"

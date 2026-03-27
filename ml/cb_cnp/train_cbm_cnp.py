@@ -42,10 +42,10 @@ NON_PROTEIN_GROUPS = {"none"}
 # ==========================================
 # Each entry: (concept_name, proxy_column, sign, activation)
 #   proxy_column: column in df AFTER feature engineering but BEFORE scaling
-#   sign: +1 if high proxy value → concept activation should be positive
-#         -1 if high proxy value → concept activation should be negative
-#   activation: "tanh" → [-1, 1] for concepts that can be pos or neg
-#               "sigmoid" → [0, 1] for inherently non-negative concepts
+#   sign: +1 if high proxy value -> concept activation should be positive
+#         -1 if high proxy value -> concept activation should be negative
+#   activation: "tanh" -> [-1, 1] for concepts that can be pos or neg
+#               "sigmoid" -> [0, 1] for inherently non-negative concepts
 #
 # [v3] Changes from v2:
 #   - Per-concept activation functions (tanh vs sigmoid) based on physics.
@@ -58,26 +58,26 @@ NON_PROTEIN_GROUPS = {"none"}
 # Physical interpretation of each concept:
 #   self_interaction    — concentration-dependent attractive self-interaction
 #   hydrophobicity      — concentration-enhanced hydrophobic patch association
-#   charge_environment  — charge–ionic strength interplay driving repulsion
+#   charge_environment  — charge-ionic strength interplay driving repulsion
 #   ionic_screening     — Debye screening of protein-protein charge repulsion
 #   crowding            — macromolecular crowding / volume exclusion effects
 #   nonlinear_conc      — non-linear concentration effect (approach to jamming)
-#   cosolute_interaction— concentration × stabilizer cross-term
+#   cosolute_interaction— concentration x stabilizer cross-term
 #   cosolute_protection — cosolute-mediated steric/entropic viscosity reduction
 #
-# These are SOFT priors. lambda_concept_sup is annealed from ~0.3 → ~0.01
+# These are SOFT priors. lambda_concept_sup is annealed from ~0.3 -> ~0.01
 # so the viscosity MSE signal can override the proxy when the data warrants it.
 
 CONCEPT_DEFS = [
     # --- v3: replaced pass-through proxies with interaction terms ---
     # Old: kP alone (r>0.99, just memorized the feature)
-    # New: kP × Protein_conc — captures concentration-dependent self-interaction
-    ("self_interaction", "conc_x_kP", -1, "tanh"),  # attractive/repulsive → signed
+    # New: kP x Protein_conc — captures concentration-dependent self-interaction
+    ("self_interaction", "conc_x_kP", -1, "tanh"),  # attractive/repulsive -> signed
     # Old: HCI alone (r>0.99, pass-through)
-    # New: HCI × Protein_conc — hydrophobic association scales with crowding
+    # New: HCI x Protein_conc — hydrophobic association scales with crowding
     ("hydrophobicity", "conc_x_HCI", +1, "sigmoid"),  # non-negative association
     # Old: C_Class alone (r>0.99, pass-through)
-    # New: C_Class × sqrt(Ionic_Strength) — charge-screening interplay
+    # New: C_Class x sqrt(Ionic_Strength) — charge-screening interplay
     ("charge_environment", "charge_x_ionic", +1, "tanh"),  # can be pos or neg
     # --- Moderate proxy (r=0.51, keep) ---
     ("ionic_screening", "Ionic_Strength_Proxy", +1, "sigmoid"),  # non-negative screening
@@ -160,12 +160,12 @@ class ConceptBottleneckCNP(nn.Module):
 
     Data flow:
         context_tensor
-            → encoder (2 + static_dim → hidden_dim → latent_dim)
-            → AttentionPool → r  [B, latent_dim]
-            → concept_proj → per-concept activation → c_raw  [B, n_concepts]
-            → concept_gate (sigmoid) → c = c_raw * gate  [B, n_concepts]
-            → decoder (1 + static_dim + n_concepts → hidden_dim → 1)
-            → log-viscosity prediction
+            -> encoder (2 + static_dim -> hidden_dim -> latent_dim)
+            -> AttentionPool -> r  [B, latent_dim]
+            -> concept_proj -> per-concept activation -> c_raw  [B, n_concepts]
+            -> concept_gate (sigmoid) -> c = c_raw * gate  [B, n_concepts]
+            -> decoder (1 + static_dim + n_concepts -> hidden_dim -> 1)
+            -> log-viscosity prediction
 
     [v3] Changes:
       - Per-concept activation: tanh for signed concepts, sigmoid for non-negative.
@@ -185,7 +185,7 @@ class ConceptBottleneckCNP(nn.Module):
     free/latent — the model can use them for unexplained variance.
 
     encode_memory() returns c (concept vector) to preserve the
-    encode_memory → decode_from_memory API used by inference_cnp.py.
+    encode_memory -> decode_from_memory API used by inference_cnp.py.
     Use encode_latent() when you need r for diagnostic purposes.
     """
 
@@ -228,7 +228,7 @@ class ConceptBottleneckCNP(nn.Module):
         )
         self.pooler = AttentionPool(latent_dim)
 
-        # [CBM-1] Concept projection: linear → per-concept activation
+        # [CBM-1] Concept projection: linear -> per-concept activation
         self.concept_proj = nn.Linear(latent_dim, n_concepts)
 
         # [v4] Learned concept gates initialization:
@@ -270,7 +270,7 @@ class ConceptBottleneckCNP(nn.Module):
 
     def _project_concepts(self, r):
         """
-        r [B, latent_dim] → c [B, n_concepts].
+        r [B, latent_dim] -> c [B, n_concepts].
         [v3] Per-concept activation + learned gating.
         """
         raw = self.concept_proj(r)
@@ -749,7 +749,7 @@ def load_and_preprocess(csv_path, save_dir=None):
     df["KD_Asymptote"] = (1.0 - (safe_phi / PHI_MAX)) ** -2.0
     df["Exp_Crowding"] = np.exp(safe_phi * 2.5)
     df["Ionic_Strength_Proxy"] = np.sqrt(df["Salt_conc"] / 1000.0)
-    # [v3] Charge × ionic strength interaction for charge_environment concept
+    # [v3] Charge x ionic strength interaction for charge_environment concept
     df["charge_x_ionic"] = df["C_Class"] * df["Ionic_Strength_Proxy"]
 
     engineered_cols = [
@@ -766,7 +766,7 @@ def load_and_preprocess(csv_path, save_dir=None):
         "Phi_Protein",
         "Phi_Stabilizer",
         "Phi_Total",
-        "charge_x_ionic",  # [v3] C_Class × sqrt(ionic_strength) interaction
+        "charge_x_ionic",  # [v3] C_Class x sqrt(ionic_strength) interaction
     ]
 
     def process_row_features(row):
@@ -854,8 +854,8 @@ def load_and_preprocess(csv_path, save_dir=None):
     # ---------------------------------------------------------------
     # [CBM-2] Extract concept proxy values BEFORE scaling.
     # [v3] Per-concept normalization respecting activation type:
-    #   tanh concepts: z-score then tanh(z/2) → [-1, 1]
-    #   sigmoid concepts: z-score then sigmoid(z) → [0, 1]
+    #   tanh concepts: z-score then tanh(z/2) -> [-1, 1]
+    #   sigmoid concepts: z-score then sigmoid(z) -> [0, 1]
     # ---------------------------------------------------------------
     proxy_cols = [cd[1] for cd in CONCEPT_DEFS]
     proxy_signs = np.array([cd[2] for cd in CONCEPT_DEFS], dtype=float)
@@ -865,7 +865,7 @@ def load_and_preprocess(csv_path, save_dir=None):
     for j, col in enumerate(proxy_cols):
         if col in df.columns:
             concept_raw[:, j] = df[col].fillna(0.0).values.astype(float)
-    # Apply sign convention: negative sign means high value → negative concept
+    # Apply sign convention: negative sign means high value -> negative concept
     concept_raw_signed = concept_raw * proxy_signs
 
     c_mean = concept_raw_signed.mean(axis=0)
@@ -876,10 +876,10 @@ def load_and_preprocess(csv_path, save_dir=None):
     concept_normalized = np.zeros_like(z_scored)
     for j, act_type in enumerate(proxy_activations):
         if act_type == "sigmoid":
-            # sigmoid(z) → [0, 1], matching the sigmoid activation in the model
+            # sigmoid(z) -> [0, 1], matching the sigmoid activation in the model
             concept_normalized[:, j] = 1.0 / (1.0 + np.exp(-z_scored[:, j]))
         else:
-            # tanh(z/2) → [-1, 1], matching the tanh activation in the model
+            # tanh(z/2) -> [-1, 1], matching the tanh activation in the model
             concept_normalized[:, j] = np.tanh(z_scored[:, j] / 2.0)
 
     if save_dir:
@@ -1054,7 +1054,7 @@ def train_epoch(
     device,
     iterations=100,
     group_weights=None,
-    lambda_triplet=0.10,  # [v2] Reduced from 0.30 → free latents were saturating
+    lambda_triplet=0.10,  # [v2] Reduced from 0.30 -> free latents were saturating
     lambda_consistency=0.10,  # [FIX-4]
     lambda_utility=2.5,  # [FIX-5]
     triplet_margin=3.0,  # [FIX-3]
@@ -1212,7 +1212,7 @@ def train_epoch(
             r_anchor = _encode_latent(model, ctx_anchor)
             r_pos = _encode_latent(model, ctx_pos)
 
-            # [CBM-4] Concept consistency: same protein → similar concept activations
+            # [CBM-4] Concept consistency: same protein -> similar concept activations
             # [v3] Uses MSE instead of cosine — consistent with proxy supervision metric.
             if is_cbm:
                 c_anchor = model.encode_memory(ctx_anchor)
@@ -1462,11 +1462,11 @@ def run_concept_intervention_demo(
     save_dir,
 ):
     """
-    [CBM-5] [v3] Sweep each concept independently from min → max activation and
+    [CBM-5] [v3] Sweep each concept independently from min -> max activation and
     record the mean change in predicted log-viscosity at MULTIPLE shear rates.
 
     For each protein group:
-      - Encode group context → baseline concept vector c
+      - Encode group context -> baseline concept vector c
       - For each concept i: clamp c_i to sweep values (respecting activation type)
       - Report Δlog-viscosity relative to baseline at each shear rate
 
@@ -1563,7 +1563,7 @@ def run_concept_intervention_demo(
     print(f"Concept intervention results saved to {save_path}")
 
     # [v3] Print per-shear sensitivity summary
-    print("\nMean |Δlog-visc| per concept × shear rate (intervention sensitivity):")
+    print("\nMean |Δlog-visc| per concept x shear rate (intervention sensitivity):")
     pivot = (
         df_int.groupby(["Concept", "Shear_rate"])["Delta_log_visc"]
         .apply(lambda x: x.abs().mean())
@@ -1628,7 +1628,7 @@ def objective_cv(trial, samples, static_dim, device):
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
         for epoch in range(40):
-            # [v3] Anneal concept supervision: cosine from lambda_concept_sup → 0.01
+            # [v3] Anneal concept supervision: cosine from lambda_concept_sup -> 0.01
             anneal_frac = epoch / 40.0
             annealed_sup = lambda_concept_sup * (
                 0.1 + 0.9 * 0.5 * (1 + np.cos(np.pi * anneal_frac))
@@ -1723,7 +1723,7 @@ if __name__ == "__main__":
     # ==========================================
     print(f"\nRetraining final ConceptBottleneckCNP " f"(n_concepts={n_concepts}) on ALL data...")
     print(
-        f"Concept supervision annealing: {lambda_sup_init:.3f} → {lambda_sup_min:.3f} "
+        f"Concept supervision annealing: {lambda_sup_init:.3f} -> {lambda_sup_min:.3f} "
         f"over {sup_anneal_epochs} epochs (cosine)"
     )
 

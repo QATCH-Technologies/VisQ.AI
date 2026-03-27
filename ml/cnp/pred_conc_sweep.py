@@ -92,7 +92,7 @@ BUFFER_CONDITIONS = dict(
 
 # Concentration sweep (mg/mL).
 # [FIX-A] Single uniform grid replaces the previous four-segment concatenation.
-# The old approach created density seams at 20→25, 100→105, and 200→210 mg/mL:
+# The old approach created density seams at 20->25, 100->105, and 200->210 mg/mL:
 # every feature that is a nonlinear function of concentration (conc_sq,
 # Phi_Protein, log_conc, KD_Asymptote) changes slope rate at each boundary,
 # producing decoder kinks that are visible as bumps on the log-scale plot.
@@ -472,9 +472,7 @@ def export_raw_data(
 ) -> None:
     df = pd.DataFrame(all_records)
     # Sort for readability.
-    df = df.sort_values(["Protein", "Shear_Rate_s-1", "Protein_Conc_mgmL"]).reset_index(
-        drop=True
-    )
+    df = df.sort_values(["Protein", "Shear_Rate_s-1", "Protein_Conc_mgmL"]).reset_index(drop=True)
     df.to_csv(out_path, index=False, float_format="%.4f")
     print(f"  Saved: {out_path}  ({len(df)} rows)")
 
@@ -551,9 +549,7 @@ def main(model_dir: str, data_path: str) -> None:
         for sc in SHEAR_COLS:
             pred_col = f"Pred_{sc}"
             pred_visc[sc][0] = (
-                zero_result[pred_col].values[0]
-                if pred_col in zero_result.columns
-                else np.nan
+                zero_result[pred_col].values[0] if pred_col in zero_result.columns else np.nan
             )
 
         # --- Group sweep concs into blocks sharing the same local context ---
@@ -616,7 +612,7 @@ def main(model_dir: str, data_path: str) -> None:
             f"({CONC_POINTS[0]:.0f}-{CONC_POINTS[-1]:.0f} mg/mL)"
         )
 
-        # ── Collect raw records (one per conc × shear) ──
+        # ── Collect raw records (one per conc x shear) ──
         for shear_col, shear_rate in zip(SHEAR_COLS, SHEAR_RATES):
             visc = pred_visc[shear_col]
             for i, conc in enumerate(CONC_POINTS):
@@ -634,17 +630,12 @@ def main(model_dir: str, data_path: str) -> None:
                 )
 
         # Print preview table.
-        print(
-            f"\n  {'Conc (mg/mL)':>14}  " + "  ".join(f"{s:>14}" for s in SHEAR_LABELS)
-        )
+        print(f"\n  {'Conc (mg/mL)':>14}  " + "  ".join(f"{s:>14}" for s in SHEAR_LABELS))
         print("  " + "-" * (16 + 16 * 5))
         for pc in [0, 5, 25, 50, 100, 150, 200, 250, 300, 330]:
             idx = np.argmin(np.abs(CONC_POINTS - pc))
             row_vals = [pred_visc[sc][idx] for sc in SHEAR_COLS]
-            print(
-                f"  {CONC_POINTS[idx]:>14.1f}  "
-                + "  ".join(f"{v:>14.2f}" for v in row_vals)
-            )
+            print(f"  {CONC_POINTS[idx]:>14.1f}  " + "  ".join(f"{v:>14.2f}" for v in row_vals))
 
         # ── Isolated actual data (Histidine 15 mM, no additives) ──
         isolated = filter_isolated_samples(train_df, protein_name)

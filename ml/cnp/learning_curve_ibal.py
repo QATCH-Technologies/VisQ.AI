@@ -10,7 +10,7 @@ Changes from the original convergence_plot_ibal.py:
           The new learn() is encode-only — model weights are never modified,
           so the baseline snapshot only needs to preserve memory_vector and
           context_t. There is no need to save/restore the full state_dict
-          between steps. This also makes each replay step ~10× faster.
+          between steps. This also makes each replay step ~10x faster.
 
   [FIX-2] learn() call updated to encode-only multi-draw API.
           Steps and LR config constants are kept for backward compatibility
@@ -126,9 +126,7 @@ def prepare_df(df: pd.DataFrame, drop_bad_rows: bool = False) -> pd.DataFrame:
             if vc in df.columns:
                 visc_mask &= df[vc].notna() & (df[vc] > 0)
         crit = [c for c in ["MW", "Protein_conc", "kP"] if c in df.columns]
-        num_mask = (
-            df[crit].notna().all(axis=1) if crit else pd.Series(True, index=df.index)
-        )
+        num_mask = df[crit].notna().all(axis=1) if crit else pd.Series(True, index=df.index)
         df = df[visc_mask & num_mask].reset_index(drop=True)
     return df
 
@@ -139,13 +137,9 @@ def save_state(predictor) -> dict:
     """Snapshot only the latent memory state (weights are immutable)."""
     return {
         "memory_vector": (
-            predictor.memory_vector.clone()
-            if predictor.memory_vector is not None
-            else None
+            predictor.memory_vector.clone() if predictor.memory_vector is not None else None
         ),
-        "context_t": (
-            predictor.context_t.clone() if predictor.context_t is not None else None
-        ),
+        "context_t": (predictor.context_t.clone() if predictor.context_t is not None else None),
     }
 
 
@@ -154,9 +148,7 @@ def restore_state(predictor, snap: dict):
     predictor.memory_vector = (
         snap["memory_vector"].clone() if snap["memory_vector"] is not None else None
     )
-    predictor.context_t = (
-        snap["context_t"].clone() if snap["context_t"] is not None else None
-    )
+    predictor.context_t = snap["context_t"].clone() if snap["context_t"] is not None else None
 
 
 def reset_memory(predictor):
@@ -463,9 +455,7 @@ def _annotate_best(ax, x_arr, y_arr, fmt, color, offset_frac=0.06):
     )
 
 
-def find_convergence_step(
-    values: np.ndarray, window: int = 3, threshold: float = 0.005
-):
+def find_convergence_step(values: np.ndarray, window: int = 3, threshold: float = 0.005):
     for i in range(window, len(values)):
         if np.all(np.abs(np.diff(values[i - window : i])) < threshold):
             return i - window
@@ -491,10 +481,7 @@ def _annotate_convergence(ax, x_arr, y_arr, c_idx, color=C_ORANGE):
 def _shared_x_labels(ax, sx, labels):
     ax.set_xticks(sx)
     ax.set_xticklabels(
-        [
-            f"{n}\n({sid})" if sid != "None" else "0\n(0-shot)"
-            for n, sid in zip(sx, labels)
-        ],
+        [f"{n}\n({sid})" if sid != "None" else "0\n(0-shot)" for n, sid in zip(sx, labels)],
         fontsize=11,
         color=C_MUTED,
     )
@@ -534,13 +521,9 @@ def plot_convergence(df: pd.DataFrame, save_dir: str, prefix: str = ""):
     _style_axis(ax1)
 
     ax1.plot(sx, smae, color=C_DEEP_BLUE, lw=2.4, zorder=4, solid_capstyle="round")
-    ax1.scatter(
-        sx, smae, color=C_DEEP_BLUE, s=38, zorder=5, edgecolors=C_WHITE, linewidths=1.1
-    )
+    ax1.scatter(sx, smae, color=C_DEEP_BLUE, s=38, zorder=5, edgecolors=C_WHITE, linewidths=1.1)
     ax1.fill_between(sx, smae, alpha=0.10, color=C_CYAN_PALE, zorder=1)
-    ax1.set_xlabel(
-        "Samples added to context  (n)", fontsize=14, labelpad=10, color=C_TEXT
-    )
+    ax1.set_xlabel("Samples added to context  (n)", fontsize=14, labelpad=10, color=C_TEXT)
     ax1.set_ylabel("MAE  (cP)", fontsize=14, labelpad=10, color=C_DEEP_BLUE)
     ax1.tick_params(axis="y", labelcolor=C_DEEP_BLUE, colors=C_DEEP_BLUE, labelsize=12)
     ax1.spines["left"].set_edgecolor(C_DEEP_BLUE)
@@ -569,9 +552,7 @@ def plot_convergence(df: pd.DataFrame, save_dir: str, prefix: str = ""):
     )
     ax2.fill_between(sx, srmse, alpha=0.06, color=C_BRIGHT_BLUE, zorder=1)
     ax2.set_ylabel("RMSE  (cP)", fontsize=14, labelpad=10, color=C_BRIGHT_BLUE)
-    ax2.tick_params(
-        axis="y", labelcolor=C_BRIGHT_BLUE, colors=C_BRIGHT_BLUE, labelsize=12
-    )
+    ax2.tick_params(axis="y", labelcolor=C_BRIGHT_BLUE, colors=C_BRIGHT_BLUE, labelsize=12)
     ax2.spines["right"].set_visible(True)
     ax2.spines["right"].set_edgecolor(C_BRIGHT_BLUE)
     ax2.spines["right"].set_linewidth(1.2)
@@ -652,19 +633,13 @@ def plot_convergence(df: pd.DataFrame, save_dir: str, prefix: str = ""):
     ]
     for ax, vals_arr, mlabel, unit, clr, c_idx in panel_cfg:
         _style_axis(ax)
-        ax.axhline(
-            np.nanmin(vals_arr), color=clr, lw=0.8, ls="--", alpha=0.35, zorder=2
-        )
+        ax.axhline(np.nanmin(vals_arr), color=clr, lw=0.8, ls="--", alpha=0.35, zorder=2)
         ax.fill_between(sx, vals_arr, alpha=0.11, color=C_CYAN_PALE, zorder=1)
         ax.plot(sx, vals_arr, color=clr, lw=2.5, zorder=4, solid_capstyle="round")
-        ax.scatter(
-            sx, vals_arr, color=clr, s=42, zorder=5, edgecolors=C_WHITE, linewidths=1.2
-        )
+        ax.scatter(sx, vals_arr, color=clr, s=42, zorder=5, edgecolors=C_WHITE, linewidths=1.2)
         _annotate_best(ax, sx, vals_arr, f"  {{:.3f}} {unit}", clr)
         _annotate_convergence(ax, sx, vals_arr, c_idx)
-        ax.set_xlabel(
-            "Samples added to context  (n)", fontsize=13, labelpad=9, color=C_TEXT
-        )
+        ax.set_xlabel("Samples added to context  (n)", fontsize=13, labelpad=9, color=C_TEXT)
         ax.set_ylabel(f"{mlabel}  ({unit})", fontsize=13, labelpad=9, color=clr)
         ax.tick_params(axis="y", labelcolor=clr, labelsize=12)
         ax.spines["left"].set_edgecolor(clr)
@@ -716,9 +691,7 @@ def plot_mape(df: pd.DataFrame, save_dir: str, prefix: str = ""):
     _annotate_best(ax, sx, smape, "  {:.2f}%", clr)
     _annotate_convergence(ax, sx, smape, conv_mape, color=C_ORANGE)
 
-    ax.set_xlabel(
-        "Samples added to context  (n)", fontsize=13, labelpad=9, color=C_TEXT
-    )
+    ax.set_xlabel("Samples added to context  (n)", fontsize=13, labelpad=9, color=C_TEXT)
     ax.set_ylabel("MAPE  (%)", fontsize=13, labelpad=9, color=clr)
     ax.tick_params(axis="y", labelcolor=clr, labelsize=12)
     ax.spines["left"].set_edgecolor(clr)
@@ -759,9 +732,9 @@ def plot_log_convergence(df: pd.DataFrame, save_dir: str, prefix: str = ""):
     and 0.232 bootstrap RMSE from evaluation.
 
     std_log10 interpretation:
-        0.05 → ±12% factor uncertainty
-        0.10 → ±26% factor uncertainty
-        0.20 → ±58% factor uncertainty
+        0.05 -> ±12% factor uncertainty
+        0.10 -> ±26% factor uncertainty
+        0.20 -> ±58% factor uncertainty
     """
     apply_base_style()
     os.makedirs(save_dir, exist_ok=True)
@@ -817,9 +790,7 @@ def plot_log_convergence(df: pd.DataFrame, save_dir: str, prefix: str = ""):
         linewidths=1.2,
         marker="s",
     )
-    ax1.axhline(
-        np.nanmin(srmse_log), color=clr_rmse, lw=0.8, ls="--", alpha=0.35, zorder=2
-    )
+    ax1.axhline(np.nanmin(srmse_log), color=clr_rmse, lw=0.8, ls="--", alpha=0.35, zorder=2)
     _annotate_best(ax1, sx, srmse_log, "  {:.4f}", clr_rmse)
     _annotate_convergence(ax1, sx, srmse_log, conv_rmse_log)
 
@@ -852,18 +823,14 @@ def plot_log_convergence(df: pd.DataFrame, save_dir: str, prefix: str = ""):
             marker="D",
         )
         _annotate_best(ax2, sx, smae_log, "  {:.4f}", clr_mae, offset_frac=0.04)
-        ax2.set_ylabel(
-            "MAE  (log₁₀ viscosity)", fontsize=14, labelpad=10, color=clr_mae
-        )
+        ax2.set_ylabel("MAE  (log₁₀ viscosity)", fontsize=14, labelpad=10, color=clr_mae)
         ax2.tick_params(axis="y", labelcolor=clr_mae, colors=clr_mae, labelsize=12)
         ax2.spines["right"].set_visible(True)
         ax2.spines["right"].set_edgecolor(clr_mae)
         ax2.spines["right"].set_linewidth(1.2)
         ax2.spines["top"].set_visible(False)
 
-    ax1.set_xlabel(
-        "Samples added to context  (n)", fontsize=14, labelpad=10, color=C_TEXT
-    )
+    ax1.set_xlabel("Samples added to context  (n)", fontsize=14, labelpad=10, color=C_TEXT)
     _shared_x_labels(ax1, sx, labels)
 
     # ── Reference line: benchmark LOO RMSE ──────────────────────────────────
@@ -908,9 +875,7 @@ def plot_log_convergence(df: pd.DataFrame, save_dir: str, prefix: str = ""):
             ls=(0, (6, 2)),
             label="MAE (log₁₀)",
         ),
-        plt.Rectangle(
-            (0, 0), 1, 1, fc=clr_unc, alpha=0.4, label="±1σ context uncertainty"
-        ),
+        plt.Rectangle((0, 0), 1, 1, fc=clr_unc, alpha=0.4, label="±1σ context uncertainty"),
         Line2D(
             [0],
             [0],
@@ -923,9 +888,7 @@ def plot_log_convergence(df: pd.DataFrame, save_dir: str, prefix: str = ""):
             label="Best value",
         ),
         Line2D([0], [0], color=C_ORANGE, lw=1.5, ls="--", label="Plateau onset"),
-        Line2D(
-            [0], [0], color=C_ORANGE, lw=1.2, ls=":", alpha=0.8, label="LOO baseline"
-        ),
+        Line2D([0], [0], color=C_ORANGE, lw=1.2, ls=":", alpha=0.8, label="LOO baseline"),
     ]
     ax1.legend(
         handles=legend_elements,

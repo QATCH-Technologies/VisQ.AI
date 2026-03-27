@@ -4,7 +4,7 @@ constants.py
 Domain constants shared across TNP training, data pipeline, and inference.
 
 Includes:
-  - PROTEIN_CLASS_MAP     : protein name → class string
+  - PROTEIN_CLASS_MAP     : protein name -> class string
   - NON_PROTEIN_GROUPS    : groups excluded from latent-space diagnostics
   - CONCEPT_DEFS          : CBM proxy definitions (retained for cross-compatibility)
   - CONC_THRESHOLDS       : concentration split thresholds per excipient
@@ -68,7 +68,7 @@ CONC_THRESHOLDS = {
 
 # ---------------------------------------------------------------------------
 # Regime-aware excipient sign priors
-# Keys: protein class → pH regime → excipient → prior sign {-2, -1, 0, 1}
+# Keys: protein class -> pH regime -> excipient -> prior sign {-2, -1, 0, 1}
 # ---------------------------------------------------------------------------
 
 PRIOR_TABLE = {
