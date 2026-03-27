@@ -130,6 +130,7 @@ if __name__ == "__main__":
         "lambda_triplet": 0.10,
         "lambda_decov": 0.03,
         "lambda_sparsity": 0.05,
+        "lambda_concept_pred": 0.30,  # concept decoder co-training weight
         "sup_anneal_epochs": 120,
         "epochs": 150,
         "meta_holdout_prob": 0.20,
@@ -263,6 +264,7 @@ if __name__ == "__main__":
             lambda_triplet=best_params.get("lambda_triplet", 0.10),
             lambda_decov=best_params.get("lambda_decov", 0.03),
             lambda_sparsity=best_params.get("lambda_sparsity", 0.01),
+            lambda_concept_pred=best_params.get("lambda_concept_pred", 0.30),
             meta_holdout_prob=best_params.get("meta_holdout_prob", 0.20),
         )
 
@@ -337,6 +339,7 @@ if __name__ == "__main__":
             "state_dict": final_model.state_dict(),
             "config": best_params,
             "static_dim": static_dim,
+            "latent_dim": best_params["latent_dim"],
             "n_concepts": n_concepts,
             "concept_names": final_model.concept_names,
             "concept_activations": final_model._concept_activations,
@@ -425,7 +428,7 @@ if __name__ == "__main__":
                     continue
                 stat = s["static"].unsqueeze(0).repeat(s["points"].shape[0], 1)
                 ctx_single = torch.cat([s["points"], stat], dim=1).unsqueeze(0).to(device)
-                c_single = final_model.encode_memory(ctx_single).squeeze(0).cpu().numpy()
+                c_single = final_model.encode_concepts(ctx_single).squeeze(0).cpu().numpy()
                 per_sample_concepts.append(c_single[:N_CONCEPTS_SUPERVISED])
                 per_sample_proxies.append(s["concept_targets"].numpy())
 
@@ -447,7 +450,7 @@ if __name__ == "__main__":
                 for s in samples:
                     stat = s["static"].unsqueeze(0).repeat(s["points"].shape[0], 1)
                     ctx_single = torch.cat([s["points"], stat], dim=1).unsqueeze(0).to(device)
-                    c_full = final_model.encode_memory(ctx_single).squeeze(0).cpu().numpy()
+                    c_full = final_model.encode_concepts(ctx_single).squeeze(0).cpu().numpy()
                     free_concepts_all.append(c_full[N_CONCEPTS_SUPERVISED:])
 
             if free_concepts_all:

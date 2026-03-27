@@ -3,25 +3,14 @@ trainer.py
 ==========
 One-epoch training loop and validation for the CBM-CNP pipeline.
 
-Functions
----------
-train_epoch(model, samples, optimizer, device, ...)
-    Run one pass over randomly sampled protein groups, computing and
-    back-propagating all CBM + contrastive losses.
-validate(model, samples, device, n_repeats=3)
-    Compute mean held-out MSE across all protein groups.
-
-Loss components (active when model is ConceptBottleneckCNP)
------------------------------------------------------------
-mse_loss             — primary viscosity prediction loss
-utility_loss         — context must outperform null context (FIX-5)
-norm_penalty         — soft L2-norm penalty on latent r (FIX-NORM)
-concept_sup_loss     — MSE between concept activations and proxy targets (CBM-3)
-decov_loss           — DeCov off-diagonal covariance penalty (v3)
-sparsity_loss        — L1 on concept gate values to close unused dims (v4)
-triplet_loss         — protein-class-aware hard-negative triplet (FIX-3)
-consistency_loss     — cosine similarity within same protein (FIX-4)
-concept_consist_loss — MSE consistency of concept vectors within group (CBM-4)
+Changes from prior version
+--------------------------
+- Static masking reverted to moderate 50%/50% (aggressive 85%/80% crippled
+  the decoder's ability to use static features).
+- Concept consistency loss now uses ``encode_concepts()`` (not ``encode_memory()``
+  which now returns latent r, not concept c).
+- Concept decoder co-training: the lightweight concept decoder receives a
+  small auxiliary loss so it can be used for causal intervention analysis.
 """
 
 from __future__ import annotations
@@ -61,40 +50,18 @@ def train_epoch(
     lambda_concept_consist: float = 0.05,
     lambda_decov: float = 0.03,
     lambda_sparsity: float = 0.01,
+    lambda_concept_pred: float = 0.30,
     meta_holdout_prob: float = 0.20,
     meta_n_ctx_samples: int = 6,
 ) -> tuple[float, dict[str, float]]:
     """
     Train one epoch over randomly sampled protein groups.
 
-    The CBM losses (``concept_sup_loss``, ``decov_loss``, ``sparsity_loss``,
-    ``concept_consist_loss``) activate only when the model is a
-    ``ConceptBottleneckCNP`` and ``concept_targets`` are present in the sample
-    dicts. Plain ``CrossSampleCNP`` training is unaffected.
-
-    ``lambda_concept_sup`` should be passed as the *current annealed value*;
-    the caller is responsible for the cosine annealing schedule.
-
     Parameters
     ----------
-    model : CrossSampleCNP or ConceptBottleneckCNP
-    samples : list[dict]
-        All training samples.
-    optimizer : torch.optim.Optimizer
-    device : torch.device
-    iterations : int
-        Number of random protein-group draws per epoch.
-    group_weights : dict[str, float] | None
-        Per-group sampling weights (updated externally by EMA difficulty weighting).
-    lambda_* : float
-        Loss coefficients — see module docstring for interpretation.
-
-    Returns
-    -------
-    avg_loss : float
-        Mean total loss across all iterations.
-    per_group_mse : dict[str, float]
-        Per-protein-group MSE for EMA difficulty re-weighting.
+    lambda_concept_pred : float
+        Weight for the concept decoder auxiliary prediction loss. Trains
+        the secondary decoder that is used for causal interventions.
     """
     model.train()
     total_loss = 0.0
@@ -120,7 +87,6 @@ def train_epoch(
     group_loss_accum: dict[str, float] = defaultdict(float)
     group_loss_count: dict[str, int] = defaultdict(int)
 
-    # Accumulate concept vectors for epoch-level DeCov estimate
     batch_concepts: list[torch.Tensor] = []
 
     for _ in range(iterations):
@@ -138,15 +104,25 @@ def train_epoch(
         if qx_A is None:
             continue
 
-        # Modified: 85% of time, mask 80% of features
-        if np.random.random() < 0.85:
-            mask = torch.bernoulli(torch.full_like(qstat_A, 0.2))
+        # ---- Static masking (moderate: 50% prob, 50% features) ----
+        if np.random.random() < 0.50:
+            mask = torch.bernoulli(torch.full_like(qstat_A, 0.5))
             qstat_A_in = qstat_A * mask
         else:
             qstat_A_in = qstat_A
 
         pred_A, concepts_A = _forward(model, ctx_A, qx_A, qstat_A_in)
         mse_loss = F.mse_loss(pred_A, qy_A)
+
+        # ---- Concept decoder auxiliary loss ----
+        # Co-train the concept decoder so it can be used for interventions.
+        concept_pred_loss = torch.tensor(0.0, device=device)
+        if is_cbm and concepts_A is not None:
+            # Detach concepts so this loss only trains the concept decoder,
+            # not the encoder/bottleneck (those are trained by main path).
+            c_detached = concepts_A.detach()
+            pred_from_c = model.decode_from_concepts(c_detached, qx_A, qstat_A)
+            concept_pred_loss = F.mse_loss(pred_from_c, qy_A)
 
         # ---- Context utility loss (FIX-5) ----
         with torch.no_grad():
@@ -180,24 +156,17 @@ def train_epoch(
             decov_loss = model.decov_loss(concepts_A)
 
         # ---- L1 sparsity on concept gates (v4) ----
-        # Penalises gate values directly so unused concepts are pushed to 0.
-        # Free latent gates receive heavy sparsity; supervised gates receive a
-        # mild penalty to drop truly uninformative physical proxies.
         sparsity_loss = torch.tensor(0.0, device=device)
         if is_cbm:
             gates = torch.sigmoid(model.concept_gate_logits)
             if model.n_concepts > N_CONCEPTS_SUPERVISED:
                 free_gates = gates[N_CONCEPTS_SUPERVISED:]
                 sup_gates = gates[:N_CONCEPTS_SUPERVISED]
-                # Free gates use a LIGHTER penalty than supervised so they can
-                # open if the decoder finds them useful (Option 5 fix: the
-                # original 1.0x free / 0.1x sup ratio was shutting latent_0
-                # to 0.037 regardless of its potential utility).
                 sparsity_loss = 0.10 * free_gates.abs().mean() + 0.05 * sup_gates.abs().mean()
             else:
                 sparsity_loss = gates.abs().mean()
-        # ---- Triplet (FIX-3) + pre-pooled consistency (FIX-4)
-        #      + concept consistency (CBM-4) ----
+
+        # ---- Triplet (FIX-3) + consistency (FIX-4) + concept consistency (CBM-4) ----
         triplet_loss = torch.tensor(0.0, device=device)
         consistency_loss = torch.tensor(0.0, device=device)
         concept_consist_loss = torch.tensor(0.0, device=device)
@@ -218,11 +187,11 @@ def train_epoch(
             r_anchor = _encode_latent(model, ctx_anchor)
             r_pos = _encode_latent(model, ctx_pos)
 
-            # Concept consistency (CBM-4): same protein -> similar concept activations
-            # Uses MSE to be consistent with proxy supervision metric.
+            # Concept consistency (CBM-4): same protein -> similar concept activations.
+            # Uses encode_concepts (NOT encode_memory, which now returns r).
             if is_cbm:
-                c_anchor = model.encode_memory(ctx_anchor)
-                c_pos = model.encode_memory(ctx_pos)
+                c_anchor = model.encode_concepts(ctx_anchor)
+                c_pos = model.encode_concepts(ctx_pos)
                 concept_consist_loss = F.mse_loss(c_anchor, c_pos)
 
             # Protein-class-aware hard-negative triplet (FIX-3)
@@ -249,18 +218,14 @@ def train_epoch(
             d_pos = torch.sum((r_anchor - r_pos) ** 2, dim=-1).sqrt()
             d_neg = torch.sum((r_anchor - r_neg) ** 2, dim=-1).sqrt()
             triplet_loss = torch.clamp(d_pos - d_neg + triplet_margin, min=0.0).mean()
+
         # ---- Protein-novelty meta-learning (Option 4b) ----
-        # With probability meta_holdout_prob, hold out protein A entirely from
-        # context and predict its samples using a cross-protein context drawn
-        # from other groups. This forces the concept bottleneck to transfer
-        # physics rather than memorise per-protein static features.
         meta_loss = torch.tensor(0.0, device=device)
         if (
             meta_holdout_prob > 0.0
             and np.random.random() < meta_holdout_prob
             and len(all_protein_list) >= 3
         ):
-            # Target: a protein group chosen with difficulty weighting
             if group_weights is not None:
                 raw_w_meta = np.array(
                     [group_weights.get(g, 1.0) for g in all_protein_list], dtype=float
@@ -273,7 +238,6 @@ def train_epoch(
             prot_novel = all_protein_list[meta_anchor_idx]
             task_novel = groups[prot_novel]
 
-            # Context: sample from ALL OTHER protein groups combined
             donor_proteins = [g for g in all_protein_list if g != prot_novel]
             cross_ctx_samples: list[dict] = []
             for dp in donor_proteins:
@@ -286,12 +250,12 @@ def train_epoch(
                 cross_idx = np.arange(len(cross_ctx_samples))
                 ctx_cross = _build_ctx_tensor(cross_ctx_samples, cross_idx, device)
 
-                # Predict the novel protein's held-out targets from cross-protein context
                 novel_idx = np.random.permutation(len(task_novel))
                 qx_novel, qstat_novel, qy_novel = _build_tgt_tensors(task_novel, novel_idx, device)
                 if qx_novel is not None:
                     pred_novel, _ = _forward(model, ctx_cross, qx_novel, qstat_novel)
                     meta_loss = F.mse_loss(pred_novel, qy_novel)
+
         # ---- Combined loss ----
         loss = (
             mse_loss
@@ -303,6 +267,7 @@ def train_epoch(
             + lambda_concept_consist * concept_consist_loss
             + lambda_decov * decov_loss
             + lambda_sparsity * sparsity_loss
+            + lambda_concept_pred * concept_pred_loss
             + meta_loss
         )
 
@@ -341,22 +306,6 @@ def validate(
 ) -> float:
     """
     Estimate generalisation loss via randomized held-out context splits.
-
-    For each protein group, ``n_repeats`` random 50/50 context/target splits
-    are evaluated and the per-group mean error is averaged.
-
-    Parameters
-    ----------
-    model : CrossSampleCNP or ConceptBottleneckCNP
-    samples : list[dict]
-    device : torch.device
-    n_repeats : int
-        Number of random context/target splits per group.
-
-    Returns
-    -------
-    float
-        Mean MSE across all groups and repeats (in scaled log-viscosity space).
     """
     model.eval()
     total_error = 0.0

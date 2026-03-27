@@ -156,7 +156,7 @@ def log_concept_activations(
                     stat = s["static"].unsqueeze(0).repeat(s["points"].shape[0], 1)
                     ctx_items.append(torch.cat([s["points"], stat], dim=1))
                 ctx_t = torch.cat(ctx_items, dim=0).unsqueeze(0).to(device)
-                c = model.encode_memory(ctx_t).squeeze(0).cpu().numpy()
+                c = model.encode_concepts(ctx_t).squeeze(0).cpu().numpy()
                 draw_concepts.append(c)
             group_concepts[prot] = np.stack(draw_concepts).mean(axis=0)
 
@@ -307,10 +307,10 @@ def run_concept_intervention_demo(
                 .to(device)
             )
 
-            c_base = model.encode_memory(ctx_t)
+            c_base = model.encode_concepts(ctx_t)
 
             for shear_label, query_shear in shear_tensors.items():
-                pred_base_sc = model.decode_from_memory(c_base, query_shear, q_static)
+                pred_base_sc = model.decode_from_concepts(c_base, query_shear, q_static)
                 pred_base_lv = float(pred_base_sc.squeeze()) * visc_scale + visc_mean
 
                 for ci, cname in enumerate(model.concept_names):
@@ -323,7 +323,7 @@ def run_concept_intervention_demo(
                     for cval in sweep:
                         c_mod = c_base.clone()
                         c_mod[:, ci] = cval
-                        pred_int_sc = model.decode_from_memory(c_mod, query_shear, q_static)
+                        pred_int_sc = model.decode_from_concepts(c_mod, query_shear, q_static)
                         pred_int_lv = float(pred_int_sc.squeeze()) * visc_scale + visc_mean
                         records.append(
                             {

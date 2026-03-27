@@ -49,9 +49,9 @@ import torch
 # Module imports — all architecture and feature-engineering logic lives here.
 # ---------------------------------------------------------------------------
 try:
-    from models import ConceptBottleneckCNP
-    from data_pipeline import _engineer_features, _process_row_features, CONC_THRESHOLDS
-    from constants import CONCEPT_NAMES, N_CONCEPTS_SUPERVISED
+    from .models import ConceptBottleneckCNP
+    from .data_pipeline import _engineer_features, _process_row_features, CONC_THRESHOLDS
+    from .constants import CONCEPT_NAMES, N_CONCEPTS_SUPERVISED
 except ImportError:
     from cb_cnp.models import ConceptBottleneckCNP
     from cb_cnp.data_pipeline import _engineer_features, _process_row_features, CONC_THRESHOLDS
@@ -173,7 +173,8 @@ class InferenceCNP:
         self.model_dir = model_dir
 
         # Public state — reset by the caller before each protein group.
-        self.memory_vector: Optional[torch.Tensor] = None
+        self.memory_vector: Optional[torch.Tensor] = None  # latent r (128-dim)
+        self.concept_vector: Optional[torch.Tensor] = None  # concept c (16-dim)
         self.context_t: Optional[torch.Tensor] = None
 
         # Expose shear map for external callers (e.g. smoke-test harness).
@@ -211,8 +212,10 @@ class InferenceCNP:
         # cross-protein weight contamination (FIX-2).
         self._original_state = copy.deepcopy(self.model.state_dict())
 
-        # Memory dimensionality is always n_concepts for CBM.
-        self._memory_dim: int = checkpoint.get("n_concepts", self.config["latent_dim"])
+        # Memory dimensionality is latent_dim (hybrid architecture passes
+        # the full 128-dim latent r to the decoder, not the 16-dim concept c).
+        self._memory_dim: int = self.config["latent_dim"]
+        self._n_concepts: int = checkpoint.get("n_concepts", self.config["latent_dim"])
 
     # ------------------------------------------------------------------
     # Model construction — delegates entirely to models.py
@@ -589,6 +592,8 @@ class InferenceCNP:
                     "single full-context encode."
                 )
                 self.memory_vector = _encode_indices(list(range(n_samples)))
+                # Also compute concept vector for analysis
+                self.concept_vector = self.model.bottleneck(self.memory_vector)
                 # context_t: flat concatenation for backward compatibility.
                 self.context_t = torch.cat([s.unsqueeze(0) for s in sample_tensors], dim=1)
                 norm = self.memory_vector.norm().item()
@@ -609,6 +614,9 @@ class InferenceCNP:
                 )
 
         self.memory_vector = torch.stack(draws, dim=0).mean(dim=0)
+        # Compute concept vector for analysis/intervention
+        with torch.no_grad():
+            self.concept_vector = self.model.bottleneck(self.memory_vector)
         # context_t: flat concatenation of all samples for backward compatibility.
         self.context_t = torch.cat([s.unsqueeze(0) for s in sample_tensors], dim=1)
         norm = self.memory_vector.norm().item()
@@ -733,19 +741,20 @@ class InferenceCNP:
 
     def get_concept_state(self) -> Optional[dict[str, float]]:
         """
-        Return the current concept memory as a named dictionary.
+        Return the current concept activations as a named dictionary.
 
-        Only meaningful after ``learn()`` has been called.
+        In the hybrid architecture, memory_vector holds the full latent r
+        and concept_vector holds the 16-dim concept c.
 
         Returns
         -------
         dict {concept_name: activation_value}, or None if learn() not yet called.
         """
-        if self.memory_vector is None:
+        if self.concept_vector is None:
             self._logger.debug("get_concept_state() called before learn() — returning None.")
             return None
 
-        c_np = self.memory_vector.squeeze(0).cpu().numpy()
+        c_np = self.concept_vector.squeeze(0).cpu().numpy()
         return {name: float(val) for name, val in zip(self.model.concept_names, c_np)}
 
     def intervene(
@@ -755,11 +764,12 @@ class InferenceCNP:
         concept_value: float,
     ) -> pd.DataFrame:
         """
-        Causal do-intervention: clamp concept dimension(s) and re-decode.
+        Causal do-intervention: clamp concept dimension(s) and re-decode
+        via the lightweight concept decoder.
 
-        Implements do(c_i = v) in the Pearl causal sense.  The stored memory
-        vector is cloned — the original is never mutated.  Falls back to a
-        zero memory vector if ``learn()`` has not been called.
+        In the hybrid architecture, interventions are decoded through the
+        secondary concept decoder (``decode_from_concepts``), not the main
+        latent decoder, so concept clamping has a direct causal effect.
 
         Parameters
         ----------
@@ -772,15 +782,15 @@ class InferenceCNP:
         -------
         pd.DataFrame with ``Pred_Viscosity_{shear}`` columns.
         """
-        base_memory = (
-            self.memory_vector if self.memory_vector is not None else self._zero_shot_memory()
-        )
-        if self.memory_vector is None:
-            self._logger.warning("intervene() called before learn() — using zero-shot memory.")
-            print("Warning: intervene() called before learn(). Using zero-shot memory.")
+        if self.concept_vector is not None:
+            base_concepts = self.concept_vector
+        else:
+            base_concepts = torch.zeros((1, self.model.n_concepts), device=self.device)
+            self._logger.warning("intervene() called before learn() — using zero-shot concepts.")
+            print("Warning: intervene() called before learn(). Using zero-shot concepts.")
 
         # Clamp on a clone so the stored concept state is never modified.
-        c_mod = base_memory.clone()
+        c_mod = base_concepts.clone()
         if isinstance(concept_idx, int):
             concept_idx = [concept_idx]
         for idx in concept_idx:
@@ -790,7 +800,7 @@ class InferenceCNP:
 
         self.model.eval()
         with torch.no_grad():
-            y_scaled = self.model.decode_from_memory(c_mod, q_shear, q_static)
+            y_scaled = self.model.decode_from_concepts(c_mod, q_shear, q_static)
 
         pred_visc = np.power(10, self._inverse_to_log(q_shear, y_scaled))
         applied = {self.model.concept_names[i]: concept_value for i in concept_idx}
@@ -856,6 +866,7 @@ Sucrose,0.2,tween-80,0.05,None,0.0,1.0,1.0,36.4,38.0,39.6,40.9,6.36"""
         ].copy()
 
         predictor.memory_vector = None
+        predictor.concept_vector = None
         predictor.context_t = None
 
         if not history_df.empty:
@@ -909,6 +920,7 @@ Sucrose,0.2,tween-80,0.05,None,0.0,1.0,1.0,36.4,38.0,39.6,40.9,6.36"""
         ].copy()
 
         predictor.memory_vector = None
+        predictor.concept_vector = None
         predictor.context_t = None
 
         if not history_df.empty:
@@ -948,6 +960,7 @@ Sucrose,0.2,tween-80,0.05,None,0.0,1.0,1.0,36.4,38.0,39.6,40.9,6.36"""
     ].copy()
 
     predictor.memory_vector = None
+    predictor.concept_vector = None
     predictor.context_t = None
     if not demo_history.empty:
         predictor.learn(demo_history)
@@ -968,3 +981,193 @@ Sucrose,0.2,tween-80,0.05,None,0.0,1.0,1.0,36.4,38.0,39.6,40.9,6.36"""
         delta = int_val - baseline_100
         sign = "▲" if delta > 0 else "▼"
         print(f"  {cname:<28} {act_type:>7} {int_val:>13.2f} {sign}{abs(delta):>9.2f}")
+
+    # ==================================================================
+    # 8. IBALIZUMAB COMPREHENSIVE EVALUATION
+    # ==================================================================
+    ibal_csv = "data/processed/ibal_eval.csv"
+    if not os.path.exists(ibal_csv):
+        print(f"\n[Ibalizumab eval] Skipping — {ibal_csv} not found.")
+    else:
+        print("\n" + "=" * 60)
+        print("IBALIZUMAB EVALUATION (novel protein, ablated from training)")
+        print("=" * 60)
+
+        ibal_df = pd.read_csv(ibal_csv)
+        for col in ibal_df.select_dtypes(include=["int", "int64", "int32"]).columns:
+            if col != "ID":
+                ibal_df[col] = ibal_df[col].astype(float)
+        ibal_df["ID"] = ibal_df["ID"].astype(str)
+
+        print(f"Loaded {len(ibal_df)} Ibalizumab samples.")
+        print(
+            f"Concentration range: {ibal_df['Protein_conc'].min():.0f} – "
+            f"{ibal_df['Protein_conc'].max():.0f} mg/mL"
+        )
+
+        # ---- 8a. Context sensitivity: test F262 with different k values ----
+        print("\n--- Context sensitivity (F262: 300 mg/mL, Acetate pH 5) ---")
+        f262 = ibal_df[ibal_df["ID"] == "F262"].copy()
+        ctx_pool = ibal_df[ibal_df["ID"] != "F262"].copy()
+
+        if not f262.empty and not ctx_pool.empty:
+            k_values = [4, 8, 16, len(ctx_pool)]
+            print(f"  Context pool: {len(ctx_pool)} samples")
+            print(
+                f"  {'k':>6} | {'n_draws':>7} | {'Pred 100':>10} | {'Pred 1k':>10} | "
+                f"{'Pred 10k':>10} | {'Pred 100k':>10} | {'Pred 15M':>10} | {'Mem norm':>10}"
+            )
+            print("  " + "-" * 96)
+
+            actual_cols = [f"Viscosity_{s}" for s in shear_cols]
+            actual_vals = [float(f262.iloc[0][c]) for c in actual_cols]
+            print(
+                f"  {'ACTUAL':>6} | {'':>7} | "
+                + " | ".join(f"{v:>10.2f}" for v in actual_vals)
+                + " |"
+            )
+            print("  " + "-" * 96)
+
+            for k_test in k_values:
+                predictor.memory_vector = None
+                predictor.concept_vector = None
+                predictor.context_t = None
+
+                n_d = 1 if k_test >= len(ctx_pool) else 20
+                predictor.learn(
+                    ctx_pool,
+                    k=k_test,
+                    n_draws=n_d,
+                    small_pool_threshold=k_test + 1 if k_test >= len(ctx_pool) else 15,
+                )
+                mem_norm = predictor.memory_vector.norm().item()
+
+                result = predictor.predict(f262)
+                preds = [float(result[f"Pred_Viscosity_{s}"].iloc[0]) for s in shear_cols]
+
+                k_label = f"ALL({k_test})" if k_test >= len(ctx_pool) else str(k_test)
+                print(
+                    f"  {k_label:>6} | {n_d:>7} | "
+                    + " | ".join(f"{p:>10.2f}" for p in preds)
+                    + f" | {mem_norm:>10.3f}"
+                )
+
+            # Show % error for the ALL case
+            predictor.memory_vector = None
+            predictor.concept_vector = None
+            predictor.context_t = None
+            predictor.learn(
+                ctx_pool, k=len(ctx_pool), n_draws=1, small_pool_threshold=len(ctx_pool) + 1
+            )
+            result = predictor.predict(f262)
+            print(f"\n  F262 % error (full context):")
+            for s, actual_col in zip(shear_cols, actual_cols):
+                actual = float(f262.iloc[0][actual_col])
+                pred = float(result[f"Pred_Viscosity_{s}"].iloc[0])
+                err = abs(pred - actual) / actual * 100 if actual > 0 else float("nan")
+                print(
+                    f"    {s:>12} s⁻¹ | actual={actual:7.2f} | pred={pred:7.2f} | err={err:5.1f}%"
+                )
+
+        # ---- 8b. LOO parity across all Ibalizumab samples ----
+        print("\n--- Leave-one-out parity (all Ibalizumab samples) ---")
+        all_actual_log: list[float] = []
+        all_pred_log: list[float] = []
+        all_concs: list[float] = []
+        all_shears: list[str] = []
+        all_ids: list[str] = []
+
+        for row_idx in range(len(ibal_df)):
+            target_row = ibal_df.iloc[[row_idx]].copy()
+            sid = str(target_row["ID"].iloc[0])
+            conc = float(target_row["Protein_conc"].iloc[0])
+            ctx = ibal_df[ibal_df["ID"] != sid].copy()
+
+            predictor.memory_vector = None
+            predictor.concept_vector = None
+            predictor.context_t = None
+            predictor.learn(ctx, k=min(12, len(ctx)), n_draws=20, small_pool_threshold=15)
+
+            result = predictor.predict(target_row)
+
+            for s in shear_cols:
+                actual_col = f"Viscosity_{s}"
+                pred_col = f"Pred_Viscosity_{s}"
+                if actual_col in target_row.columns:
+                    actual = float(target_row.iloc[0][actual_col])
+                    pred = float(result[pred_col].iloc[0])
+                    if actual > 0 and pred > 0:
+                        all_actual_log.append(np.log10(actual))
+                        all_pred_log.append(np.log10(pred))
+                        all_concs.append(conc)
+                        all_shears.append(s)
+                        all_ids.append(sid)
+
+        if all_actual_log:
+            actual_a = np.array(all_actual_log)
+            pred_a = np.array(all_pred_log)
+            conc_a = np.array(all_concs)
+            rmse = float(np.sqrt(np.mean((actual_a - pred_a) ** 2)))
+            ss_res = np.sum((actual_a - pred_a) ** 2)
+            ss_tot = np.sum((actual_a - actual_a.mean()) ** 2)
+            r2 = float(1 - ss_res / ss_tot) if ss_tot > 0 else float("nan")
+
+            print(f"\n  Overall ({len(actual_a)} sample-shear pairs):")
+            print(f"    RMSE (log10 viscosity): {rmse:.4f}")
+            print(f"    R²   (log10 viscosity): {r2:.4f}")
+
+            # Per-shear RMSE
+            print(f"\n  Per-shear-rate RMSE (log10):")
+            shear_a = np.array(all_shears)
+            for s in shear_cols:
+                mask = shear_a == s
+                if mask.any():
+                    s_rmse = float(np.sqrt(np.mean((actual_a[mask] - pred_a[mask]) ** 2)))
+                    print(f"    {s:>12} s⁻¹: RMSE={s_rmse:.4f}  (n={mask.sum()})")
+
+            # Per-concentration-band RMSE
+            print(f"\n  Per-concentration-band RMSE (log10):")
+            bands = [(0, 50), (50, 100), (100, 200), (200, 310)]
+            for lo, hi in bands:
+                mask = (conc_a >= lo) & (conc_a < hi)
+                if mask.any():
+                    b_rmse = float(np.sqrt(np.mean((actual_a[mask] - pred_a[mask]) ** 2)))
+                    bias = float(np.mean(pred_a[mask] - actual_a[mask]))
+                    n = mask.sum()
+                    print(
+                        f"    {lo:>3}–{hi:<3} mg/mL: RMSE={b_rmse:.4f}  "
+                        f"bias={bias:+.4f}  (n={n})"
+                    )
+
+            # Worst predictions
+            errors = np.abs(pred_a - actual_a)
+            worst_idx = np.argsort(errors)[-10:][::-1]
+            print(f"\n  10 worst predictions (by |log10 error|):")
+            print(
+                f"    {'ID':<8} {'Conc':>6} {'Shear':>12} {'Actual cP':>10} "
+                f"{'Pred cP':>10} {'Ratio':>8}"
+            )
+            print("    " + "-" * 60)
+            for wi in worst_idx:
+                a_cp = 10 ** actual_a[wi]
+                p_cp = 10 ** pred_a[wi]
+                ratio = p_cp / a_cp
+                print(
+                    f"    {all_ids[wi]:<8} {conc_a[wi]:>6.0f} {all_shears[wi]:>12} "
+                    f"{a_cp:>10.2f} {p_cp:>10.2f} {ratio:>8.2f}x"
+                )
+
+        # ---- 8c. Concept state for Ibalizumab ----
+        print("\n--- Concept state (full Ibalizumab context) ---")
+        predictor.memory_vector = None
+        predictor.concept_vector = None
+        predictor.context_t = None
+        predictor.learn(ibal_df, k=len(ibal_df), n_draws=1, small_pool_threshold=len(ibal_df) + 1)
+
+        concept_state = predictor.get_concept_state()
+        if concept_state:
+            print(f"  Memory norm: {predictor.memory_vector.norm().item():.3f}")
+            for cname, cval in concept_state.items():
+                bar = "█" * int(abs(cval) * 20)
+                sign = "+" if cval >= 0 else "-"
+                print(f"    {cname:<28} {sign}{abs(cval):.3f}  {bar}")
