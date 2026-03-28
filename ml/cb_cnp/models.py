@@ -161,10 +161,94 @@ class PhysicsBottleneck(nn.Module):
 # ============================================================
 
 
+class LatentFiLMDecoder(nn.Module):
+    """
+    FiLM-conditioned decoder: the latent r generates per-feature scale (γ)
+    and shift (β) that modulate query static features.  The MLP then sees
+    only [shear, modulated_static] — there is **no direct r concatenation**.
+
+    This architecture makes it impossible for the decoder to bypass the
+    latent.  All protein-specific information from context MUST flow through
+    the modulation parameters.  If the encoder doesn't encode useful
+    information in r, the decoder degrades to a context-free baseline.
+
+    FiLM generator design
+    ---------------------
+    A 2-layer MLP (r → hidden → 2×static_dim) produces richer modulations
+    than a single linear layer, allowing nonlinear feature interactions.
+    γ is passed through tanh and scaled to [-2, +2] so individual features
+    can be amplified up to 3× or suppressed to near-zero, but not to
+    extreme magnitudes that cause training instability.
+
+    Parameters
+    ----------
+    static_dim : int
+    memory_dim : int  (latent_dim for main decoder)
+    hidden_dim : int
+    dropout    : float
+    """
+
+    def __init__(
+        self,
+        static_dim: int,
+        memory_dim: int,
+        hidden_dim: int = 128,
+        dropout: float = 0.0,
+    ) -> None:
+        super().__init__()
+        self.static_dim = static_dim
+
+        # FiLM generator: 2-layer MLP for richer modulations
+        self.film_gen = nn.Sequential(
+            nn.Linear(memory_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, static_dim * 2),  # γ and β
+        )
+
+        # Prediction MLP: sees ONLY shear + modulated static — no direct r
+        self.mlp = nn.Sequential(
+            nn.Linear(1 + static_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+        )
+
+    def forward(
+        self,
+        memory_vector: torch.Tensor,
+        query_shear: torch.Tensor,
+        query_static: torch.Tensor,
+    ) -> torch.Tensor:
+        n_q = query_shear.size(1)
+
+        # Generate per-feature scale (γ) and shift (β) from latent r
+        film_params = self.film_gen(memory_vector)  # [B, 2*static_dim]
+        gamma_raw, beta = film_params.chunk(2, dim=-1)  # each [B, static_dim]
+
+        # Constrain γ to [-2, +2] — feature can be amplified up to 3×
+        # or suppressed to near-zero, but not to extreme magnitudes
+        gamma = 2.0 * torch.tanh(gamma_raw)
+
+        # Expand to query dimension
+        gamma = gamma.unsqueeze(1).expand(-1, n_q, -1)  # [B, Q, static_dim]
+        beta = beta.unsqueeze(1).expand(-1, n_q, -1)
+
+        # Modulate: protein-specific r controls HOW each static feature
+        # is interpreted — this is the ONLY path for context information
+        modulated = query_static * (1.0 + gamma) + beta
+
+        x = torch.cat([query_shear, modulated], dim=-1)  # [B, Q, 1+static_dim]
+        return self.mlp(x)
+
+
 class ViscosityDecoder(nn.Module):
     """
     Predicts log-viscosity from a memory vector (latent r or concept c)
     concatenated with query shear and static features.
+
+    Retained for the concept decoder path and the baseline CrossSampleCNP.
     """
 
     def __init__(
@@ -318,8 +402,9 @@ class ConceptBottleneckCNP(nn.Module):
             n_supervised=N_CONCEPTS_SUPERVISED,
         )
 
-        # MAIN decoder: receives full latent r (128-dim) for production predictions
-        self.viscosity_decoder = ViscosityDecoder(
+        # MAIN decoder: LatentFiLM — r modulates static features with NO
+        # direct concatenation.  The decoder CANNOT bypass the latent.
+        self.viscosity_decoder = LatentFiLMDecoder(
             static_dim=static_dim,
             memory_dim=latent_dim,
             hidden_dim=hidden_dim,
