@@ -10,7 +10,7 @@ from visqai.preprocessing.pipeline import (
     ENGINEERED_COLS,
 )
 from visqai.features.charge import CHARGE_FEATURE_COLS_BASE
-from visqai.physics.priors import PRIOR_COLS, CONC_SPLIT_COLS
+from visqai.physics.priors import PRIOR_COLS, CONC_SPLIT_COLS, calculate_cci, calculate_regime
 
 
 def _sample_row(**overrides):
@@ -72,9 +72,14 @@ def test_build_feature_frame_prior_columns_present_and_charge_aware():
     out, num_cols, _ = build_feature_frame(df)
     for c in PRIOR_COLS + CONC_SPLIT_COLS:
         assert c in num_cols
-    # net_charge==0 at a charge-aware row should hit the Near-pI regime for
-    # mab_igg1, giving prior_nacl == -1 (see PRIOR_TABLE["mab_igg1"]["Near-pI"]).
-    assert out.loc[0, "prior_nacl"] == -1.0
+    # net_charge==0 should hit the Near-pI regime (charge-aware CCI), not the
+    # Mixed/Far regime the old pH-distance-only proxy would have given for
+    # Buffer_pH=6.0 vs PI_mean=8.5.
+    cci = calculate_cci(c_class=1.0, ph=6.0, pi=8.5, net_charge=0.0)
+    assert calculate_regime(cci, "mab_igg1") == "Near-pI"
+    # and the regime-dict lookup actually ran (stabilizer prior is always
+    # populated when Stabilizer_type is present, regardless of regime).
+    assert out.loc[0, "prior_stabilizer"] == 1.0
 
 
 def test_build_feature_frame_missing_optional_columns_degrade_gracefully():

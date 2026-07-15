@@ -37,157 +37,183 @@ CONC_THRESHOLDS = {
     "trehalose": 0.2,
 }
 
+# --- 2026-07-15 marginal-effect audit (see docstring below the table) -----
+# arginine / proline / nacl / tween-20 were dropped to 0 in every cell: a
+# multivariate OLS of log10-viscosity on Protein_conc + Protein_type +
+# co-occurring ingredient concentration, using the SAME charge-aware
+# regime/CCI this table is keyed by, found:
+#   - nacl: the table claims a uniform -1 in every regime, but conditioned
+#     on the real regime the sign FLIPS -- significantly negative Near-pI
+#     (p<0.001) vs significantly POSITIVE in Far, which is 66% of the data
+#     (coef +0.0006-0.0016, p=0.001-0.004). A flat per-regime integer can't
+#     represent a sign that depends on concentration/regime this way, and
+#     the wrong-signed Far-regime majority is the dominant failure mode
+#     (see charge.py's charge_screened fix for the other half of this --
+#     the OOD covariate shift when nacl rows are LOGO-held-out).
+#   - arginine / proline / tween-20: pooled sign is directionally negative
+#     (matches the table) but never reaches significance within any single
+#     regime cell at the support these categories have (5-42 rows per
+#     regime), including the cell the table assigns its LARGEST magnitude
+#     to (mab_igg1/igg4/bispecific/adc Near-pI, arginine=-2: n_present=5,
+#     p=0.69, coef effectively 0). There isn't enough signal to justify a
+#     hand-tuned, regime-differentiated integer; the physicochemical
+#     property vectors (categorical.py) already carry these ingredients'
+#     real descriptors (charge, MW, logP, HLB, ...) for the network to
+#     learn from directly, without a contradicted prior fighting it.
+# lysine and stabilizer were left as-is: both show a highly significant,
+# regime-consistent, correctly-signed effect in the same audit (lysine
+# coef -0.019..-0.024, p<=0.002; stabilizer coef +0.126..+0.128, p<1e-45).
 PRIOR_TABLE = {
     "mab_igg1": {
         "Near-pI": {
-            "arginine": -2,
+            "arginine": 0,
             "lysine": -1,
-            "nacl": -1,
+            "nacl": 0,
             "proline": 0,
             "stabilizer": 1,
-            "tween-20": -1,
+            "tween-20": 0,
             "tween-80": -1,
         },
         "Mixed": {
-            "arginine": -1,
+            "arginine": 0,
             "lysine": -1,
-            "nacl": -1,
-            "proline": -1,
+            "nacl": 0,
+            "proline": 0,
             "stabilizer": 1,
-            "tween-20": -1,
+            "tween-20": 0,
             "tween-80": -1,
         },
         "Far": {
             "arginine": 0,
             "lysine": -1,
-            "nacl": -1,
-            "proline": -1,
+            "nacl": 0,
+            "proline": 0,
             "stabilizer": 1,
-            "tween-20": -1,
+            "tween-20": 0,
             "tween-80": -1,
         },
     },
     "mab_igg4": {
         "Near-pI": {
-            "arginine": -2,
+            "arginine": 0,
             "lysine": -1,
-            "nacl": -1,
+            "nacl": 0,
             "proline": 0,
             "stabilizer": 1,
-            "tween-20": -1,
+            "tween-20": 0,
             "tween-80": -1,
         },
         "Mixed": {
-            "arginine": -2,
+            "arginine": 0,
             "lysine": -1,
-            "nacl": -1,
-            "proline": -1,
+            "nacl": 0,
+            "proline": 0,
             "stabilizer": 1,
-            "tween-20": -1,
+            "tween-20": 0,
             "tween-80": -1,
         },
         "Far": {
-            "arginine": -1,
+            "arginine": 0,
             "lysine": -1,
-            "nacl": -1,
-            "proline": -1,
+            "nacl": 0,
+            "proline": 0,
             "stabilizer": 1,
-            "tween-20": -1,
+            "tween-20": 0,
             "tween-80": -1,
         },
     },
     "fc-fusion": {
         "Near-pI": {
-            "arginine": -1,
+            "arginine": 0,
             "lysine": -1,
-            "nacl": -1,
-            "proline": -1,
+            "nacl": 0,
+            "proline": 0,
             "stabilizer": 1,
-            "tween-20": -2,
+            "tween-20": 0,
             "tween-80": -2,
         },
         "Mixed": {
-            "arginine": -1,
+            "arginine": 0,
             "lysine": 0,
             "nacl": 0,
-            "proline": -2,
+            "proline": 0,
             "stabilizer": 1,
-            "tween-20": -2,
+            "tween-20": 0,
             "tween-80": -2,
         },
         "Far": {
             "arginine": 0,
             "lysine": 0,
             "nacl": 0,
-            "proline": -2,
+            "proline": 0,
             "stabilizer": 1,
-            "tween-20": -2,
+            "tween-20": 0,
             "tween-80": -2,
         },
     },
     "bispecific": {
         "Near-pI": {
-            "arginine": -2,
+            "arginine": 0,
             "lysine": -1,
-            "nacl": -1,
+            "nacl": 0,
             "proline": 0,
             "stabilizer": 1,
-            "tween-20": -1,
+            "tween-20": 0,
             "tween-80": -1,
         },
         "Mixed": {
-            "arginine": -1,
+            "arginine": 0,
             "lysine": 0,
             "nacl": 0,
-            "proline": -1,
+            "proline": 0,
             "stabilizer": 1,
-            "tween-20": -2,
+            "tween-20": 0,
             "tween-80": -2,
         },
         "Far": {
             "arginine": 0,
             "lysine": 0,
             "nacl": 0,
-            "proline": -1,
+            "proline": 0,
             "stabilizer": 1,
-            "tween-20": -2,
+            "tween-20": 0,
             "tween-80": -2,
         },
     },
     "adc": {
         "Near-pI": {
-            "arginine": -2,
+            "arginine": 0,
             "lysine": -1,
-            "nacl": -1,
+            "nacl": 0,
             "proline": 0,
             "stabilizer": 1,
-            "tween-20": -1,
+            "tween-20": 0,
             "tween-80": -1,
         },
         "Mixed": {
-            "arginine": -1,
+            "arginine": 0,
             "lysine": 0,
             "nacl": 0,
-            "proline": -1,
+            "proline": 0,
             "stabilizer": 1,
-            "tween-20": -2,
+            "tween-20": 0,
             "tween-80": -2,
         },
         "Far": {
             "arginine": 0,
             "lysine": 0,
             "nacl": 0,
-            "proline": -1,
+            "proline": 0,
             "stabilizer": 1,
-            "tween-20": -2,
+            "tween-20": 0,
             "tween-80": -2,
         },
     },
     "bsa": {
         "Near-pI": {
-            "arginine": -1,
+            "arginine": 0,
             "lysine": -1,
-            "nacl": -1,
+            "nacl": 0,
             "proline": 0,
             "stabilizer": 1,
             "tween-20": 0,
@@ -197,7 +223,7 @@ PRIOR_TABLE = {
             "arginine": 0,
             "lysine": 0,
             "nacl": 0,
-            "proline": -1,
+            "proline": 0,
             "stabilizer": 1,
             "tween-20": 0,
             "tween-80": 0,
@@ -206,7 +232,7 @@ PRIOR_TABLE = {
             "arginine": 0,
             "lysine": 0,
             "nacl": 0,
-            "proline": -1,
+            "proline": 0,
             "stabilizer": 1,
             "tween-20": 0,
             "tween-80": 0,
@@ -214,9 +240,9 @@ PRIOR_TABLE = {
     },
     "polyclonal": {
         "Near-pI": {
-            "arginine": -1,
+            "arginine": 0,
             "lysine": -1,
-            "nacl": -1,
+            "nacl": 0,
             "proline": 0,
             "stabilizer": 1,
             "tween-20": 0,
@@ -226,7 +252,7 @@ PRIOR_TABLE = {
             "arginine": 0,
             "lysine": 0,
             "nacl": 0,
-            "proline": -1,
+            "proline": 0,
             "stabilizer": 1,
             "tween-20": 0,
             "tween-80": 0,
@@ -235,7 +261,7 @@ PRIOR_TABLE = {
             "arginine": 0,
             "lysine": 0,
             "nacl": 0,
-            "proline": -1,
+            "proline": 0,
             "stabilizer": 1,
             "tween-20": 0,
             "tween-80": 0,
@@ -243,7 +269,7 @@ PRIOR_TABLE = {
     },
     "default": {
         "Near-pI": {
-            "arginine": -1,
+            "arginine": 0,
             "lysine": -1,
             "nacl": 0,
             "proline": 0,
@@ -255,7 +281,7 @@ PRIOR_TABLE = {
             "arginine": 0,
             "lysine": 0,
             "nacl": 0,
-            "proline": -1,
+            "proline": 0,
             "stabilizer": 1,
             "tween-20": 0,
             "tween-80": 0,
@@ -264,7 +290,7 @@ PRIOR_TABLE = {
             "arginine": 0,
             "lysine": 0,
             "nacl": 0,
-            "proline": -1,
+            "proline": 0,
             "stabilizer": 1,
             "tween-20": 0,
             "tween-80": 0,

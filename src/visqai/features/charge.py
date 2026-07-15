@@ -74,6 +74,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from visqai.features.categorical import SALT_PROPS
+
 # ---------------------------------------------------------------------------
 # Config. Defaults chosen from the data (net charge spans ~ -17 .. +50).
 # ---------------------------------------------------------------------------
@@ -87,6 +89,38 @@ NEAR_PI_SIGMA: float = 8.0
 # buffer) screen electrostatic repulsion (shorter Debye length). This is a
 # monotone proxy, not a real Debye calc — we lack full speciation. Optional.
 ADD_SCREENED_CHARGE: bool = True
+
+# Approximate ionic-strength valence factor per buffer species at
+# formulation pH (I = 0.5 * sum(c_i * z_i^2); for a 1:z electrolyte this is
+# well approximated by c * z). We lack full pKa-based speciation, so these
+# are order-of-magnitude: histidine/acetate are ~monovalent near their pKa,
+# phosphate/PBS carry more charge per mole (HPO4^2-/H2PO4- mix), citrate is
+# trivalent. Unrecognized buffers default to 1.0 (monovalent-equivalent),
+# the conservative middle case. Salt uses SALT_PROPS' salt_valence instead
+# of a separate table, so both categoricals share one physical-chemistry
+# source of truth.
+BUFFER_IONIC_VALENCE: dict[str, float] = {
+    "histidine": 1.0,
+    "acetate": 1.0,
+    "phosphate": 2.0,
+    "pbs": 2.0,
+    "citrate": 3.0,
+}
+
+# Physically-generous ceiling on total ionic strength (M): well above
+# anything in the training data (max observed ~0.28 M salt+buffer combined).
+# ionic_M is clipped to this before computing charge_screened so that a
+# held-out ingredient's concentration (e.g. a leave-one-ingredient-out salt
+# fold, where Salt_conc jumps from 0 in every training row to 32-175 mM in
+# every held-out row) can't push the feature into a raw-unit range the rest
+# of the pipeline never had reason to represent, on top of whatever the
+# fold's own StandardScaler was fit to.
+ION_STRENGTH_CAP_M: float = 0.5
+
+# Salt's valence factor reuses SALT_PROPS' salt_valence (categorical.py) so
+# salt and buffer ionic-strength contributions share one physical-chemistry
+# source of truth instead of two independently-maintained tables.
+SALT_PROPS_VALENCE: dict[str, float] = {k: v["salt_valence"] for k, v in SALT_PROPS.items() if k != "none"}
 
 # Rough imputation for a protein whose charge was never computed but whose pI is
 # known: sign & slope from a linear titration surrogate around the pI. ONLY used
@@ -121,6 +155,25 @@ def _numeric_col(df: pd.DataFrame, col: str, default: float = np.nan) -> pd.Seri
     if col in df.columns:
         return pd.to_numeric(df[col], errors="coerce")
     return pd.Series(default, index=df.index, dtype=float)
+
+
+def _ionic_valence(type_col, index: pd.Index, valence_table: dict[str, float]) -> pd.Series:
+    """Map a categorical type column (Salt_type/Buffer_type) to an
+    approximate ionic-strength valence per row via substring match against
+    `valence_table` (mirrors categorical._lookup's matching). Absent/none
+    -> 0.0 (no ionic contribution). A present-but-unrecognized category
+    defaults to 1.0 (monovalent-equivalent), the conservative middle case."""
+    if type_col is None:
+        return pd.Series(0.0, index=index)
+    norm = type_col.astype(str).str.strip().str.lower()
+
+    def lookup(s: str) -> float:
+        if s in ("none", "nan", "unknown", "na", "n/a", ""):
+            return 0.0
+        match = next((v for k, v in valence_table.items() if k in s), None)
+        return match if match is not None else 1.0
+
+    return norm.map(lookup)
 
 
 def normalize_charge_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -224,13 +277,20 @@ def featurize_charge(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     cols = list(CHARGE_FEATURE_COLS_BASE)
 
     if ADD_SCREENED_CHARGE:
-        # Ionic-strength proxy from salt + buffer (mM). Real Debye screening
-        # would need speciation; this monotone surrogate is enough for the NN
-        # to learn "salt screens the charge effect." Repulsion ↓ as sqrt(I) ↑.
+        # Ionic-strength proxy from salt + buffer (mM), valence-weighted
+        # (I = 0.5 * sum(c_i * z_i^2) ~ c * z for a 1:z electrolyte) rather
+        # than a flat 1:1 sum of raw mM -- a divalent/trivalent buffer or
+        # salt contributes more ionic strength per mM than a monovalent one.
+        # Real Debye screening would still need full pH-dependent speciation;
+        # this valence-weighted surrogate is enough for the NN to learn "salt
+        # screens the charge effect." Repulsion ↓ as sqrt(I) ↑.
         salt = _numeric_col(df, "Salt_conc", 0.0).fillna(0.0)
         buf = _numeric_col(df, "Buffer_conc", 0.0).fillna(0.0)
-        ionic_M = (salt.values + buf.values) / 1000.0  # mM -> M proxy
-        screened = abs_charge.values / (1.0 + np.sqrt(np.clip(ionic_M, 0, None)))
+        salt_z = _ionic_valence(df.get("Salt_type"), df.index, SALT_PROPS_VALENCE)
+        buf_z = _ionic_valence(df.get("Buffer_type"), df.index, BUFFER_IONIC_VALENCE)
+        ionic_M = (salt.values * salt_z.values + buf.values * buf_z.values) / 1000.0  # mM -> M
+        ionic_M = np.clip(ionic_M, 0.0, ION_STRENGTH_CAP_M)
+        screened = abs_charge.values / (1.0 + np.sqrt(ionic_M))
         df["charge_screened"] = screened
         cols.append("charge_screened")
 
