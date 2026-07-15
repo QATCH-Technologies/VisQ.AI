@@ -1,12 +1,18 @@
-# Graph Report - .  (2026-07-15)
+# Graph Report - VisQ.AI  (2026-07-15)
 
 ## Corpus Check
-- Corpus is ~28,285 words - fits in a single context window. You may not need a graph.
+- 62 files · ~25,506 words
+- Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 257 nodes · 391 edges · 19 communities (17 shown, 2 thin omitted)
-- Extraction: 98% EXTRACTED · 2% INFERRED · 0% AMBIGUOUS · INFERRED: 7 edges (avg confidence: 0.84)
-- Token cost: 55,222 input · 0 output
+- 662 nodes · 1001 edges · 57 communities (50 shown, 7 thin omitted)
+- Extraction: 83% EXTRACTED · 17% INFERRED · 0% AMBIGUOUS · INFERRED: 171 edges (avg confidence: 0.79)
+- Token cost: 0 input · 0 output
+
+## Graph Freshness
+- Built from commit: `2dc78777`
+- Run `git rev-parse HEAD` and compare to check if the graph is stale.
+- Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
 - IBAL Learning-Curve Convergence Analysis
@@ -22,30 +28,52 @@
 - Physics-Informed Design Rationale
 - CodeQL Security Workflow
 - Graphify Project Config (CLAUDE.md)
+- plot_convergence
+- test_charge_features.py
+- run_convergence_replay
+- run_cnp_fold
+- ViscosityPredictorCNP
+- configure_logging
+- calc_metrics
+- calculate_row_priors
+- compute_shape_metrics
+- context_selection.py
+- run_baseline_fold
+- ModuleSigner
+- test_logging_config.py
+- SecurePredictorPackager
+- SecurePredictorPackager
+- Feature provenance: kP, HCI, C_Class (Phase 0 / P1)
+- ._create_metadata
+- ._add_security_files
+- packager.py
+- CLAUDE.md
+- constants.py
+- visqai
 
 ## God Nodes (most connected - your core abstractions)
-1. `run_convergence_replay()` - 11 edges
-2. `plot_convergence()` - 11 edges
-3. `ViscosityPredictorCNP` - 10 edges
-4. `plot_mape()` - 10 edges
-5. `plot_log_convergence()` - 10 edges
-6. `main()` - 9 edges
-7. `main()` - 8 edges
-8. `ModuleSigner` - 8 edges
-9. `featurize_charge()` - 7 edges
-10. `_score_set()` - 7 edges
+1. `build_feature_frame()` - 16 edges
+2. `featurize_chemical_categoricals()` - 14 edges
+3. `ViscosityPredictorCNP` - 13 edges
+4. `plot_convergence()` - 12 edges
+5. `run_convergence_replay()` - 11 edges
+6. `plot_mape()` - 11 edges
+7. `plot_log_convergence()` - 11 edges
+8. `configure_logging()` - 11 edges
+9. `main()` - 10 edges
+10. `run_cnp_fold()` - 10 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `Python Application Workflow` --references--> `VisQAI: Physics-Informed Viscosity Prediction Library`  [INFERRED]
-  .github/workflows/python-app.yml → ml/README.md
-- `Root requirements.txt` --shares_data_with--> `ml/requirements.txt`  [INFERRED]
-  requirements.txt → ml/requirements.txt
-- `load_and_preprocess()` --calls--> `featurize_chemical_categoricals()`  [INFERRED]
-  ml/cnp_mk2/train_o_net_v4_rung1.py → ml/cnp_mk2/categorical_features.py
-- `_load_predictor_class()` --indirect_call--> `ViscosityPredictorCNP`  [INFERRED]
-  ml/cnp_mk2/ibal_parity_test.py → ml/cnp_mk2/inference_o_net.py
-- `Pylint Workflow` --semantically_similar_to--> `Python Application Workflow`  [INFERRED] [semantically similar]
-  .github/workflows/pylint.yml → .github/workflows/python-app.yml
+- `test_prepare_df_coerces_ints_and_id_to_str()` --calls--> `prepare_df()`  [INFERRED]
+  tests/unit/test_metrics.py → src/visqai/eval/data_prep.py
+- `test_prepare_df_default_matches_no_drop_behavior()` --calls--> `prepare_df()`  [INFERRED]
+  tests/unit/test_metrics.py → src/visqai/eval/data_prep.py
+- `test_prepare_df_drop_bad_rows_filters_invalid_viscosity_and_numerics()` --calls--> `prepare_df()`  [INFERRED]
+  tests/unit/test_metrics.py → src/visqai/eval/data_prep.py
+- `test_calc_metrics_empty_after_masking_returns_nans()` --calls--> `calc_metrics()`  [INFERRED]
+  tests/unit/test_metrics.py → src/visqai/eval/metrics.py
+- `test_calc_metrics_masks_non_positive_and_nonfinite()` --calls--> `calc_metrics()`  [INFERRED]
+  tests/unit/test_metrics.py → src/visqai/eval/metrics.py
 
 ## Import Cycles
 - None detected.
@@ -54,27 +82,27 @@
 - **GitHub Actions CI Pipeline (CodeQL, Pylint, Python App)** — _github_workflows_codeql_workflow, _github_workflows_pylint_workflow, _github_workflows_python_app_workflow [INFERRED 0.85]
 - **Physics-Informed ML Design Pattern (Priors + Loss Constraints)** — ml_readme_physics_informed_loss, ml_readme_learnable_physics_priors, ml_readme_learnablephysicsprior_layer, ml_readme_shear_thinning_constraint, ml_readme_input_gradient_constraints [INFERRED 0.85]
 
-## Communities (19 total, 2 thin omitted)
+## Communities (57 total, 7 thin omitted)
 
 ### Community 0 - "IBAL Learning-Curve Convergence Analysis"
-Cohesion: 0.09
-Nodes (48): _aggregate_shape(), _annotate_best(), _annotate_convergence(), apply_base_style(), _classify_slopes(), compute_metrics(), compute_shape_metrics(), _encode_context() (+40 more)
+Cohesion: 0.08
+Nodes (46): _aggregate_shape(), _annotate_best(), _annotate_convergence(), apply_base_style(), _classify_slopes(), compute_metrics(), compute_shape_metrics(), _encode_context() (+38 more)
 
 ### Community 1 - "O-Net CNP Inference (ViscosityPredictorCNP)"
-Cohesion: 0.11
-Nodes (16): AttentionPool, CrossSampleCNP, DataFrame, ndarray, Predicts using the cached memory (calibrated state)., Estimates the model's predictive uncertainty via MC Dropout.          The memo, Inverse-scales a decoder output tensor to log10 viscosity values., Append physicochemical property columns for the chemical categoricals.      Re (+8 more)
+Cohesion: 0.12
+Nodes (13): AttentionPool, CrossSampleCNP, Predicts using the cached memory (calibrated state)., Estimates the model's predictive uncertainty via MC Dropout.          The memo, Inverse-scales a decoder output tensor to log10 viscosity values., Append physicochemical property columns for the chemical categoricals.      Re, Computes separate Prior scores and split-concentration features.         Matche, Adapts the predictor to a new protein group by encoding its context         sam (+5 more)
 
 ### Community 2 - "Model Packaging & Signing"
-Cohesion: 0.12
-Nodes (17): Any, Path, get_latest_checkpoints(), main(), ModuleSigner, Create the secure zip package., RSA-based signing for secure package verification., Create comprehensive metadata dictionary. (+9 more)
+Cohesion: 0.22
+Nodes (6): ModuleSigner, Create the secure zip package., RSA-based signing for secure package verification., Sign a file and return base64-encoded signature., Sign bytes and return base64-encoded signature., Save private key to file with restricted permissions.
 
 ### Community 3 - "IBAL Parity Testing"
-Cohesion: 0.13
-Nodes (26): _apply_style(), build_long(), calc_metrics(), _ctx_indices(), greedy_select(), _held_out_errors(), _load_predictor_class(), main() (+18 more)
+Cohesion: 0.14
+Nodes (24): _apply_style(), build_long(), calc_metrics(), _ctx_indices(), greedy_select(), _held_out_errors(), _load_predictor_class(), main() (+16 more)
 
 ### Community 4 - "O-Net Training (Rung 1)"
-Cohesion: 0.11
-Nodes (19): AttentionPool, _build_ctx_tensor(), _build_tgt_tensors(), compute_viscosity_weights(), CrossSampleCNP, log_flatness(), log_latent_variance(), objective_cv() (+11 more)
+Cohesion: 0.06
+Nodes (41): describe_property_space(), featurize_chemical_categoricals(), _keys(), _lookup(), _normalize_category(), categorical_features.py ======================= Rung-1 representation upgrade:, Lowercase, strip, and map empty/nan-likes to 'none'., Map one category value to its ordered descriptor vector.      Substring match (+33 more)
 
 ### Community 5 - "ML Architecture Docs & Dependencies"
 Cohesion: 0.10
@@ -85,40 +113,108 @@ Cohesion: 0.10
 Nodes (20): get_optimal_clusters(), get_predictions(), perform_clustering(), plot_2d_pca(), plot_2d_tsne(), plot_3d_pca(), plot_3d_tsne(), plot_parallel_coordinates_custom() (+12 more)
 
 ### Community 7 - "Training Pipeline & Ensemble Tuning"
-Cohesion: 0.18
-Nodes (14): DataProcessor, EnsembleModel, Module, check_model_health(), objective_cv(), ndarray, Primary Training and Tuning Script for VisQAI. Handles Optuna hyperparameter op, Run hyperparameter tuning. (+6 more)
+Cohesion: 0.27
+Nodes (9): check_model_health(), objective_cv(), Primary Training and Tuning Script for VisQAI. Handles Optuna hyperparameter op, Run hyperparameter tuning., Train ensemble with robust NaN handling., Returns True if model weights are finite (healthy), False if NaN/Inf., Objective function for Optuna hyperparameter optimization using cross-validation, run_tuning() (+1 more)
 
 ### Community 8 - "Charge Feature Engineering"
-Cohesion: 0.23
-Nodes (14): audit(), charge_coupling_index(), featurize_charge(), normalize_charge_columns(), _protein_present(), DataFrame, charge_features.py ================== Rung-2 representation upgrade: turn the, Rename the raw CSV headers ('Charge', 'ProtPi PI', stray 'Unnamed: *')     to t (+6 more)
+Cohesion: 0.06
+Nodes (31): AttentionPool, CrossSampleCNP, cnp.py ====== The Cross-Sample Conditional Neural Process architecture (Attent, _build_ctx_tensor(), _build_tgt_tensors(), compute_viscosity_weights(), load_and_preprocess(), data.py ======= Training-time data loading: load_and_preprocess builds a fitte (+23 more)
 
 ### Community 9 - "Categorical Feature Engineering"
-Cohesion: 0.24
-Nodes (11): describe_property_space(), featurize_chemical_categoricals(), _keys(), _lookup(), _normalize_category(), DataFrame, categorical_features.py ======================= Rung-1 representation upgrade:, Lowercase, strip, and map empty/nan-likes to 'none'. (+3 more)
+Cohesion: 0.08
+Nodes (36): describe_property_space(), featurize_chemical_categoricals(), _keys(), _lookup(), _normalize_category(), DataFrame, categorical_features.py ======================= Rung-1 representation upgrade:, Lowercase, strip, and map empty/nan-likes to 'none'. (+28 more)
 
 ### Community 10 - "Physics-Informed Design Rationale"
 Cohesion: 0.67
 Nodes (3): Data Scarcity in High-Viscosity Regions (design challenge), Learnable Physics Priors, Physics-Informed Loss
 
+### Community 19 - "plot_convergence"
+Cohesion: 0.10
+Nodes (34): main(), parse_args(), parity_eval.py =============== Combined Ibalizumab CNP context experiment: sel, plot_convergence(), plot_log_convergence(), plot_mape(), plot_sample_profile(), plot_shape_convergence() (+26 more)
+
+### Community 20 - "test_charge_features.py"
+Cohesion: 0.13
+Nodes (29): audit(), charge_coupling_index(), featurize_charge(), normalize_charge_columns(), _numeric_col(), _protein_present(), DataFrame, Series (+21 more)
+
+### Community 21 - "run_convergence_replay"
+Cohesion: 0.10
+Nodes (26): _init_clean_predictor(), _load_order_ids(), _log_summary(), main(), parse_args(), learning_curve.py ================== Replays the optimal (and a random-baselin, Load the sample-addition order from `order_csv`. Accepts either:      - a `Sam, _run_and_plot() (+18 more)
+
+### Community 22 - "run_cnp_fold"
+Cohesion: 0.14
+Nodes (23): DataFrame, cnp_logo.py =========== CNP side of the Phase 0 leave-one-GROUP-out harness: tra, Train one fold's model and score zero-shot + few-shot log10 error on     the hel, Run the CNP LOGO harness over every group for `axis` (or a     caller-supplied s, Average calc_metrics (pooled across all shear columns) over     n_repeats random, run_cnp_fold(), run_cnp_logo(), _shot_metrics() (+15 more)
+
+### Community 23 - "ViscosityPredictorCNP"
+Cohesion: 0.11
+Nodes (20): DataFrame, ndarray, predictor.py ============ ViscosityPredictorCNP: loads a trained checkpoint +, Adapts the predictor to a new protein group by encoding its context         sam, Predicts using the cached memory (calibrated state)., Estimates the model's predictive uncertainty via MC Dropout., Inverse-scales a decoder output tensor to log10 viscosity values., ViscosityPredictorCNP (+12 more)
+
+### Community 24 - "configure_logging"
+Cohesion: 0.11
+Nodes (21): LogRecord, _apply_quick_preset(), main(), parse_args(), logo_eval.py ============ Phase 0 scoreboard: leave-one-GROUP-out evaluation acr, main(), parse_args(), package_model.py ================= Build a signed deployment package from the (+13 more)
+
+### Community 25 - "calc_metrics"
+Cohesion: 0.11
+Nodes (22): prepare_df(), DataFrame, data_prep.py ============ prepare_df: int->float coercion + ID->str, with an o, calc_metrics(), compute_metrics(), _log10_safe(), DataFrame, ndarray (+14 more)
+
+### Community 26 - "calculate_row_priors"
+Cohesion: 0.16
+Nodes (17): calculate_cci(), calculate_regime(), calculate_row_priors(), priors.py ========= Physics-prior lookup tables and the charge-coupling-index, Charge-coupling index: peaks (i.e. -> C_Class) when the protein sits at     its, Map a CCI value to a Near-pI/Mixed/Far regime, with per-protein-class     thres, Per-row prior/concentration-split features. Matches process_row_features     (t, This is the direct regression test for the charge-features bug fix:     inferen (+9 more)
+
+### Community 27 - "compute_shape_metrics"
+Cohesion: 0.17
+Nodes (15): _aggregate_shape(), _classify_slopes(), compute_shape_metrics(), ndarray, shape_metrics.py ================ Shape-fidelity metrics for viscosity shear-r, Aggregate per-sample shape metrics over a set of profiles.      shape_rmse_log, Per-segment direction: -1 thinning, 0 flat, +1 thickening., Shape-fidelity metrics for one profile (actual vs predicted, linear cP). (+7 more)
+
+### Community 28 - "context_selection.py"
+Cohesion: 0.20
+Nodes (14): _ctx_indices(), greedy_select(), _held_out_errors(), _objective(), preprocess_pool(), ndarray, context_selection.py ===================== Greedy forward selection (+ optiona, Try replacing each selected member with each non-member; keep improvements. (+6 more)
+
+### Community 29 - "run_baseline_fold"
+Cohesion: 0.27
+Nodes (13): Pipeline, fit_baseline(), _make_pipeline(), _melt_long(), DataFrame, baseline.py =========== Phase 0 reference baseline: a plain feature-only regress, Run the baseline over every LOGO group for `axis` (or a caller-supplied     subs, One row per (sample, shear rate): every engineered static feature,     plus log1 (+5 more)
+
+### Community 30 - "ModuleSigner"
+Cohesion: 0.15
+Nodes (7): ModuleSigner, Path, RSA-based signing for secure package verification., Sign a file and return base64-encoded signature., Sign bytes and return base64-encoded signature., Export public key in PEM format., Save private key to file with restricted permissions.
+
+### Community 31 - "test_logging_config.py"
+Cohesion: 0.15
+Nodes (6): Each test gets a clean, unconfigured state and leaves loguru without     dangli, file_level defaults more verbose (DEBUG) than console (INFO) -- a     DEBUG mes, The InterceptHandler is the mechanism that lets every existing     logging.getL, _reset_logging_state(), test_configure_logging_respects_file_level_below_console(), test_stdlib_logging_is_routed_into_loguru_file_sink()
+
+### Community 32 - "SecurePredictorPackager"
+Cohesion: 0.23
+Nodes (7): Package a visqai model with the runtime-inference source modules it needs., Create the secure zip package., SecurePredictorPackager, Light integration test for SecurePredictorPackager: builds a package against a, test_package_contains_expected_members_and_valid_signatures(), test_package_single_vs_ensemble_naming(), ZipFile
+
+### Community 33 - "SecurePredictorPackager"
+Cohesion: 0.38
+Nodes (5): get_latest_checkpoints(), main(), Finds .pt files in the most recently modified directory within experiments_dir., Package VisQAI models with specific `src` modules., SecurePredictorPackager
+
+### Community 34 - "Feature provenance: kP, HCI, C_Class (Phase 0 / P1)"
+Cohesion: 0.40
+Nodes (4): Feature provenance: kP, HCI, C_Class (Phase 0 / P1), Recommendation, What this does NOT prove, What was checked
+
+### Community 37 - "packager.py"
+Cohesion: 0.50
+Nodes (3): get_latest_checkpoints(), packager.py =========== SecurePredictorPackager: builds a cryptographically si, Finds .pt files in the most recently modified directory within experiments_dir.
+
 ## Knowledge Gaps
-- **8 isolated node(s):** `CodeQL Advanced Workflow`, `Pylint Workflow`, `Graphify Knowledge Graph Workflow Rules`, `ml/requirements.txt`, `Non-Linear Concentration Effects (design challenge)` (+3 more)
+- **13 isolated node(s):** `visqai`, `graphify`, `What was checked`, `What this does NOT prove`, `Recommendation` (+8 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **2 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **7 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `ViscosityPredictorCNP` connect `O-Net CNP Inference (ViscosityPredictorCNP)` to `IBAL Parity Testing`?**
-  _High betweenness centrality (0.093) - this node is a cross-community bridge._
-- **Why does `_load_predictor_class()` connect `IBAL Parity Testing` to `O-Net CNP Inference (ViscosityPredictorCNP)`?**
-  _High betweenness centrality (0.064) - this node is a cross-community bridge._
-- **What connects `CodeQL Advanced Workflow`, `Pylint Workflow`, `Graphify Knowledge Graph Workflow Rules` to the rest of the system?**
-  _8 weakly-connected nodes found - possible documentation gaps or missing edges._
-- **Should `IBAL Learning-Curve Convergence Analysis` be split into smaller, more focused modules?**
-  _Cohesion score 0.09013605442176871 - nodes in this community are weakly interconnected._
-- **Should `O-Net CNP Inference (ViscosityPredictorCNP)` be split into smaller, more focused modules?**
-  _Cohesion score 0.10967741935483871 - nodes in this community are weakly interconnected._
-- **Should `Model Packaging & Signing` be split into smaller, more focused modules?**
-  _Cohesion score 0.1168091168091168 - nodes in this community are weakly interconnected._
-- **Should `IBAL Parity Testing` be split into smaller, more focused modules?**
-  _Cohesion score 0.13105413105413105 - nodes in this community are weakly interconnected._
+- **Why does `ViscosityPredictorCNP` connect `ViscosityPredictorCNP` to `Charge Feature Engineering`, `plot_convergence`, `run_convergence_replay`, `run_cnp_fold`?**
+  _High betweenness centrality (0.249) - this node is a cross-community bridge._
+- **Why does `build_feature_frame()` connect `Categorical Feature Engineering` to `Charge Feature Engineering`, `test_charge_features.py`, `ViscosityPredictorCNP`, `calculate_row_priors`, `run_baseline_fold`?**
+  _High betweenness centrality (0.191) - this node is a cross-community bridge._
+- **Why does `configure_logging()` connect `configure_logging` to `plot_convergence`, `run_convergence_replay`?**
+  _High betweenness centrality (0.153) - this node is a cross-community bridge._
+- **Are the 12 inferred relationships involving `build_feature_frame()` (e.g. with `_melt_long()` and `._preprocess()`) actually correct?**
+  _`build_feature_frame()` has 12 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 9 inferred relationships involving `featurize_chemical_categoricals()` (e.g. with `build_feature_frame()` and `test_all_chem_categoricals_covered_in_output()`) actually correct?**
+  _`featurize_chemical_categoricals()` has 9 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 6 inferred relationships involving `ViscosityPredictorCNP` (e.g. with `_init_clean_predictor()` and `main()`) actually correct?**
+  _`ViscosityPredictorCNP` has 6 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 9 inferred relationships involving `plot_convergence()` (e.g. with `_run_and_plot()` and `annotate_best()`) actually correct?**
+  _`plot_convergence()` has 9 INFERRED edges - model-reasoned connections that need verification._

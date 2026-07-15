@@ -97,7 +97,11 @@ def _load_order_ids(order_csv) -> list:
     if "Sample_ID" in order_df.columns:
         return order_df["Sample_ID"].tolist()
     if "ID" in order_df.columns:
-        rank_col = "cnp_rank" if "cnp_rank" in order_df.columns else ("rank" if "rank" in order_df.columns else None)
+        rank_col = (
+            "cnp_rank"
+            if "cnp_rank" in order_df.columns
+            else ("rank" if "rank" in order_df.columns else None)
+        )
         if rank_col:
             order_df = order_df.sort_values(rank_col)
         return order_df["ID"].tolist()
