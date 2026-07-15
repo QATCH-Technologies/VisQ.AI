@@ -101,3 +101,5 @@ Thumbs.db
 
 # --- Custom Project Ignores ---
 VisQAI/assets/
+/models
+/logs

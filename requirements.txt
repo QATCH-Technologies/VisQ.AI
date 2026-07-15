@@ -1,18 +1,18 @@
 -e .
 
-# Core dependencies
-joblib>=1.2.0
-pandas>=1.5.0
-PyQt5>=5.15.0
+# Runtime dependencies (also declared in pyproject.toml [project.dependencies] --
+# this file exists for `pip install -r requirements.txt` workflows / CI caching).
+torch
+numpy
+pandas
+scikit-learn
+scipy
+joblib
+matplotlib
+optuna
+cryptography
+loguru
 
-# Machine‐learning & plotting dependencies
-tensorflow>=2.10.0
-optuna>=3.0.0
-matplotlib>=3.6.0
-
-# Additional model libraries
-xgboost>=1.7.0
-scikit-learn>=1.0.0
-
-# Linting
-flake8>=6.0.0
+# Dev/test
+pytest
+flake8

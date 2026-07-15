@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "visqai"
+version = "1.0.0"
+description = "VisQ.AI: physics-informed viscosity prediction"
+authors = [{ name = "Paul MacNichol", email = "paul.macnichol@qatchtech.com" }]
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "numpy",
+    "pandas",
+    "scikit-learn",
+    "scipy",
+    "joblib",
+    "matplotlib",
+    "optuna",
+    "cryptography",
+    "loguru",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+visqai-train = "visqai.cli.train:main"
+visqai-parity-eval = "visqai.cli.parity_eval:main"
+visqai-learning-curve = "visqai.cli.learning_curve:main"
+visqai-package = "visqai.cli.package_model:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
