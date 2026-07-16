@@ -310,6 +310,12 @@ PRIOR_COLS = [
 
 CONC_SPLIT_COLS = [c for k in CONC_THRESHOLDS for c in (f"{k}_low", f"{k}_high")]
 
+# Ceiling on the "_high" fraction-of-threshold (concentration above the
+# CONC_THRESHOLDS cutoff, in units of the threshold itself). Bounds how far
+# an extreme concentration can push this feature, same rationale as
+# charge.py's ION_STRENGTH_CAP_M.
+CONC_HIGH_FRAC_CAP: float = 3.0
+
 
 def calculate_cci(c_class, ph, pi, net_charge=None, near_pi_sigma: float = NEAR_PI_SIGMA, tau: float = 1.5) -> float:
     """Charge-coupling index: peaks (i.e. -> C_Class) when the protein sits at
@@ -409,7 +415,20 @@ def calculate_row_priors(row) -> dict:
         for target_ing, threshold in CONC_THRESHOLDS.items():
             match = (target_ing in ing_name) or (target_ing == "arginine" and "arg" in ing_name)
             if match:
-                concs[f"{target_ing}_low"] = min(ing_conc, threshold)
-                concs[f"{target_ing}_high"] = max(ing_conc - threshold, 0)
+                # Fraction-of-threshold, not raw concentration (2026-07-15
+                # proline trace): under a leave-one-ingredient-out fold these
+                # two columns are IDENTICALLY ZERO in every training row (the
+                # held-out ingredient never appears in train), so the fitted
+                # StandardScaler has zero/near-zero variance for them: any
+                # nonzero held-out value then blows up into a huge z-score
+                # the network never learned to handle. Isolating this
+                # (zeroing only proline_low/high against a real trained
+                # model) reproduced the entire -0.38 ablation_delta gap on
+                # its own -- the property vector was not at fault. Dividing
+                # by `threshold` bounds the raw magnitude of that jump to
+                # O(1) instead of O(concentration units), the same fix
+                # applied to charge.py's ionic-strength proxy for nacl.
+                concs[f"{target_ing}_low"] = min(ing_conc, threshold) / threshold
+                concs[f"{target_ing}_high"] = min(max(ing_conc - threshold, 0) / threshold, CONC_HIGH_FRAC_CAP)
 
     return {**priors, **concs}

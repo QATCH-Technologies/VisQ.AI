@@ -95,8 +95,10 @@ def test_calculate_row_priors_concentration_split():
     )
     out = calculate_row_priors(row)
     threshold = CONC_THRESHOLDS["nacl"]
-    assert out["nacl_low"] == pytest.approx(threshold)
-    assert out["nacl_high"] == pytest.approx(200.0 - threshold)
+    # nacl_low/nacl_high are fraction-of-threshold (bounded, not raw
+    # concentration) -- see priors.py's CONC_HIGH_FRAC_CAP comment.
+    assert out["nacl_low"] == pytest.approx(1.0)
+    assert out["nacl_high"] == pytest.approx((200.0 - threshold) / threshold)
 
 
 def test_calculate_row_priors_ignores_zero_concentration_ingredient():
