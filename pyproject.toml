@@ -26,6 +26,7 @@ dev = ["pytest"]
 
 [project.scripts]
 visqai-train = "visqai.cli.train:main"
+visqai-train-final = "visqai.cli.run_final_training:main"
 visqai-parity-eval = "visqai.cli.parity_eval:main"
 visqai-learning-curve = "visqai.cli.learning_curve:main"
 visqai-package = "visqai.cli.package_model:main"

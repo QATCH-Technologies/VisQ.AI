@@ -49,6 +49,7 @@ PROTEIN_CLASS_MAP = {
     "poly-higg": "polyclonal",
     "bgg": "polyclonal",
     "bsa": "other",
+    "risankizumab": "igg1",
 }
 # Groups excluded from contrastive/consistency sampling -- they don't
 # represent a specific protein type and would produce trivially easy
@@ -57,9 +58,81 @@ NON_PROTEIN_GROUPS = {"none"}
 
 KEY_SHEARS = [100.0, 1000.0, 10000.0, 100000.0, 15000000.0]
 
+# When a numeric column has zero variance in a training fold (e.g. a
+# leave-one-ingredient-out fold where the held-out ingredient's engineered
+# columns are identically zero/constant in every training row), sklearn's
+# StandardScaler sets scale_=1 for that column (see
+# sklearn.preprocessing._data._handle_zeros_in_scale) -- which means
+# .transform() on a later OOD value is just (raw - mean), i.e. the raw
+# magnitude passes through almost untouched. This fixed a-priori scale
+# replaces that degenerate 1.0 so a constant-in-training column can never
+# inject a raw-unit activation regardless of what a held-out fold's value
+# turns out to be. It is deliberately NOT derived from this fold's own data
+# (that would just reproduce the degenerate case) -- it's a fixed, generous
+# guess at "typical" spread for an engineered feature of this pipeline, which
+# is all that's needed once the raw feature magnitudes themselves are already
+# bounded at construction (see categorical.py's *_mw_ratio fields and
+# pipeline.py's SALT_MG_ML_CAP).
+ZERO_VARIANCE_FALLBACK_SCALE: float = 10.0
+
+# Descriptor-OOD down-weighting (prior-side, not corrector work): caps every
+# SCALED numeric feature to +/- this many standard deviations, both here (at
+# fit time -- a single outlier training row shouldn't inject a raw, unbounded
+# activation either) and in visqai.inference.predictor's _preprocess/
+# _context_residuals (at inference time, where a held-out group's real value
+# can legitimately exceed anything the training fold represented). Matches
+# both DESCRIPTOR_OOD_CLIP_SIGMA in predictor.py and
+# visqai.eval.cnp_logo.FOLD_RANGE_N_SIGMA, the existing diagnostic that logs
+# this exact condition without acting on it -- keep all three in sync.
+DESCRIPTOR_OOD_CLIP_SIGMA: float = 5.0
+
+
+def _fix_zero_variance_scale(preprocessor: ColumnTransformer, X_matrix: np.ndarray, num_cols: list[str]) -> np.ndarray:
+    """Patch the fitted 'num' StandardScaler in place: any column that came
+    out zero-variance in this fit gets ZERO_VARIANCE_FALLBACK_SCALE instead
+    of sklearn's degenerate scale_=1. Patches both the already-computed
+    X_matrix (fit_transform used the old scale) and the persisted scaler
+    object, so every future .transform() call -- including at inference time
+    via the joblib-dumped preprocessor.pkl -- inherits the same bounded
+    behaviour for that column."""
+    scaler = preprocessor.named_transformers_["num"]
+    zero_var = np.where(scaler.var_ <= 1e-12)[0]
+    if len(zero_var) == 0:
+        return X_matrix
+    print(
+        f"  [load_and_preprocess] zero-variance training columns "
+        f"{[num_cols[i] for i in zero_var]} -> using fixed a-priori scale "
+        f"{ZERO_VARIANCE_FALLBACK_SCALE} instead of sklearn's degenerate scale_=1."
+    )
+    for i in zero_var:
+        # fit_transform already produced (raw - mean_) / 1.0 for these
+        # columns; rescale in place by the fixed factor rather than
+        # refitting, then persist the same fix into the scaler itself.
+        X_matrix[:, i] = X_matrix[:, i] / ZERO_VARIANCE_FALLBACK_SCALE
+        scaler.scale_[i] = ZERO_VARIANCE_FALLBACK_SCALE
+    return X_matrix
+
+
+def _drop_blank_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Pre-2.4 data-hygiene finding (issue1_query_conditioned_correction_
+    plan.md Finding C): a handful of rows in the raw export are entirely
+    blank (no Protein_type, no Protein_conc -- trailing/malformed CSV rows,
+    not real measurements; two even carry a stray leftover Viscosity_100
+    value with every other field NaN). Unlike the eval/LOGO harness path
+    (which always runs visqai.eval.data_prep.prepare_df first),
+    load_and_preprocess is the real production training entrypoint and had
+    no such filter -- these rows were reaching build_feature_frame's
+    fillna(0.0), then preprocessor.fit_transform(df), contaminating the
+    fitted StandardScaler's mean/scale for every numeric column with
+    all-zero(ish) rows before the later per-sample `len(raw_x) < 3` check
+    drops them from actual training samples. Drop them before anything is
+    fit."""
+    return df[df["Protein_type"].notna() | df["Protein_conc"].notna()].reset_index(drop=True)
+
 
 def load_and_preprocess(csv_path, save_dir=None):
     df = pd.read_csv(csv_path)
+    df = _drop_blank_rows(df)
 
     df, num_cols, cat_cols = build_feature_frame(df)
     protected_indices = protected_feature_indices(num_cols)
@@ -72,9 +145,13 @@ def load_and_preprocess(csv_path, save_dir=None):
     )
 
     X_matrix = preprocessor.fit_transform(df)
+    X_matrix = _fix_zero_variance_scale(preprocessor, X_matrix, num_cols)
     if np.isnan(X_matrix).any():
         print("WARNING: NaNs found in X_matrix after preprocessing! Replacing with 0.")
         X_matrix = np.nan_to_num(X_matrix)
+    X_matrix[:, : len(num_cols)] = np.clip(
+        X_matrix[:, : len(num_cols)], -DESCRIPTOR_OOD_CLIP_SIGMA, DESCRIPTOR_OOD_CLIP_SIGMA
+    )
 
     all_shear, all_visc = [], []
     for i in range(len(df)):

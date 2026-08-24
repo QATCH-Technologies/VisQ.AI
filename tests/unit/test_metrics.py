@@ -2,7 +2,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from visqai.eval.metrics import calc_metrics, compute_metrics, _log10_safe
+from visqai.eval.metrics import (
+    calc_metrics,
+    compute_metrics,
+    _log10_safe,
+    check_against_noise_band,
+    AGGREGATE_MDE,
+    PER_FOLD_RUN_SD,
+)
 from visqai.eval.constants import PRED_COLS, VISC_COLS
 from visqai.eval.data_prep import prepare_df
 
@@ -88,3 +95,49 @@ def test_prepare_df_default_matches_no_drop_behavior():
     df = pd.DataFrame({"ID": [1], VISC_COLS[0]: [-1.0]})
     out = prepare_df(df)  # drop_bad_rows defaults False
     assert len(out) == 1
+
+
+def test_check_against_noise_band_single_measurement_uses_raw_sd():
+    """is_difference=False: a single run's own deviation from a fixed
+    reference is compared directly against PER_FOLD_RUN_SD, no scaling."""
+    assert check_against_noise_band(PER_FOLD_RUN_SD * 0.9, scope="per_fold", is_difference=False) is True
+    assert check_against_noise_band(PER_FOLD_RUN_SD * 1.1, scope="per_fold", is_difference=False) is False
+
+
+def test_check_against_noise_band_difference_scales_as_sqrt_2_over_k():
+    """Task G's C3 fix: a difference of two independently-measured
+    stochastic quantities gets a WIDER band than a single measurement --
+    sigma*sqrt(2) at 1 seed each, narrowing toward sigma*sqrt(2/k) as more
+    seeds are averaged per side. This is the relationship whose absence (one
+    stored 'band' number applied to both single measurements and
+    differences alike) was the Task follow-on's C3 error."""
+    band_1_seed = PER_FOLD_RUN_SD * (2.0 / 1) ** 0.5
+    band_5_seed = PER_FOLD_RUN_SD * (2.0 / 5) ** 0.5
+    assert band_5_seed < band_1_seed  # more seeds -> tighter band
+    assert band_5_seed == pytest.approx(PER_FOLD_RUN_SD * 0.6325, rel=1e-3)
+
+    just_inside_5seed = band_5_seed * 0.99
+    just_outside_5seed_but_inside_1seed = (band_5_seed + band_1_seed) / 2
+    assert check_against_noise_band(just_inside_5seed, scope="per_fold", is_difference=True, n_seeds=5) is True
+    assert check_against_noise_band(just_outside_5seed_but_inside_1seed, scope="per_fold", is_difference=True, n_seeds=5) is False
+    assert check_against_noise_band(just_outside_5seed_but_inside_1seed, scope="per_fold", is_difference=True, n_seeds=1) is True
+
+
+def test_check_against_noise_band_aggregate_scope_ignores_difference_and_seeds():
+    """The aggregate scope is always a single fixed threshold (AGGREGATE_MDE)
+    -- is_difference/n_seeds are per_fold-only concepts."""
+    assert check_against_noise_band(0.01, scope="aggregate", is_difference=True, n_seeds=5) is True
+    assert check_against_noise_band(0.02, scope="aggregate", is_difference=False) is False
+
+
+def test_check_against_noise_band_rejects_unknown_scope():
+    with pytest.raises(ValueError):
+        check_against_noise_band(0.01, scope="per_protein", is_difference=False)
+
+
+def test_check_against_noise_band_per_fold_requires_is_difference():
+    """No default: a caller must state whether its number is a difference,
+    per Task G -- omitting it is a TypeError (is_difference is a required
+    keyword-only argument), not a silently-assumed False."""
+    with pytest.raises(TypeError):
+        check_against_noise_band(0.01, scope="per_fold")

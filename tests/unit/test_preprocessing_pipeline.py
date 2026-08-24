@@ -9,7 +9,7 @@ from visqai.preprocessing.pipeline import (
     BASE_CATEGORICAL_COLS,
     ENGINEERED_COLS,
 )
-from visqai.features.charge import CHARGE_FEATURE_COLS_BASE
+from visqai.features.charge import CHARGE_FEATURE_COLS
 from visqai.physics.priors import PRIOR_COLS, CONC_SPLIT_COLS, calculate_cci, calculate_regime
 
 
@@ -21,8 +21,7 @@ def _sample_row(**overrides):
         "Protein_conc": 100.0,
         "Buffer_pH": 6.0,
         "PI_mean": 8.5,
-        "Charge": 12.0,
-        "ProtPi PI": 8.2,
+        "Whole_Antibody_Charge_at_Buffer_pH": 12.0,
         "kP": 1.0,
         "MW": 148000.0,
         "PI_range": 0.5,
@@ -53,29 +52,23 @@ def test_build_feature_frame_returns_all_base_and_engineered_columns():
     assert cat_cols == BASE_CATEGORICAL_COLS
 
 
-def test_build_feature_frame_populates_real_charge_columns_not_zero_fill():
-    """The core regression test for the bug fix: a formulation with a real
-    Charge value must end up with a real net_charge, not the silent
-    zero-fill inference_o_net.py used to produce."""
-    df = pd.DataFrame([_sample_row(Charge=12.0, **{"ProtPi PI": 8.2})])
+def test_build_feature_frame_populates_real_whole_charge_not_zero_fill():
+    df = pd.DataFrame(
+        [_sample_row(Protein_type="synthetic_igg1", **{"Whole_Antibody_Charge_at_Buffer_pH": 12.0})]
+    )
     out, num_cols, _ = build_feature_frame(df)
-    for c in CHARGE_FEATURE_COLS_BASE:
+    for c in CHARGE_FEATURE_COLS:
         assert c in num_cols
-    assert out.loc[0, "net_charge"] == pytest.approx(12.0)
-    assert out.loc[0, "charge_missing"] == 0.0
+    assert out.loc[0, "whole_charge"] == pytest.approx(12.0)
 
 
-def test_build_feature_frame_prior_columns_present_and_charge_aware():
-    # Row is exactly at its pI via net_charge, even though Buffer_pH != PI_mean
-    # (so the OLD pH-distance-only proxy would have scored this differently).
-    df = pd.DataFrame([_sample_row(Charge=0.0, Buffer_pH=6.0, PI_mean=8.5)])
+def test_build_feature_frame_prior_columns_present():
+    df = pd.DataFrame([_sample_row(Buffer_pH=8.5, PI_mean=8.5)])
     out, num_cols, _ = build_feature_frame(df)
     for c in PRIOR_COLS + CONC_SPLIT_COLS:
         assert c in num_cols
-    # net_charge==0 should hit the Near-pI regime (charge-aware CCI), not the
-    # Mixed/Far regime the old pH-distance-only proxy would have given for
-    # Buffer_pH=6.0 vs PI_mean=8.5.
-    cci = calculate_cci(c_class=1.0, ph=6.0, pi=8.5, net_charge=0.0)
+    # Buffer_pH == PI_mean -> the pH-distance CCI proxy hits Near-pI.
+    cci = calculate_cci(c_class=1.0, ph=8.5, pi=8.5)
     assert calculate_regime(cci, "mab_igg1") == "Near-pI"
     # and the regime-dict lookup actually ran (stabilizer prior is always
     # populated when Stabilizer_type is present, regardless of regime).
@@ -99,6 +92,27 @@ def test_protected_feature_indices_includes_charge_and_property_cols():
     protected = protected_feature_indices(num_cols)
     protected_names = {num_cols[i] for i in protected}
     assert "Protein_conc" in protected_names
-    assert "net_charge" in protected_names
+    assert "whole_charge" in protected_names
     for c in prop_cols:
         assert c in protected_names
+
+
+def test_salt_mg_ml_is_capped_at_construction_not_left_unbounded():
+    """P0 fix: Salt_mg_mL used to be an unbounded Salt_conc * salt_mw product
+    that could inject an outsized raw magnitude into Total_Solute_Mass /
+    Effective_Protein_Fraction under a leave-one-salt-out fold. It's now
+    clipped to SALT_MG_ML_CAP at feature-construction time, independent of
+    whatever a fold's StandardScaler happens to learn."""
+    from visqai.preprocessing.pipeline import SALT_MG_ML_CAP
+
+    df = pd.DataFrame([_sample_row(Salt_type="nacl", Salt_conc=1_000_000.0)])
+    out, num_cols, _ = build_feature_frame(df)
+    assert out.loc[0, "Salt_mg_mL"] == pytest.approx(SALT_MG_ML_CAP)
+    # And it still actually feeds Total_Solute_Mass (not silently dropped).
+    assert out.loc[0, "Total_Solute_Mass"] >= SALT_MG_ML_CAP
+
+
+def test_num_cols_never_carries_a_raw_salt_molecular_weight():
+    df = pd.DataFrame([_sample_row()])
+    _, num_cols, _ = build_feature_frame(df)
+    assert not any("salt_mw" in c for c in num_cols)

@@ -75,53 +75,77 @@ CHEM_CATEGORICALS = [
 # Descriptor sets differ per categorical because the relevant physics differs.
 # ---------------------------------------------------------------------------
 
+# Reference MW each table's ratio is expressed against (the most common /
+# canonical member of that category). Raw Da values span two orders of
+# magnitude across categories (60 - 8400), which is exactly the kind of
+# unbounded, StandardScaler-dependent magnitude that blew up under a
+# leave-one-ingredient-out fold (see SALT_PROPS below and the P0 salt
+# regression this fixes): when the held-out category is rare/absent from a
+# training fold, that fold's fitted scale for the raw-MW column can be near
+# zero, so the held-out row's raw Da value passes through the scaler almost
+# unwhitened. Expressing MW as a same-order-of-magnitude ratio bounds the raw
+# feature value itself at construction time, before it ever reaches the
+# scaler -- degenerate fold statistics can no longer turn it into an outsized
+# activation.
+BUFFER_MW_REF: float = 155.2  # histidine
+STABILIZER_MW_REF: float = 342.3  # sucrose / trehalose
+SURFACTANT_MW_REF: float = 1228.0  # tween-20 / polysorbate-20
+EXCIPIENT_MW_REF: float = 174.2  # arginine
+
 # Buffers: what matters is the pH region they buffer (pKa), their charge tendency
 # at formulation pH, size, and whether they specifically interact with protein
 # surfaces (histidine's imidazole can coordinate; phosphate/acetate are inert-ish).
 BUFFER_PROPS: dict[str, dict[str, float]] = {
     "histidine": {
         "buf_pKa": 6.0,
-        "buf_mw": 155.2,
+        "buf_mw_ratio": 155.2 / BUFFER_MW_REF,
         "buf_charge_sign": 1.0,
         "buf_specific_interact": 1.0,
     },
     "pbs": {
         "buf_pKa": 7.2,
-        "buf_mw": 141.96,
+        "buf_mw_ratio": 141.96 / BUFFER_MW_REF,
         "buf_charge_sign": -1.0,
         "buf_specific_interact": 0.0,
     },
     "phosphate": {
         "buf_pKa": 7.2,
-        "buf_mw": 141.96,
+        "buf_mw_ratio": 141.96 / BUFFER_MW_REF,
         "buf_charge_sign": -1.0,
         "buf_specific_interact": 0.0,
     },
     "acetate": {
         "buf_pKa": 4.76,
-        "buf_mw": 60.05,
+        "buf_mw_ratio": 60.05 / BUFFER_MW_REF,
         "buf_charge_sign": -1.0,
         "buf_specific_interact": 0.0,
     },
     "citrate": {
         "buf_pKa": 5.4,
-        "buf_mw": 192.12,
+        "buf_mw_ratio": 192.12 / BUFFER_MW_REF,
         "buf_charge_sign": -1.0,
         "buf_specific_interact": 0.0,
     },
-    "none": {"buf_pKa": 0.0, "buf_mw": 0.0, "buf_charge_sign": 0.0, "buf_specific_interact": 0.0},
+    "none": {"buf_pKa": 0.0, "buf_mw_ratio": 0.0, "buf_charge_sign": 0.0, "buf_specific_interact": 0.0},
 }
 
 # Salts: the dominant axis for protein interactions is the Hofmeister series
 # (kosmotrope/charge-screening character). We encode a relative Hofmeister
-# position (negative = kosmotropic/stabilising, positive = chaotropic), the
-# valence, and MW. NaCl sits mid-series as the reference (0.0).
+# position (negative = kosmotropic/stabilising, positive = chaotropic) and the
+# valence. MW is deliberately NOT encoded here (unlike the other four
+# categoricals): valence + Hofmeister position already carry the salt physics
+# that drives protein-protein interaction, and raw salt_mw was the P0
+# regression -- a leave-one-salt-out fold (e.g. holding out nacl, the
+# dominant salt in this dataset) left salt_mw near-zero-variance in training,
+# so the held-out row's raw Da value blew through the fold's degenerate
+# scaler as an outsized activation. Dropping it removes that failure mode
+# entirely instead of merely shrinking it.
 SALT_PROPS: dict[str, dict[str, float]] = {
-    "nacl": {"salt_hofmeister": 0.0, "salt_valence": 1.0, "salt_mw": 58.44},
-    "kcl": {"salt_hofmeister": 0.2, "salt_valence": 1.0, "salt_mw": 74.55},
-    "nacitrate": {"salt_hofmeister": -1.0, "salt_valence": 3.0, "salt_mw": 258.06},
-    "ammonium_sulfate": {"salt_hofmeister": -1.5, "salt_valence": 2.0, "salt_mw": 132.14},
-    "none": {"salt_hofmeister": 0.0, "salt_valence": 0.0, "salt_mw": 0.0},
+    "nacl": {"salt_hofmeister": 0.0, "salt_valence": 1.0},
+    "kcl": {"salt_hofmeister": 0.2, "salt_valence": 1.0},
+    "nacitrate": {"salt_hofmeister": -1.0, "salt_valence": 3.0},
+    "ammonium_sulfate": {"salt_hofmeister": -1.5, "salt_valence": 2.0},
+    "none": {"salt_hofmeister": 0.0, "salt_valence": 0.0},
 }
 
 # Excipients (viscosity-modifying amino acids / osmolytes): net charge at ~pH6,
@@ -131,42 +155,42 @@ SALT_PROPS: dict[str, dict[str, float]] = {
 EXCIPIENT_PROPS: dict[str, dict[str, float]] = {
     "arginine": {
         "exc_charge": 1.0,
-        "exc_mw": 174.2,
+        "exc_mw_ratio": 174.2 / EXCIPIENT_MW_REF,
         "exc_logP": -4.2,
         "exc_hdonor": 4.0,
         "exc_visc_reducer": 1.0,
     },
     "lysine": {
         "exc_charge": 1.0,
-        "exc_mw": 146.19,
+        "exc_mw_ratio": 146.19 / EXCIPIENT_MW_REF,
         "exc_logP": -3.05,
         "exc_hdonor": 3.0,
         "exc_visc_reducer": 1.0,
     },
     "proline": {
         "exc_charge": 0.0,
-        "exc_mw": 115.13,
+        "exc_mw_ratio": 115.13 / EXCIPIENT_MW_REF,
         "exc_logP": -2.5,
         "exc_hdonor": 1.0,
         "exc_visc_reducer": 1.0,
     },
     "glycine": {
         "exc_charge": 0.0,
-        "exc_mw": 75.07,
+        "exc_mw_ratio": 75.07 / EXCIPIENT_MW_REF,
         "exc_logP": -3.21,
         "exc_hdonor": 1.0,
         "exc_visc_reducer": 0.0,
     },
     "histidine": {
         "exc_charge": 0.1,
-        "exc_mw": 155.15,
+        "exc_mw_ratio": 155.15 / EXCIPIENT_MW_REF,
         "exc_logP": -3.32,
         "exc_hdonor": 2.0,
         "exc_visc_reducer": 1.0,
     },
     "none": {
         "exc_charge": 0.0,
-        "exc_mw": 0.0,
+        "exc_mw_ratio": 0.0,
         "exc_logP": 0.0,
         "exc_hdonor": 0.0,
         "exc_visc_reducer": 0.0,
@@ -177,22 +201,22 @@ EXCIPIENT_PROPS: dict[str, dict[str, float]] = {
 # exclusion strength), and a preferential-exclusion flag. Sucrose and trehalose
 # are near-identical disaccharides -> they should sit on top of each other.
 STABILIZER_PROPS: dict[str, dict[str, float]] = {
-    "sucrose": {"stab_mw": 342.3, "stab_oh": 8.0, "stab_pref_excl": 1.0},
-    "trehalose": {"stab_mw": 342.3, "stab_oh": 8.0, "stab_pref_excl": 1.0},
-    "sorbitol": {"stab_mw": 182.17, "stab_oh": 6.0, "stab_pref_excl": 1.0},
-    "mannitol": {"stab_mw": 182.17, "stab_oh": 6.0, "stab_pref_excl": 1.0},
-    "none": {"stab_mw": 0.0, "stab_oh": 0.0, "stab_pref_excl": 0.0},
+    "sucrose": {"stab_mw_ratio": 342.3 / STABILIZER_MW_REF, "stab_oh": 8.0, "stab_pref_excl": 1.0},
+    "trehalose": {"stab_mw_ratio": 342.3 / STABILIZER_MW_REF, "stab_oh": 8.0, "stab_pref_excl": 1.0},
+    "sorbitol": {"stab_mw_ratio": 182.17 / STABILIZER_MW_REF, "stab_oh": 6.0, "stab_pref_excl": 1.0},
+    "mannitol": {"stab_mw_ratio": 182.17 / STABILIZER_MW_REF, "stab_oh": 6.0, "stab_pref_excl": 1.0},
+    "none": {"stab_mw_ratio": 0.0, "stab_oh": 0.0, "stab_pref_excl": 0.0},
 }
 
 # Surfactants: HLB (hydrophilic-lipophilic balance), MW, and CMC. Tween-20 vs
 # Tween-80 differ mainly in CMC and HLB (tail length) -> close but distinguishable.
 SURFACTANT_PROPS: dict[str, dict[str, float]] = {
-    "tween-20": {"surf_hlb": 16.7, "surf_mw": 1228.0, "surf_cmc": 0.06},
-    "tween-80": {"surf_hlb": 15.0, "surf_mw": 1310.0, "surf_cmc": 0.012},
-    "polysorbate-20": {"surf_hlb": 16.7, "surf_mw": 1228.0, "surf_cmc": 0.06},
-    "polysorbate-80": {"surf_hlb": 15.0, "surf_mw": 1310.0, "surf_cmc": 0.012},
-    "poloxamer-188": {"surf_hlb": 29.0, "surf_mw": 8400.0, "surf_cmc": 0.05},
-    "none": {"surf_hlb": 0.0, "surf_mw": 0.0, "surf_cmc": 0.0},
+    "tween-20": {"surf_hlb": 16.7, "surf_mw_ratio": 1228.0 / SURFACTANT_MW_REF, "surf_cmc": 0.06},
+    "tween-80": {"surf_hlb": 15.0, "surf_mw_ratio": 1310.0 / SURFACTANT_MW_REF, "surf_cmc": 0.012},
+    "polysorbate-20": {"surf_hlb": 16.7, "surf_mw_ratio": 1228.0 / SURFACTANT_MW_REF, "surf_cmc": 0.06},
+    "polysorbate-80": {"surf_hlb": 15.0, "surf_mw_ratio": 1310.0 / SURFACTANT_MW_REF, "surf_cmc": 0.012},
+    "poloxamer-188": {"surf_hlb": 29.0, "surf_mw_ratio": 8400.0 / SURFACTANT_MW_REF, "surf_cmc": 0.05},
+    "none": {"surf_hlb": 0.0, "surf_mw_ratio": 0.0, "surf_cmc": 0.0},
 }
 
 # Protein class (format): structural descriptors of the molecular architecture —

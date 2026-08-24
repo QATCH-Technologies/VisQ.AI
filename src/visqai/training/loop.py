@@ -6,7 +6,38 @@ weighted-MSE + contrastive + consistency + context-utility + norm-penalty
 loss, with hard-group EMA oversampling), validate, validate_fewshot, and the
 latent-collapse diagnostics (log_latent_variance, log_flatness).
 
-Moved verbatim (logic unchanged) from ml/cnp_mk2/train_o_net_v4_rung1.py.
+Originally moved verbatim from ml/cnp_mk2/train_o_net_v4_rung1.py; the data-
+fit term in train_epoch has since been split to match the prior/correction
+decoder in visqai.models.cnp:
+
+    prior_loss      = MSE(prior_head(query), y)
+    correction_loss = MSE(g(query, r), (y - prior_head(query)).detach())
+    mse_loss        = prior_loss + correction_loss
+
+The `.detach()` on the residual target is load-bearing: it stops the
+correction head's gradient from flowing back through prior_head, so g is only
+ever rewarded for explaining what the CURRENT prior snapshot gets wrong, not
+for jointly re-deriving y with prior_head. That is what forces the pooled
+context to carry information the prior lacks instead of just re-fitting the
+target a second time -- the failure mode that let a bad/OOD context make a
+good zero-shot prediction worse (belatacept 0.077->0.125 log MAE at 1-shot).
+
+SEPARATE GRADIENT CLIPPING FOR prior_head (P0 fix)
+----------------------------------------------------
+mse_loss = prior_loss + correction_loss is roughly double the magnitude of
+the old single-decoder MSE term, and it shares one clip_grad_norm_(model.
+parameters(), max_norm=1.0) call with the utility/triplet/consistency/norm
+losses. Clipping rescales the WHOLE gradient vector by one scalar once its
+norm exceeds max_norm -- so on any iteration where the encoder/pooler/
+correction_head's combined gradient (from correction_loss + the auxiliary
+losses, all of which route through the shared context-encoding path) is
+large, prior_head's own gradient gets crushed by the same factor even though
+prior_loss never spiked. Since prior_head no longer shares any parameters
+with that path (forward() never routes prior_head's output through r), there
+is no reason for it to share a clipping budget with it either. Clipping
+prior_head's parameters separately from everything else removes this
+cross-talk: a hard-to-fit high-N group's correction/utility gradient can no
+longer throttle the very iteration that group needed to move prior_head.
 """
 
 from __future__ import annotations
@@ -104,16 +135,25 @@ def train_epoch(
         else:
             qstat_A_in = qstat_A
 
-        pred_A = model(ctx_A, qx_A, qstat_A_in)
+        prior_A, correction_A = model.forward_split(ctx_A, qx_A, qstat_A_in)
+        pred_A = prior_A + correction_A
 
+        # residual_target is detached: correction_A is only ever graded
+        # against what the CURRENT prior snapshot misses, never against y
+        # directly, so its gradient can't just re-derive the target through
+        # prior_head a second time (see module docstring).
+        residual_target = (qy_A - prior_A).detach()
         if _visc_mean is not None:
             w_A = compute_viscosity_weights(
                 qy_A, _visc_mean, _visc_scale, threshold=visc_threshold, max_weight=visc_max_weight
             )
-            mse_loss = (w_A * (pred_A - qy_A) ** 2).mean()
+            prior_loss = (w_A * (prior_A - qy_A) ** 2).mean()
+            correction_loss = (w_A * (correction_A - residual_target) ** 2).mean()
         else:
-            mse_loss = F.mse_loss(pred_A, qy_A)
+            prior_loss = F.mse_loss(prior_A, qy_A)
+            correction_loss = F.mse_loss(correction_A, residual_target)
 
+        mse_loss = prior_loss + correction_loss
         mse_loss_unweighted = F.mse_loss(pred_A, qy_A).detach()
 
         # Graded multi-shot context utility: more context should reduce error
@@ -200,7 +240,14 @@ def train_epoch(
 
         optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        # Clipped separately from the rest of the model -- see module
+        # docstring ("SEPARATE GRADIENT CLIPPING FOR prior_head"): prior_head
+        # shares no parameters with the r-dependent path, so a large
+        # correction/utility/triplet gradient must not be allowed to shrink
+        # prior_head's own update via a shared clipping budget.
+        torch.nn.utils.clip_grad_norm_(model.prior_head.parameters(), max_norm=1.0)
+        rest_params = [p for n, p in model.named_parameters() if not n.startswith("prior_head.")]
+        torch.nn.utils.clip_grad_norm_(rest_params, max_norm=1.0)
         optimizer.step()
 
         total_loss += loss.item()
@@ -213,6 +260,54 @@ def train_epoch(
         g: group_loss_accum[g] / group_loss_count[g] for g in group_loss_accum if group_loss_count[g] > 0
     }
     return total_loss / max(1, count), per_group_mse
+
+
+def validate_zero_shot(model, samples, device, latent_dim):
+    """Pure zero-shot validation: predicts every held-out point using the
+    EXACT r=0 path visqai.inference.predictor.py uses at deployment --
+    model.decode_from_memory(torch.zeros((1, latent_dim)), ...), bypassing
+    the encoder/pooler entirely. This is NOT the same as feeding an empty/
+    zero context tensor through the encoder (AttentionPool's LayerNorm gives
+    no guarantee that maps to r=0), and it is NOT what validate() measures --
+    validate() always builds a non-empty context split.
+
+    Why this exists: run_final_model's early-stopping/checkpoint selection
+    (visqai.training.run) previously used validate()'s context-informed loss
+    alone. Since the prior/correction decoder split (visqai.models.cnp) made
+    prior_head the ONLY path to zero-shot predictions, and prior_head gets no
+    gradient from anything validate() measures, checkpoint selection was
+    blind to the metric that governs zero-shot quality -- it could freely
+    pick a snapshot that looks great with context and mediocre without it.
+    Mixing this into the early-stopping signal (see train_final_model) closes
+    that blind spot."""
+    model.eval()
+    total_error = 0
+    count = 0
+    groups = defaultdict(list)
+    for s in samples:
+        groups[s["group"]].append(s)
+
+    with torch.no_grad():
+        for prot, task_samples in groups.items():
+            shear_list, y_list, stat_list = [], [], []
+            for s in task_samples:
+                shear_list.append(s["points"][:, [0]])
+                y_list.append(s["points"][:, [1]])
+                stat_list.append(s["static"].unsqueeze(0).repeat(s["points"].shape[0], 1))
+            if not shear_list:
+                continue
+            q_x = torch.cat(shear_list, dim=0).unsqueeze(0).to(device)
+            q_stat = torch.cat(stat_list, dim=0).unsqueeze(0).to(device)
+            true_y = torch.cat(y_list, dim=0).unsqueeze(0).to(device)
+
+            r_zero = torch.zeros((1, latent_dim), device=device)
+            pred = model.decode_from_memory(r_zero, q_x, q_stat)
+            loss = F.mse_loss(pred, true_y)
+            if not torch.isnan(loss):
+                total_error += loss.item()
+                count += 1
+
+    return total_error / max(1, count)
 
 
 def validate(model, samples, device, n_repeats=3):

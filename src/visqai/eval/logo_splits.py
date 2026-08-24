@@ -16,7 +16,37 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
+
+# Raw protein-level descriptor columns (visqai.features.charge.featurize_charge
+# consumes the whole-charge one of these -- the only feature that gives a
+# held-out protein a transferable identity handle, since Protein_type itself
+# stays one-hot; see that module's docstring).
+PROTEIN_DESCRIPTOR_RAW_COLS = ["Whole_Antibody_Charge_at_Buffer_pH", "Whole_Charge", "PI_mean"]
+
+
+def zero_protein_descriptors(df: pd.DataFrame) -> pd.DataFrame:
+    """Ablation counterfactual for the P0 descriptor-vs-context question:
+    null out the raw protein-level descriptor columns BEFORE feature
+    engineering, applied dataset-wide (unlike zero_ingredient_properties,
+    which only rewrites the held-out group's rows -- protein identity is
+    global, not something a fold can partially hold out).
+
+    With these columns NaN'd, visqai.features.charge.featurize_charge's
+    missing-data path zeros `whole_charge` for every present-protein row, so
+    the only remaining protein-level descriptor is PI_mean (also nulled
+    here) -- Protein_type is already one-hot (no transferable identity of
+    its own for a held-out protein), so a model trained on this ablated data
+    has NO feature-level handle on protein identity at all. Any zero-shot
+    accuracy left must come from population-level formulation/physics
+    features, and any few-shot lift must come from the pooled context alone.
+    """
+    out = df.copy()
+    for col in PROTEIN_DESCRIPTOR_RAW_COLS:
+        if col in out.columns:
+            out[col] = np.nan
+    return out
 
 # The five chemically-meaningful ingredient columns to hold out one category
 # at a time. Protein_class_type is deliberately excluded here -- it gets its
@@ -122,3 +152,5 @@ def zero_ingredient_properties(df: pd.DataFrame, group: LogoGroup) -> pd.DataFra
     out = df.copy()
     out[group.column] = "none"
     return out
+
+

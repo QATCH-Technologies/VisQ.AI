@@ -30,6 +30,11 @@ to `num_cols` at train time, so the fitted ColumnTransformer.transform()
 silently ignored them -- they were dead computation with zero effect on any
 prediction. Dropped rather than ported, since porting dead code forward just
 carries the confusion into the new package.
+
+Also since removed: the Rung-2 charge feature block (net_charge, abs_charge,
+near_pI and its concentration interactions, theo_pI, pI_gap,
+charge_screened). The final model keeps only the raw Whole Charge
+measurement (visqai.features.charge.featurize_charge's `whole_charge`).
 """
 
 from __future__ import annotations
@@ -45,10 +50,15 @@ from visqai.features.categorical import (
 from visqai.features.charge import (
     normalize_charge_columns,
     featurize_charge,
-    CHARGE_FEATURE_COLS_BASE,
-    ADD_SCREENED_CHARGE,
+    CHARGE_FEATURE_COLS,
 )
-from visqai.physics.priors import calculate_row_priors, PRIOR_COLS, CONC_SPLIT_COLS
+from visqai.physics.priors import (
+    calculate_row_priors,
+    PRIOR_COLS,
+    CONC_SPLIT_COLS,
+    CONC_THRESHOLDS,
+    CONC_HIGH_FRAC_CAP,
+)
 
 # Base numeric columns expected on the raw input (matches the fitted
 # preprocessor's ColumnTransformer num_cols, before engineered/prior columns).
@@ -77,6 +87,7 @@ ENGINEERED_COLS = [
     "log_conc",
     "conc_sq",
     "conc_x_kP",
+    "conc_sq_x_kP",
     "conc_x_HCI",
     "Crowding_Index",
     "Stabilizer_Squared",
@@ -103,6 +114,18 @@ MW_MAP = {
 }
 
 
+# Physically-generous ceiling on Salt_mg_mL (mg/mL): NaCl's own
+# CONC_THRESHOLDS cutoff (150 mM) converted to mass at NaCl's MW, times the
+# same headroom multiplier CONC_HIGH_FRAC_CAP already applies to the
+# analogous conc-split fix in priors.py. Clipped at construction (not left to
+# the scaler) so a leave-one-salt-out fold -- where every training row has
+# Salt_mg_mL == 0 and the held-out fold suddenly doesn't -- can't push
+# Total_Solute_Mass / Effective_Protein_Fraction past a magnitude the rest of
+# the pipeline has ever had reason to represent. Mirrors the proline
+# conc-split fix and charge.py's ION_STRENGTH_CAP_M.
+SALT_MG_ML_CAP: float = (CONC_THRESHOLDS["nacl"] * MW_MAP["nacl"] / 1000.0) * CONC_HIGH_FRAC_CAP
+
+
 def _get_mw(chemical_series: pd.Series, default_mw: float = 342.3) -> pd.Series:
     return (
         chemical_series.astype(str)
@@ -115,16 +138,8 @@ def build_feature_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str], list
     """
     Run the full row-level feature-engineering pipeline: numeric defaults,
     chemical-categorical featurization (Rung-1), charge featurization
-    (Rung-2), unit normalization, engineered physics columns, and per-row
-    prior/regime features.
-
-    Returns
-    -------
-    (df_out, num_cols, cat_cols)
-        df_out   : df with every engineered column appended.
-        num_cols : full ordered list of numeric column names to feed a
-                   StandardScaler / ColumnTransformer "num" transformer.
-        cat_cols : categorical column names for the "cat" (one-hot) transformer.
+    (Whole Charge only), unit normalization, engineered physics columns, and
+    per-row prior/regime features.
     """
     df = df.copy()
 
@@ -162,9 +177,7 @@ def build_feature_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str], list
             df[c] = "none"
     df, prop_cols = featurize_chemical_categoricals(df)
 
-    # --- Rung-2: charge/pI -> feature block (THE FIX: this must run before
-    # the physics-priors step below, since calculate_row_priors reads
-    # net_charge off each row) ---
+    # --- Whole Charge feature ---
     df = normalize_charge_columns(df)
     df, charge_cols = featurize_charge(df)
 
@@ -179,7 +192,7 @@ def build_feature_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str], list
         salt_mw = _get_mw(df["Salt_type"], default_mw=58.44)
     else:
         salt_mw = 58.44
-    df["Salt_mg_mL"] = (df["Salt_conc"] * salt_mw) / 1000.0
+    df["Salt_mg_mL"] = np.clip((df["Salt_conc"] * salt_mw) / 1000.0, 0.0, SALT_MG_ML_CAP)
 
     if "Excipient_type" in df.columns:
         excipient_mw = _get_mw(df["Excipient_type"], default_mw=150.0)
@@ -193,7 +206,27 @@ def build_feature_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str], list
     df["log_conc"] = np.log1p(df["Protein_conc"])
     df["conc_sq"] = df["Protein_conc"] ** 2
     df["conc_x_kP"] = df["Protein_conc"] * df["kP"]
+    # Quadratic-in-concentration term modulated by kP: concentrated-protein
+    # viscosity is closer to Mooney/Ross-Minton exponential-in-conc behavior
+    # (eta ~ exp(kP*conc)) than linear, so its Taylor expansion's curvature
+    # term ((kP*conc)^2) is protein-specific in a way conc_x_kP (linear) and
+    # conc_sq (protein-agnostic) don't hand the network directly -- without
+    # it, the network has to reconstruct that interaction itself from the two
+    # separate terms across several ReLU layers, which generalizes worse to a
+    # held-out protein sitting at an unusual kP (see the P0 Rung 1 T6
+    # confound check: etanercept kP=4.5, ibalizumab kP=3.5, bsa kP=2.0 --
+    # three of the four most extreme kP values in the dataset -- all showed
+    # zero-shot error tracking Protein_conc more than a stable per-protein
+    # offset would predict).
+    df["conc_sq_x_kP"] = df["conc_sq"] * df["kP"]
     df["conc_x_HCI"] = df["Protein_conc"] * df["HCI"]
+    # A molar-concentration proxy (Protein_conc/MW) was tried here too, on
+    # the hypothesis that mass concentration conflates differently-sized
+    # proteins sharing a kP value (e.g. etanercept MW=150 vs belatacept
+    # MW=90, both kP=4.5) into the same crowding signal. Controlled A/B on a
+    # real LOGO retrain: it made etanercept's zero-shot MAE WORSE (0.312 ->
+    # 0.339) and belatacept's T6 confound R^2 WORSE (0.12 -> 0.27) --
+    # rejected. Don't re-add without a fresh controlled test.
 
     df["Crowding_Index"] = df["Protein_conc"] * df["Stabilizer_mg_mL"]
     df["Stabilizer_Squared"] = df["Stabilizer_mg_mL"] ** 2
@@ -203,7 +236,7 @@ def build_feature_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str], list
     )
     df["Effective_Protein_Fraction"] = df["Protein_conc"] / df["Total_Solute_Mass"].replace(0, 1e-6)
 
-    # --- Priors and regime (charge-aware; net_charge is available now) ---
+    # --- Priors and regime ---
     features_df = df.apply(calculate_row_priors, axis=1, result_type="expand")
     df = pd.concat([df, features_df], axis=1)
 
@@ -225,10 +258,7 @@ def _all_property_columns() -> set[str]:
 
 
 def _all_charge_columns() -> set[str]:
-    cols = set(CHARGE_FEATURE_COLS_BASE)
-    if ADD_SCREENED_CHARGE:
-        cols.add("charge_screened")
-    return cols
+    return set(CHARGE_FEATURE_COLS)
 
 
 def protected_feature_indices(num_cols: list[str]) -> list[int]:
@@ -243,6 +273,7 @@ def protected_feature_indices(num_cols: list[str]) -> list[int]:
         "log_conc",
         "conc_sq",
         "conc_x_kP",
+        "conc_sq_x_kP",
         "conc_x_HCI",
         "Buffer_pH",
         "MW",

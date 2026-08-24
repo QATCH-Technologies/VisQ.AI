@@ -129,7 +129,7 @@ def _init_clean_predictor(model_dir, pretrain_df, n_draws, k_context, max_ctx_po
     return pred
 
 
-def _run_and_plot(args, ibal_df, ids, order_dir, csv_path, prefix):
+def _run_and_plot(args, ibal_df, ids, order_dir, csv_path, prefix, max_steps=None):
     profile_max_steps = None if args.profile_max_steps < 0 else args.profile_max_steps
     predictor = _init_clean_predictor(
         args.model_dir, args.pretrain_df, args.n_draws, args.k_context, args.max_ctx_pool
@@ -149,10 +149,11 @@ def _run_and_plot(args, ibal_df, ids, order_dir, csv_path, prefix):
     results_df.to_csv(csv_path, index=False)
     logger.info(f"  Metrics saved: {csv_path}")
 
-    plot_convergence(results_df, args.output_dir, prefix=prefix)
-    plot_mape(results_df, args.output_dir, prefix=prefix)
-    plot_log_convergence(results_df, args.output_dir, prefix=prefix)
-    plot_shape_convergence(results_df, args.output_dir, prefix=prefix)
+    plot_kwargs = {} if max_steps is None else {"max_steps": max_steps}
+    plot_convergence(results_df, args.output_dir, prefix=prefix, **plot_kwargs)
+    plot_mape(results_df, args.output_dir, prefix=prefix, **plot_kwargs)
+    plot_log_convergence(results_df, args.output_dir, prefix=prefix, **plot_kwargs)
+    plot_shape_convergence(results_df, args.output_dir, prefix=prefix, **plot_kwargs)
     return results_df
 
 

@@ -48,13 +48,16 @@ from visqai.eval.plotting.helpers import (
 logger = logging.getLogger(__name__)
 
 
-def plot_convergence(df: pd.DataFrame, save_dir: str, prefix: str = ""):
-    """MAE + RMSE (linear cP) convergence — dual-axis combined and side-by-side panels."""
+def plot_convergence(df: pd.DataFrame, save_dir: str, prefix: str = "", max_steps: int = PLOT_MAX_STEPS):
+    """MAE + RMSE (linear cP) convergence — dual-axis combined and side-by-side panels.
+    `max_steps` caps how many context-addition steps are shown (default
+    helpers.PLOT_MAX_STEPS=10) -- pass len(context_ids) to show every step of
+    a longer replay instead of truncating to the first 10."""
     plt, ticker, Line2D = mpl()
     apply_style(plt)
     os.makedirs(save_dir, exist_ok=True)
 
-    _, sx, labels, vals = prep_plot_data(df, ["mae", "rmse"])
+    _, sx, labels, vals = prep_plot_data(df, ["mae", "rmse"], max_steps=max_steps)
     smae = vals["mae"]
     srmse = vals["rmse"]
     conv_mae = find_convergence_step(smae)
@@ -140,12 +143,12 @@ def plot_convergence(df: pd.DataFrame, save_dir: str, prefix: str = ""):
     return combined_path, panels_path
 
 
-def plot_mape(df: pd.DataFrame, save_dir: str, prefix: str = ""):
+def plot_mape(df: pd.DataFrame, save_dir: str, prefix: str = "", max_steps: int = PLOT_MAX_STEPS):
     plt, ticker, Line2D = mpl()
     apply_style(plt)
     os.makedirs(save_dir, exist_ok=True)
 
-    _, sx, labels, vals = prep_plot_data(df, ["mape"])
+    _, sx, labels, vals = prep_plot_data(df, ["mape"], max_steps=max_steps)
     smape = vals["mape"]
     conv_mape = find_convergence_step(smape)
 
@@ -180,16 +183,17 @@ def plot_mape(df: pd.DataFrame, save_dir: str, prefix: str = ""):
     return mape_path
 
 
-def plot_log_convergence(df: pd.DataFrame, save_dir: str, prefix: str = ""):
+def plot_log_convergence(df: pd.DataFrame, save_dir: str, prefix: str = "", max_steps: int = PLOT_MAX_STEPS):
     """Convergence curve in log10-RMSE space with a ±1σ shaded ribbon derived
-    from per-step std_log10 (context-subsampling uncertainty)."""
+    from per-step std_log10 (context-subsampling uncertainty). `max_steps`
+    caps how many steps are shown -- see plot_convergence's docstring."""
     plt, ticker, Line2D = mpl()
     apply_style(plt)
     os.makedirs(save_dir, exist_ok=True)
 
     valid_mask = ~df["rmse_log10"].isna()
     valid_mask.iloc[-1] = False
-    plot_df = df[valid_mask].head(PLOT_MAX_STEPS + 1)
+    plot_df = df[valid_mask].head(max_steps + 1)
 
     if plot_df.empty:
         logger.warning("No valid log10 data to plot — skipping log convergence plot.")
@@ -274,9 +278,11 @@ def plot_log_convergence(df: pd.DataFrame, save_dir: str, prefix: str = ""):
     return log_path
 
 
-def plot_shape_convergence(df: pd.DataFrame, save_dir: str, prefix: str = ""):
+def plot_shape_convergence(df: pd.DataFrame, save_dir: str, prefix: str = "", max_steps: int = PLOT_MAX_STEPS):
     """Does the predicted curve MORPHOLOGY improve as context grows? Plots
-    slope-sign agreement (↑ better) and level-invariant shape RMSE (↓ better)."""
+    slope-sign agreement (↑ better) and level-invariant shape RMSE (↓ better).
+    `max_steps` caps how many steps are shown -- see plot_convergence's
+    docstring."""
     plt, ticker, Line2D = mpl()
     apply_style(plt)
     os.makedirs(save_dir, exist_ok=True)
@@ -287,7 +293,7 @@ def plot_shape_convergence(df: pd.DataFrame, save_dir: str, prefix: str = ""):
         return None
     valid = ~df[need].isna().any(axis=1)
     valid.iloc[-1] = False
-    plot_df = df[valid].head(PLOT_MAX_STEPS + 1)
+    plot_df = df[valid].head(max_steps + 1)
     if plot_df.empty:
         logger.warning("No valid shape data to plot — skipping.")
         return None

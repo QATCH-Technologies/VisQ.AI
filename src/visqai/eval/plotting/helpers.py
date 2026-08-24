@@ -53,11 +53,19 @@ def annotate_convergence(ax, x_arr, y_arr, c_idx, color=C_ORANGE):
 
 
 def shared_x_labels(ax, sx, labels):
+    # Long replays (e.g. all-context random-order runs, 30+ steps) crowd
+    # horizontal "n\n(sample_id)" labels into illegibility -- rotate and
+    # shrink past a threshold rather than adding a second labeling scheme.
+    many = len(sx) > 14
     ax.set_xticks(sx)
     ax.set_xticklabels(
-        [f"{n}\n({sid})" if sid != "None" else "0\n(0-shot)" for n, sid in zip(sx, labels)],
-        fontsize=11,
+        [f"{n} ({sid})" if sid != "None" else "0 (0-shot)" for n, sid in zip(sx, labels)]
+        if many
+        else [f"{n}\n({sid})" if sid != "None" else "0\n(0-shot)" for n, sid in zip(sx, labels)],
+        fontsize=8.5 if many else 11,
         color=C_MUTED,
+        rotation=75 if many else 0,
+        ha="right" if many else "center",
     )
     ax.set_xlim(sx[0] - 0.4, sx[-1] + 0.6)
 

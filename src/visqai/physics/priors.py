@@ -8,23 +8,14 @@ CONC_THRESHOLDS and PRIOR_TABLE were previously duplicated verbatim between
 ml/cnp_mk2/inference_o_net.py and ml/cnp_mk2/train_o_net_v4_rung1.py (diffed
 byte-identical before merging here).
 
-calculate_cci is extracted from the TRAINER's process_row_features, not from
-inference_o_net.py's _calculate_cci — the two had diverged: the trainer's
-version branches on the real net_charge (computed by
-visqai.features.charge.featurize_charge) when available, while inference's
-version still used the older |pH - PI_mean| distance proxy unconditionally.
-Since train_o_net_v4_rung1.py is the current, charge-aware trainer and its
-fitted preprocessor already expects charge columns, the trainer's version is
-the correct one to standardize on — this fixes the train/inference skew where
-the near-pI regime lookup silently used stale physics at inference time.
+calculate_cci uses the |pH - PI_mean| distance proxy: peaks when the
+formulation pH sits at the protein's isoelectric point.
 """
 
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-
-from visqai.features.charge import NEAR_PI_SIGMA
 
 CONC_THRESHOLDS = {
     "arginine": 150.0,
@@ -317,14 +308,10 @@ CONC_SPLIT_COLS = [c for k in CONC_THRESHOLDS for c in (f"{k}_low", f"{k}_high")
 CONC_HIGH_FRAC_CAP: float = 3.0
 
 
-def calculate_cci(c_class, ph, pi, net_charge=None, near_pi_sigma: float = NEAR_PI_SIGMA, tau: float = 1.5) -> float:
-    """Charge-coupling index: peaks (i.e. -> C_Class) when the protein sits at
-    its isoelectric point. Uses the real net charge when available (the
-    charge-aware branch that was missing from inference_o_net.py's copy), and
-    falls back to the legacy |pH - PI_mean| distance proxy otherwise (older
-    data / no charge column)."""
-    if net_charge is not None and not pd.isna(net_charge):
-        return float(c_class) * float(np.exp(-(float(net_charge) ** 2) / (2.0 * (near_pi_sigma**2))))
+def calculate_cci(c_class, ph, pi, tau: float = 1.5) -> float:
+    """Charge-coupling index: peaks (i.e. -> C_Class) when the formulation pH
+    sits at the protein's isoelectric point (the |pH - PI_mean| distance
+    proxy)."""
     delta_ph = abs(ph - pi)
     return float(c_class) * float(np.exp(-delta_ph / tau))
 
@@ -347,14 +334,7 @@ def calculate_regime(cci: float, p_type: str) -> str:
 
 
 def calculate_row_priors(row) -> dict:
-    """
-    Per-row prior/concentration-split features. Matches process_row_features
-    (train_o_net_v4_rung1.py) / _calculate_physics_features
-    (inference_o_net.py) exactly, EXCEPT this version always takes the
-    charge-aware CCI branch when `net_charge` is present on the row — which
-    requires visqai.preprocessing.pipeline.build_feature_frame to have run
-    charge featurization before calling this, closing the train/inference gap.
-    """
+    """Per-row prior/concentration-split features."""
     c_class = row.get("C_Class", 1.0)
     ph = row.get("Buffer_pH", 7.0)
     pi = row.get("PI_mean", 7.0)
@@ -363,8 +343,7 @@ def calculate_row_priors(row) -> dict:
     if pd.isna(pi):
         pi = 7.0
 
-    net_charge = row.get("net_charge", None)
-    cci = calculate_cci(c_class, ph, pi, net_charge=net_charge)
+    cci = calculate_cci(c_class, ph, pi)
 
     p_type = str(row.get("Protein_class_type", "default")).lower()
     regime = calculate_regime(cci, p_type)

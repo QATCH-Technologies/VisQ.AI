@@ -17,7 +17,7 @@ import numpy as np
 import torch
 
 from visqai.models.cnp import CrossSampleCNP
-from visqai.training.loop import log_flatness, log_latent_variance, train_epoch, validate
+from visqai.training.loop import log_flatness, log_latent_variance, train_epoch, validate, validate_zero_shot
 
 DEFAULT_PARAMS = {
     "hidden_dim": 128,
@@ -103,7 +103,15 @@ def train_final_model(
         for g in group_weights:
             group_weights[g] = group_weights[g] / total_w * n_g
 
-        val_loss = validate(model, stop_set, device, n_repeats=10)
+        # Mixed early-stopping signal: validate() alone is context-informed
+        # only (always builds a non-empty context split), so on its own it's
+        # blind to prior_head's zero-shot quality -- see validate_zero_shot's
+        # docstring. Averaging the two means checkpoint selection can't trade
+        # zero-shot quality away for a context-informed win it never has to
+        # answer for.
+        val_loss_ctx = validate(model, stop_set, device, n_repeats=10)
+        val_loss_zero = validate_zero_shot(model, stop_set, device, latent_dim=params["latent_dim"])
+        val_loss = 0.5 * val_loss_ctx + 0.5 * val_loss_zero
         scheduler.step(val_loss)
 
         if verbose and ep % 10 == 0:

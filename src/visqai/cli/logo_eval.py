@@ -15,6 +15,16 @@ and adds the reference baseline every later change must be measured against:
     success rule: CNP zero-shot must reach <= baseline; CNP few-shot must
     beat it. If a change doesn't move the CNP toward those lines on
     held-out groups, revert it.
+
+The `lift` column (zero_shot_log_mae - best_fewshot_log_mae, positive =
+context helped) is the go/no-go read for the prior/correction decoder split
+(visqai.models.cnp) and residual training (visqai.training.loop): mean lift
+across all held-out groups should be positive, and no single group should
+regress past visqai.eval.cnp_logo.CONTEXT_GATE_TOLERANCE -- which
+run_cnp_logo enforces as a hard assertion (see --no-context-gate to disable
+it for noisy/undertrained --quick runs). If lift stays flat even at full
+training budget, context genuinely has nothing to add on this data: stop
+building few-shot and ship zero-shot.
 """
 
 from __future__ import annotations
@@ -48,24 +58,63 @@ def parse_args(argv=None):
     )
     ap.add_argument("--axis", choices=AXES + ["all"], default="all")
     ap.add_argument("--out_dir", default=Path("models/experiments/logo_eval"))
-    ap.add_argument("--min-rows", type=int, default=2, help="Minimum held-out rows for a group to be evaluated.")
+    ap.add_argument(
+        "--min-rows", type=int, default=2, help="Minimum held-out rows for a group to be evaluated."
+    )
     ap.add_argument(
         "--groups",
         default=None,
         help="Comma-separated subset of group keys to run (e.g. 'ibalizumab,adalimumab'). Default: every group.",
     )
-    ap.add_argument("--shots", default="0,1,2,4,8", help="Comma-separated context sizes ('0' = zero-shot).")
-    ap.add_argument("--n-repeats", type=int, default=5, help="Random context draws averaged per shot count.")
+    ap.add_argument(
+        "--shots", default="0,1,2,4,8", help="Comma-separated context sizes ('0' = zero-shot)."
+    )
+    ap.add_argument(
+        "--n-repeats", type=int, default=5, help="Random context draws averaged per shot count."
+    )
     ap.add_argument("--max-epochs", type=int, default=500)
     ap.add_argument("--patience", type=int, default=80)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--baseline-only", action="store_true", help="Skip CNP training (fast; baseline reference only).")
+    ap.add_argument(
+        "--baseline-only",
+        action="store_true",
+        help="Skip CNP training (fast; baseline reference only).",
+    )
     ap.add_argument("--cnp-only", action="store_true", help="Skip the baseline regressor.")
-    ap.add_argument("--keep-fold-dirs", action="store_true", help="Keep each fold's trained checkpoint on disk.")
+    ap.add_argument(
+        "--keep-fold-dirs", action="store_true", help="Keep each fold's trained checkpoint on disk."
+    )
     ap.add_argument(
         "--quick",
         action="store_true",
         help="Smoke-test preset: max-epochs=30, patience=8, n-repeats=2, shots=0,1,4.",
+    )
+    ap.add_argument(
+        "--no-context-gate",
+        action="store_true",
+        help=(
+            "Disable the hard context-gate assertion (few-shot must not score worse than "
+            "zero-shot by more than cnp_logo.CONTEXT_GATE_TOLERANCE). Undertrained/--quick "
+            "runs can trip it on noise alone; leave the gate ON for a real scoreboard."
+        ),
+    )
+    ap.add_argument(
+        "--ablate-protein-descriptors",
+        action="store_true",
+        help=(
+            "P0 descriptor-vs-context test: null out Charge/ProtPi PI/PI_mean dataset-wide "
+            "before training (visqai.eval.logo_splits.zero_protein_descriptors), so zero-shot "
+            "has no per-protein identity handle and any few-shot lift must come from context."
+        ),
+    )
+    ap.add_argument(
+        "--corrector-mode",
+        choices=["linear", "kernel", "offset_only"],
+        default="linear",
+        help=(
+            "Which few-shot corrector the predictor uses. 'linear' is Task 1.1's default; "
+            "'kernel' opts into Task 1.2's kernel-weighted local residual model."
+        ),
     )
     return ap.parse_args(argv)
 
@@ -105,7 +154,9 @@ def main(argv=None):
         if not fold_groups:
             logger.warning(f"No groups found for axis='{axis}' (after filtering); skipping.")
             continue
-        logger.info(f"\n{'='*70}\nAXIS: {axis}  ({len(fold_groups)} held-out group(s): {[g.key for g in fold_groups]})\n{'='*70}")
+        logger.info(
+            f"\n{'='*70}\nAXIS: {axis}  ({len(fold_groups)} held-out group(s): {[g.key for g in fold_groups]})\n{'='*70}"
+        )
 
         baseline_df = pd.DataFrame()
         if not args.cnp_only:
@@ -130,6 +181,9 @@ def main(argv=None):
                 patience=args.patience,
                 seed=args.seed,
                 keep_fold_dirs=args.keep_fold_dirs,
+                enforce_context_gate=not args.no_context_gate,
+                ablate_protein_descriptors=args.ablate_protein_descriptors,
+                corrector_mode=args.corrector_mode,
             )
             if not args.keep_fold_dirs:
                 shutil.rmtree(work_dir, ignore_errors=True)
@@ -151,7 +205,9 @@ def main(argv=None):
         scoreboard["zero_shot_meets_baseline"] = (
             scoreboard["zero_shot_log_mae"] <= scoreboard["baseline_log_mae"]
         )
-    fewshot_cols = [c for c in scoreboard.columns if c.startswith("fewshot_k") and c.endswith("_log_mae")]
+    fewshot_cols = [
+        c for c in scoreboard.columns if c.startswith("fewshot_k") and c.endswith("_log_mae")
+    ]
     if "baseline_log_mae" in scoreboard.columns and fewshot_cols:
         best_fewshot = scoreboard[fewshot_cols].min(axis=1)
         scoreboard["best_fewshot_beats_baseline"] = best_fewshot < scoreboard["baseline_log_mae"]
@@ -171,6 +227,23 @@ def main(argv=None):
         n_ok = scoreboard["best_fewshot_beats_baseline"].sum()
         n_total = scoreboard["best_fewshot_beats_baseline"].notna().sum()
         logger.info(f"Best few-shot beats baseline on {n_ok}/{n_total} held-out groups.")
+    if "lift" in scoreboard.columns:
+        lift = scoreboard["lift"].dropna()
+        if not lift.empty:
+            n_negative = int((lift < 0).sum())
+            logger.info(
+                f"\nContext lift (zero_shot_log_mae - best_fewshot_log_mae): "
+                f"mean={lift.mean():+.4f}, min={lift.min():+.4f}, "
+                f"positive-or-flat on {len(lift) - n_negative}/{len(lift)} groups."
+            )
+            if n_negative:
+                worst = scoreboard.loc[scoreboard["lift"].notna()].nsmallest(min(5, n_negative), "lift")
+                logger.info(
+                    "Worst lift groups:\n"
+                    + worst[["axis", "group", "zero_shot_log_mae", "best_fewshot_log_mae", "lift"]].to_string(
+                        index=False
+                    )
+                )
     if "ablation_delta" in scoreboard.columns:
         ing = scoreboard[scoreboard["axis"] == "ingredient"]
         if not ing.empty:
