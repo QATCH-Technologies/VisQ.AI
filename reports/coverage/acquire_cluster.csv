@@ -1,8 +1,0 @@
-axis,bin,observed_clusters,required_clusters,deficit,leverage,remedy,on_frontier
-Surfactant_type,tween-20,4,10.0,6.0,0.5867016627456909,acquire_cluster,True
-Fv_availability,fv_defined,6,10.0,4.0,0.9690767795438845,acquire_cluster,True
-Stabilizer_type,trehalose,4,10.0,6.0,0.5641116201609626,acquire_cluster,False
-Excipient_type,lysine,4,10.0,6.0,0.5413719985394423,acquire_cluster,False
-Excipient_type,proline,5,10.0,5.0,0.3895080375634053,acquire_cluster,False
-Excipient_type,arginine,8,10.0,2.0,0.4600778803425907,acquire_cluster,False
-Buffer_type,pbs,9,10.0,1.0,0.905623576570549,acquire_cluster,False
