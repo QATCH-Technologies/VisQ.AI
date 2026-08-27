@@ -30,8 +30,8 @@ pip install -e .[dev]
 
 ## Data and Model Paths
 
-By default, the package resolves training data and model checkpoints from a shared directory
-structure (`QATCH Team Folder/Formulations ML`) on the team's Dropbox.
+By default, the package resolves training data and model checkpoints from a shared cloud directory
+structure.
 
 | Mode | Behavior |
 | --- | --- |
