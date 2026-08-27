@@ -56,39 +56,33 @@ and use small model dimensions (`hidden_dim=8–16`, `latent_dim=4–8`) to keep
 Follow the established pattern in the file being modified. Where existing code conflicts with
 the guidance below, defer to that file's own convention.
 
-1. **Contextual comments.** Comments explain the *why*, not the *what* - don't restate what the
-   code already says. Use them for non-obvious constraints, historical bug fixes, or the
+1. **Contextual comments.** Comments explain the *why*, not necessarily *what* a block does.
+   Use them for non-obvious constraints, historical bug fixes, or the
    derivation behind a calibrated value. Module docstrings carry a module's historical context.
 
-2. **Boundary input validation.** Validate at the external boundaries of the system, not inside
+3. **Boundary input validation.** Validate at the external boundaries of the system, not inside
    performance-critical hot paths. Use the shared checks in
    [`src/visqai/validation.py`](src/visqai/validation.py) (`require_dataframe`,
    `require_positive`, ...) for externally-facing functions. Do not add validation to internal
    hot paths like `training/loop.py` or `models/cnp.py`'s forward methods - they run on
    already-validated data, so the extra overhead buys nothing.
 
-3. **Constant management.** Constants shared across multiple modules with no
+4. **Constant management.** Constants shared across multiple modules with no
    algorithm-specific justification belong in
    [`src/visqai/constants.py`](src/visqai/constants.py). Empirically calibrated,
    algorithm-specific thresholds stay local to the module that uses them, next to the comment
    that justifies the value.
 
-4. **Self-contained evaluation modules.** Each eval suite (parity, LOGO, zero-shot,
+5. **Self-contained evaluation modules.** Each eval suite (parity, LOGO, zero-shot,
    learning-curve) is self-contained in its own `eval/*_eval.py`, exposing a `run(**kwargs)`
    function for the core logic and a `main(argv=None)` function as the CLI wrapper. Only code
    genuinely shared across evals (metrics, plotting style) lives outside the eval's own file.
 
-5. **Automated checkpoint naming.** Never hand-pick or hardcode a path for a checkpoint or
-   deployment package. Every training run and packaging step writes to an auto-generated
+6. **Automated checkpoint naming.** Every training run and packaging step writes to an auto-generated
    `<root>/<date>/<time>/` directory via `visqai.paths.dated_run_dir`; use
    `visqai.paths.latest_checkpoint_dir` to look up the most recent run.
-
-6. **No backwards-compatibility shims.** Don't keep legacy re-exports or wrapper shims for
-   moved or renamed code. When something is relocated or renamed, update every call site
-   immediately instead of letting compatibility debt accumulate.
-
-7. **Code quality tools.** CI runs `flake8` (hard-fails on syntax errors/undefined names,
-   warns on everything else) and `pylint --exit-zero` (informational only) against every push;
+   
+7. **Code quality tools.** CI runs `flake8` and `pylint --exit-zero` against every push;
    run `pytest` locally before opening a PR. Follow standard PEP 8 conventions (e.g. `is` / `is
    not` for `None` comparisons), and use the project's `logging` module
    (`visqai.logging_config.configure_logging` + `logging.getLogger(__name__)`) rather than bare
