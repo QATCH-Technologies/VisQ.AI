@@ -12,9 +12,8 @@ This enables editable imports (e.g. `import visqai`) across the repository, incl
 `scripts/`, and installs testing tools (`pytest`, `pytest-cov`) and `flake8`.
 
 **Data and models:** Datasets and model checkpoints are stored externally on the team's shared
-Dropbox (`QATCH Team Folder/Formulations ML`), not in version control. See
-[README.md](README.md#data-and-model-paths) for path configuration. Most tests use small,
-in-process synthetic fixtures; integration tests that require external files skip gracefully
+cloud storage, not in version control. See [README.md](README.md#data-and-model-paths) for path configuration. 
+Most tests use small, in-process synthetic fixtures; integration tests that require external files skip gracefully
 when those files aren't present.
 
 ## Testing Standards
