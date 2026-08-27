@@ -3,7 +3,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from visqai.eval.heldout_panels import (
+from visqai.eval.zero_shot_eval import (
     HELDOUT_PANELS,
     HeldoutPanelAccessError,
     load_heldout_panel,
@@ -42,7 +42,7 @@ def test_load_with_final_eval_purpose_succeeds_and_tags_contaminated():
     reason="zero-shot panel CSV not present in this checkout",
 )
 def test_every_access_attempt_is_logged(tmp_path, monkeypatch):
-    import visqai.eval.heldout_panels as hp
+    import visqai.eval.zero_shot_eval as hp
 
     fake_log = tmp_path / "heldout_access.log"
     monkeypatch.setattr(hp, "ACCESS_LOG", fake_log)

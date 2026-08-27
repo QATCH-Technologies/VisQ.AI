@@ -1,55 +1,46 @@
-"""
-categorical_features.py
-=======================
-Rung-1 representation upgrade: replace one-hot categorical encodings with
-physicochemical PROPERTY VECTORS so the model can interpolate (and extrapolate)
-between chemically similar entities instead of treating every category as an
-orthogonal, equidistant label.
+"""Provide physicochemical property-vector representations for chemical categories.
 
-WHY
----
-A one-hot code makes "arginine" and "lysine" exactly as dissimilar as
-"arginine" and "sucrose" — the encoding throws away all chemical structure, so
-the model must memorise each category independently and cannot transfer between
-them or generalise to an unseen one. Replacing the label with the *properties
-that make the chemical behave the way it does* (charge, size, Hofmeister
-position, hydrophobicity, ...) puts every category at a point in a continuous
-physical space where distance means similarity. Similar chemicals then sit close
-together and the model interpolates for free; a brand-new excipient/salt/buffer
-lands at its property coordinates and inherits behaviour from its neighbours.
+This module replaces one-hot encodings for chemically meaningful categorical
+features with continuous physicochemical property vectors. The representation
+places chemically similar entities near one another in feature space, allowing
+downstream models to interpolate between related categories and assign
+reasonable representations to previously unseen categories when their
+properties are added to the corresponding property table.
 
-SCOPE
------
-This upgrades the CHEMICALLY-meaningful categoricals only:
-    Buffer_type, Salt_type, Stabilizer_type, Surfactant_type, Excipient_type,
-    Protein_class_type
-It deliberately does NOT touch Protein_type — that is the held-out extrapolation
-target and needs Rung-3 (sequence/structure descriptors), a separate experiment.
-Protein_type stays one-hot for now so this change is isolated and evaluable.
+The transformed categorical features include buffer, salt, stabilizer,
+surfactant, excipient, and protein-class categories. `Protein_type` is
+intentionally excluded because it is treated as a held-out extrapolation
+target for a separate representation experiment.
 
-DESIGN NOTES
-------------
-* Every property table includes a "none" / unknown row of physical zeros, so an
-  absent ingredient maps to the origin of its property space (no contribution),
-  which is the physically correct null.
-* Unrecognised categories fall back to the "none"/zero row and emit a warning,
-  rather than crashing — so new chemicals are handled gracefully (and you can
-  then add their real properties to the table).
-* Values are grounded in standard physical chemistry. They are intended to be
-  *approximately* right and, crucially, *relationally* right (arginine closer to
-  lysine than to proline; tween-80 lower CMC than tween-20; trehalose ~ sucrose).
-  Exact magnitudes matter less than correct ordering because everything is
-  StandardScaler-normalised downstream.
+Each property table contains a `"none"` entry representing the absence of
+the corresponding ingredient or an unknown value. Unknown categories also
+fall back to this zero vector and emit a warning. Property descriptors are
+defined independently for each categorical because the physically relevant
+properties differ between chemical classes.
 
-USAGE
------
-    from categorical_features import (
-        CHEM_CATEGORICALS, featurize_chemical_categoricals,
-    )
-    # df already lower-cased its categorical columns
-    df, prop_cols = featurize_chemical_categoricals(df)
-    # `prop_cols` are new numeric columns to add to your numeric pipeline.
-    # Remove CHEM_CATEGORICALS from the one-hot list; keep Protein_type one-hot.
+All generated property columns are numeric and are intended to be passed
+through the downstream numeric preprocessing pipeline, including
+standardization.
+
+Attributes:
+    CHEM_CATEGORICALS: Names of the categorical columns represented by
+        physicochemical property vectors.
+    BUFFER_PROPS: Physicochemical descriptors for buffer categories.
+    SALT_PROPS: Physicochemical descriptors for salt categories.
+    EXCIPIENT_PROPS: Physicochemical descriptors for excipient categories.
+    STABILIZER_PROPS: Physicochemical descriptors for stabilizer categories.
+    SURFACTANT_PROPS: Physicochemical descriptors for surfactant categories.
+    PROTEIN_CLASS_PROPS: Structural descriptors for protein-class categories.
+
+Examples:
+    Featurize the chemical categorical columns and obtain the generated
+    numeric feature names::
+
+        df, prop_cols = featurize_chemical_categoricals(df)
+
+    The returned `prop_cols` can then be incorporated into the numeric
+    feature pipeline while the original chemical categorical columns are
+    removed from the one-hot feature list.
 """
 
 from __future__ import annotations
@@ -57,8 +48,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-# The six chemically-meaningful categoricals this module replaces.
-# (Protein_type is intentionally excluded — see module docstring.)
+from visqai.validation import require_dataframe
+
 CHEM_CATEGORICALS = [
     "Buffer_type",
     "Salt_type",
@@ -70,31 +61,24 @@ CHEM_CATEGORICALS = [
 
 
 # ---------------------------------------------------------------------------
-# Property tables. Each maps a lowercased category -> {descriptor: value}.
-# Every table MUST contain a "none" row of physical zeros (the null ingredient).
-# Descriptor sets differ per categorical because the relevant physics differs.
+# Property tables. Each maps a lowercased category to descriptor values.
+# Every table must include a `none` row representing the physical null
+# ingredient. Descriptor sets vary by categorical to reflect the relevant
+# physicochemical properties.
 # ---------------------------------------------------------------------------
 
-# Reference MW each table's ratio is expressed against (the most common /
-# canonical member of that category). Raw Da values span two orders of
-# magnitude across categories (60 - 8400), which is exactly the kind of
-# unbounded, StandardScaler-dependent magnitude that blew up under a
-# leave-one-ingredient-out fold (see SALT_PROPS below and the P0 salt
-# regression this fixes): when the held-out category is rare/absent from a
-# training fold, that fold's fitted scale for the raw-MW column can be near
-# zero, so the held-out row's raw Da value passes through the scaler almost
-# unwhitened. Expressing MW as a same-order-of-magnitude ratio bounds the raw
-# feature value itself at construction time, before it ever reaches the
-# scaler -- degenerate fold statistics can no longer turn it into an outsized
-# activation.
+# Reference MW used to normalize each table's molecular-weight descriptor.
+# Expressing MW as a ratio rather than raw Da keeps feature magnitudes bounded
+# across categories and prevents poorly estimated scaler statistics in
+# leave-one-ingredient-out folds from producing outsized activations.
 BUFFER_MW_REF: float = 155.2  # histidine
 STABILIZER_MW_REF: float = 342.3  # sucrose / trehalose
 SURFACTANT_MW_REF: float = 1228.0  # tween-20 / polysorbate-20
 EXCIPIENT_MW_REF: float = 174.2  # arginine
 
-# Buffers: what matters is the pH region they buffer (pKa), their charge tendency
-# at formulation pH, size, and whether they specifically interact with protein
-# surfaces (histidine's imidazole can coordinate; phosphate/acetate are inert-ish).
+# Buffers: descriptors capture the properties most relevant to formulation
+# behavior, including buffering range (pKa), charge tendency, molecular size,
+# and potential protein-surface interactions.
 BUFFER_PROPS: dict[str, dict[str, float]] = {
     "histidine": {
         "buf_pKa": 6.0,
@@ -126,20 +110,18 @@ BUFFER_PROPS: dict[str, dict[str, float]] = {
         "buf_charge_sign": -1.0,
         "buf_specific_interact": 0.0,
     },
-    "none": {"buf_pKa": 0.0, "buf_mw_ratio": 0.0, "buf_charge_sign": 0.0, "buf_specific_interact": 0.0},
+    "none": {
+        "buf_pKa": 0.0,
+        "buf_mw_ratio": 0.0,
+        "buf_charge_sign": 0.0,
+        "buf_specific_interact": 0.0,
+    },
 }
 
-# Salts: the dominant axis for protein interactions is the Hofmeister series
-# (kosmotrope/charge-screening character). We encode a relative Hofmeister
-# position (negative = kosmotropic/stabilising, positive = chaotropic) and the
-# valence. MW is deliberately NOT encoded here (unlike the other four
-# categoricals): valence + Hofmeister position already carry the salt physics
-# that drives protein-protein interaction, and raw salt_mw was the P0
-# regression -- a leave-one-salt-out fold (e.g. holding out nacl, the
-# dominant salt in this dataset) left salt_mw near-zero-variance in training,
-# so the held-out row's raw Da value blew through the fold's degenerate
-# scaler as an outsized activation. Dropping it removes that failure mode
-# entirely instead of merely shrinking it.
+# Salts: descriptors focus on Hofmeister behavior and valence, which capture
+# the primary salt-dependent effects on protein interactions. MW is omitted to
+# avoid unstable scaling in leave-one-salt-out folds, where a held-out salt
+# can produce an unsupported activation from a near-zero-variance MW feature.
 SALT_PROPS: dict[str, dict[str, float]] = {
     "nacl": {"salt_hofmeister": 0.0, "salt_valence": 1.0},
     "kcl": {"salt_hofmeister": 0.2, "salt_valence": 1.0},
@@ -148,10 +130,10 @@ SALT_PROPS: dict[str, dict[str, float]] = {
     "none": {"salt_hofmeister": 0.0, "salt_valence": 0.0},
 }
 
-# Excipients (viscosity-modifying amino acids / osmolytes): net charge at ~pH6,
-# size, hydrophobicity (logP), H-bond donor count, and a flag for the known
-# viscosity-reduction class. Arginine and lysine are both +1 and large -> close;
-# proline is the neutral osmolyte -> separated on charge.
+# Excipients: descriptors capture properties relevant to viscosity and protein
+# interactions, including charge, molecular size, hydrophobicity, hydrogen
+# bonding, and whether the excipient belongs to a known viscosity-reduction
+# class.
 EXCIPIENT_PROPS: dict[str, dict[str, float]] = {
     "arginine": {
         "exc_charge": 1.0,
@@ -197,32 +179,58 @@ EXCIPIENT_PROPS: dict[str, dict[str, float]] = {
     },
 }
 
-# Stabilizers (sugars / polyols): MW, hydroxyl count (H-bonding / preferential
-# exclusion strength), and a preferential-exclusion flag. Sucrose and trehalose
-# are near-identical disaccharides -> they should sit on top of each other.
+# Stabilizers: descriptors capture molecular size, hydroxyl density, and
+# preferential-exclusion behavior relevant to protein stabilization. Similar
+# sugars and polyols therefore receive similar physicochemical representations.
 STABILIZER_PROPS: dict[str, dict[str, float]] = {
     "sucrose": {"stab_mw_ratio": 342.3 / STABILIZER_MW_REF, "stab_oh": 8.0, "stab_pref_excl": 1.0},
-    "trehalose": {"stab_mw_ratio": 342.3 / STABILIZER_MW_REF, "stab_oh": 8.0, "stab_pref_excl": 1.0},
-    "sorbitol": {"stab_mw_ratio": 182.17 / STABILIZER_MW_REF, "stab_oh": 6.0, "stab_pref_excl": 1.0},
-    "mannitol": {"stab_mw_ratio": 182.17 / STABILIZER_MW_REF, "stab_oh": 6.0, "stab_pref_excl": 1.0},
+    "trehalose": {
+        "stab_mw_ratio": 342.3 / STABILIZER_MW_REF,
+        "stab_oh": 8.0,
+        "stab_pref_excl": 1.0,
+    },
+    "sorbitol": {
+        "stab_mw_ratio": 182.17 / STABILIZER_MW_REF,
+        "stab_oh": 6.0,
+        "stab_pref_excl": 1.0,
+    },
+    "mannitol": {
+        "stab_mw_ratio": 182.17 / STABILIZER_MW_REF,
+        "stab_oh": 6.0,
+        "stab_pref_excl": 1.0,
+    },
     "none": {"stab_mw_ratio": 0.0, "stab_oh": 0.0, "stab_pref_excl": 0.0},
 }
 
-# Surfactants: HLB (hydrophilic-lipophilic balance), MW, and CMC. Tween-20 vs
-# Tween-80 differ mainly in CMC and HLB (tail length) -> close but distinguishable.
+# Surfactants: descriptors capture hydrophilic-lipophilic balance, molecular
+# size, and critical micelle concentration, allowing closely related
+# surfactants to remain similar while preserving meaningful physicochemical
+# differences.
 SURFACTANT_PROPS: dict[str, dict[str, float]] = {
     "tween-20": {"surf_hlb": 16.7, "surf_mw_ratio": 1228.0 / SURFACTANT_MW_REF, "surf_cmc": 0.06},
     "tween-80": {"surf_hlb": 15.0, "surf_mw_ratio": 1310.0 / SURFACTANT_MW_REF, "surf_cmc": 0.012},
-    "polysorbate-20": {"surf_hlb": 16.7, "surf_mw_ratio": 1228.0 / SURFACTANT_MW_REF, "surf_cmc": 0.06},
-    "polysorbate-80": {"surf_hlb": 15.0, "surf_mw_ratio": 1310.0 / SURFACTANT_MW_REF, "surf_cmc": 0.012},
-    "poloxamer-188": {"surf_hlb": 29.0, "surf_mw_ratio": 8400.0 / SURFACTANT_MW_REF, "surf_cmc": 0.05},
+    "polysorbate-20": {
+        "surf_hlb": 16.7,
+        "surf_mw_ratio": 1228.0 / SURFACTANT_MW_REF,
+        "surf_cmc": 0.06,
+    },
+    "polysorbate-80": {
+        "surf_hlb": 15.0,
+        "surf_mw_ratio": 1310.0 / SURFACTANT_MW_REF,
+        "surf_cmc": 0.012,
+    },
+    "poloxamer-188": {
+        "surf_hlb": 29.0,
+        "surf_mw_ratio": 8400.0 / SURFACTANT_MW_REF,
+        "surf_cmc": 0.05,
+    },
     "none": {"surf_hlb": 0.0, "surf_mw_ratio": 0.0, "surf_cmc": 0.0},
 }
 
-# Protein class (format): structural descriptors of the molecular architecture —
-# domain count, relative hinge flexibility, typical pI, glycosylation. These give
-# the model a continuous notion of "what kind of molecule" rather than an opaque
-# class label, so e.g. an unseen format lands near structurally similar ones.
+# Protein class: descriptors capture molecular architecture, including domain
+# count, hinge flexibility, typical pI, and glycosylation, providing a
+# continuous representation of structural similarity rather than an opaque
+# categorical label.
 PROTEIN_CLASS_PROPS: dict[str, dict[str, float]] = {
     "mab_igg1": {"pc_domains": 12.0, "pc_flex": 1.0, "pc_typ_pi": 8.5, "pc_glyc": 1.0},
     "mab_igg4": {"pc_domains": 12.0, "pc_flex": 1.2, "pc_typ_pi": 7.0, "pc_glyc": 1.0},
@@ -237,11 +245,20 @@ PROTEIN_CLASS_PROPS: dict[str, dict[str, float]] = {
 }
 
 
-# Registry: column name -> (property table, ordered descriptor keys).
-# The ordered keys define the output column order and are used to build the
-# zero-fallback row.
 def _keys(table: dict[str, dict[str, float]]) -> list[str]:
-    # Use the "none" row to define the canonical descriptor order.
+    """Return the canonical descriptor order for a property table.
+
+    The descriptor names are taken from the `"none"` row so that the null
+    representation defines a stable ordering for every category in the
+    corresponding table.
+
+    Args:
+        table: Property table mapping category names to descriptor dictionaries.
+            The table is expected to contain a `"none"` entry.
+
+    Returns:
+        list[str]: Descriptor names in the canonical output order.
+    """
     return list(table["none"].keys())
 
 
@@ -256,7 +273,19 @@ _TABLES: dict[str, dict[str, dict[str, float]]] = {
 
 
 def _normalize_category(raw: str) -> str:
-    """Lowercase, strip, and map empty/nan-likes to 'none'."""
+    """Normalize a categorical value for property-table lookup.
+
+    Values are converted to strings, stripped of surrounding whitespace, and
+    lowercased. Empty values and common representations of missing or unknown
+    values are mapped to `"none"`.
+
+    Args:
+        raw: Raw categorical value to normalize.
+
+    Returns:
+        str: Normalized category name, or `"none"` when the value represents
+        a missing or unknown category.
+    """
     s = str(raw).strip().lower()
     if s in ("", "nan", "unknown", "na", "n/a"):
         return "none"
@@ -266,16 +295,32 @@ def _normalize_category(raw: str) -> str:
 def _lookup(
     table: dict[str, dict[str, float]], keys: list[str], raw: str, warned: set
 ) -> list[float]:
-    """Map one category value to its ordered descriptor vector.
+    """Resolve a category to its ordered physicochemical property vector.
 
-    Substring match is allowed (e.g. 'l-arginine hcl' -> 'arginine') so minor
-    naming variants resolve. Falls back to the 'none' zero-row on miss.
+    Exact category matches are preferred. If an exact match is not found, a
+    substring match against known categories is attempted to accommodate minor
+    naming variations. For example, a category containing `"arginine"` can
+    resolve to the `"arginine"` property entry.
+
+    Categories that cannot be resolved fall back to the table's `"none"`
+    row, which represents a zero-valued physical contribution. Each unknown
+    normalized category is reported only once through the supplied warning
+    set.
+
+    Args:
+        table: Property table mapping category names to descriptor dictionaries.
+        keys: Ordered descriptor names defining the output vector layout.
+        raw: Raw categorical value to resolve.
+        warned: Mutable set of category names for which an unknown-category
+            warning has already been emitted.
+
+    Returns:
+        list[float]: Property values corresponding to `keys` in order.
     """
     cat = _normalize_category(raw)
     if cat in table:
         row = table[cat]
     else:
-        # Try a substring match against known keys (handles 'l-arginine', etc.).
         match = next((k for k in table if k != "none" and k in cat), None)
         if match is not None:
             row = table[match]
@@ -295,25 +340,44 @@ def featurize_chemical_categoricals(
     df: pd.DataFrame,
     drop_original: bool = False,
 ) -> tuple[pd.DataFrame, list[str]]:
-    """
-    Append physicochemical property columns for each chemical categorical.
+    """Append physicochemical property vectors for chemical categoricals.
 
-    Parameters
-    ----------
-    df : DataFrame with the categorical columns present (any case; missing
-         columns are treated as all-'none').
-    drop_original : if True, drop the original categorical columns after
-         featurizing. Default False — harmless to leave them (they simply
-         won't be referenced by the numeric/one-hot pipeline once removed from
-         the encoder lists).
+    Each configured chemical categorical column is converted into the
+    corresponding property representation defined in its property table.
+    Generated descriptor columns are appended to a copy of the input
+    DataFrame and their names are returned in deterministic order.
 
-    Returns
-    -------
-    (df_out, prop_cols)
-        df_out   : df with new numeric property columns appended.
-        prop_cols: ordered list of the new column names (add these to your
-                   numeric pipeline / StandardScaler).
+    If a configured categorical column is absent from the input DataFrame,
+    its generated descriptors are filled with the corresponding `"none"`
+    values. If a present column contains an unrecognized category, that value
+    is mapped to the `"none"` property vector and a warning is emitted.
+
+    The original categorical columns are retained by default so callers can
+    explicitly control which columns are passed to subsequent categorical
+    encoders. They can instead be removed by setting `drop_original=True`.
+
+    Args:
+        df: Input DataFrame containing the chemical categorical columns. Column
+            values may use varying capitalization or whitespace because values
+            are normalized before lookup. Missing configured columns are
+            treated as containing only the `"none"` category.
+        drop_original: Whether to remove each original chemical categorical
+            column after its property descriptors have been generated. Defaults
+            to `False`.
+
+    Returns:
+        tuple[pd.DataFrame, list[str]]: A tuple containing:
+
+            - The copied DataFrame with physicochemical descriptor columns
+              appended.
+            - An ordered list of generated descriptor column names suitable
+              for inclusion in a numeric preprocessing pipeline.
+
+    Raises:
+        ValueError: If `df` does not satisfy the validation requirements
+            enforced by :func:`visqai.validation.require_dataframe`.
     """
+    require_dataframe(df, "df")
     df = df.copy()
     prop_cols: list[str] = []
     warned: set = set()
@@ -341,7 +405,18 @@ def featurize_chemical_categoricals(
 
 
 def describe_property_space() -> pd.DataFrame:
-    """Return a tidy table of every category and its descriptors (for auditing)."""
+    """Return all configured categories and their physicochemical descriptors.
+
+    The result is a tidy DataFrame containing one row per category and columns
+    for the categorical feature, category name, and every descriptor defined
+    for that feature. This representation is useful for auditing, inspecting,
+    or documenting the property space used by the featurization pipeline.
+
+    Returns:
+        pd.DataFrame: Tidy property-space table with `categorical` and
+        `category` columns followed by the descriptors applicable to each
+        categorical feature.
+    """
     rows = []
     for col, table in _TABLES.items():
         keys = _keys(table)

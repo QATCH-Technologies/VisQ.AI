@@ -2,17 +2,19 @@
 
 # Runtime dependencies (also declared in pyproject.toml [project.dependencies] --
 # this file exists for `pip install -r requirements.txt` workflows / CI caching).
-torch
-numpy
-pandas
-scikit-learn
-scipy
-joblib
-matplotlib
-optuna
-cryptography
-loguru
+torch>=2.8
+numpy>=2.0
+pandas>=2.3
+scikit-learn>=1.7
+scipy>=1.16
+joblib>=1.5
+matplotlib>=3.10
+optuna>=4.9
+cryptography>=46
+loguru>=0.7
+openpyxl>=3.1
 
 # Dev/test
-pytest
+pytest>=9.1
+pytest-cov>=7.1
 flake8

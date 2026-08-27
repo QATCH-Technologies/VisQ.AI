@@ -10,8 +10,8 @@ from visqai.eval.metrics import (
     AGGREGATE_MDE,
     PER_FOLD_RUN_SD,
 )
-from visqai.eval.constants import PRED_COLS, VISC_COLS
-from visqai.eval.data_prep import prepare_df
+from visqai.constants import PRED_COLS, VISC_COLS
+from visqai.features.dataprocessor import prepare_df
 
 
 def test_calc_metrics_perfect_prediction_is_zero_error():

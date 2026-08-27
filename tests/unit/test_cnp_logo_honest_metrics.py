@@ -19,7 +19,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from visqai.eval.cnp_logo import CONTEXT_GATE_TOLERANCE, MONOTONE_CONTEXT_TOLERANCE, _assert_context_gate
+from visqai.eval.logo_eval import CONTEXT_GATE_TOLERANCE, MONOTONE_CONTEXT_TOLERANCE, _assert_context_gate
 
 
 def _apply_task02_columns(row: dict, shots) -> dict:

@@ -100,6 +100,9 @@ venv.bak/
 Thumbs.db
 
 # --- Custom Project Ignores ---
-VisQAI/assets/
+# data/, models/, and artifacts/ now live on the team's shared Dropbox
+# folder (see src/visqai/paths.py) rather than in the repo.
+/data
 /models
 /logs
+/artifacts

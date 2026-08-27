@@ -180,7 +180,7 @@ def test_predict_kernel_correction_shrinks_toward_zero_far_from_context():
 
 
 def test_predict_kernel_mode_applies_query_dependent_correction(monkeypatch):
-    from visqai.preprocessing.pipeline import SHEAR_MAP
+    from visqai.constants import SHEAR_MAP
 
     p = _make_predictor_stub()
     p.shear_map = dict(SHEAR_MAP)
@@ -217,7 +217,7 @@ def test_predict_kernel_mode_is_bit_for_bit_zero_shot_when_not_fitted(monkeypatc
     """Rule 2: corrector_mode='kernel' with no fitted kernel state (gate
     never fired / memory_vector reset) must reproduce the prior exactly --
     same guarantee as the linear corrector's fallback."""
-    from visqai.preprocessing.pipeline import SHEAR_MAP
+    from visqai.constants import SHEAR_MAP
 
     p = _make_predictor_stub()
     p.shear_map = dict(SHEAR_MAP)

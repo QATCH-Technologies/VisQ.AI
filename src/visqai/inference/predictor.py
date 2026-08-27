@@ -1,225 +1,48 @@
 """
-predictor.py
-============
-ViscosityPredictorCNP: loads a trained checkpoint + fitted preprocessor and
-serves few-shot predictions (encode-only `.learn()`, `.predict()`,
-`.predict_with_uncertainty()` via MC dropout).
+ViscosityPredictorCNP: inference, few-shot adaptation, and uncertainty estimation
+for the Cross-Sample Conditional Neural Process viscosity model.
 
-Moved from ml/cnp_mk2/inference_o_net.py. Two changes from the original:
+The predictor loads a trained model checkpoint together with the fitted feature
+preprocessor and physics scaler, preprocesses formulation-level inputs through
+the shared feature-engineering pipeline, and produces viscosity predictions at
+the configured shear rates.
 
-1. Row-level feature engineering now goes through
-   visqai.preprocessing.pipeline.build_feature_frame instead of a private
-   duplicate of the trainer's logic -- this is the fix for the train/inference
-   charge-features skew (see pipeline.py's module docstring for the full
-   history: charge columns used to be silently zero-filled here).
-2. No import-time logging side effect. The original module configured a
-   FileHandler (writing a timestamped debug log) at import time, which is why
-   ibal_parity_test.py had to monkey-patch logging.basicConfig before
-   dynamically importing it. This module just gets a plain
-   logging.getLogger(__name__); callers configure handlers if they want them.
+Few-shot adaptation uses a query-conditioned local residual corrector rather
+than updating model weights. The deployed `linear` corrector estimates a
+shrunk formulation-level residual offset and concentration-dependent term,
+followed by a separately shrunk shear-dependent residual slope. A
+leave-one-formulation-out transfer check prevents correction when the observed
+context does not demonstrate within-context generalization. An optional
+`kernel` corrector provides a research alternative that estimates local
+residuals from Gaussian similarity in a restricted physicochemical feature
+space.
 
-DELTA CORRECTOR (T-R3.1/T-R3.2): the few-shot mechanism
----------------------------------------------------------
-`.predict()` no longer routes few-shot through the neural correction_head at
-all. models/experiments/rung1_context_learnability's Rung 1 analysis (T2-T6)
-established, on the zero-shot LOGO prior's real held-out residuals, that: the
-signal is ~44% between-protein variance (ICC), mostly a flat per-protein
-offset rather than a shear-dependent shape (T3), worth a real +0.05 log MAE
-ceiling (T4), and -- critically -- that a DUMB closed-form estimator (prior
-+ mean of context residuals) already recovers most of that ceiling at k>=4
-(T5). The neural correction_head, by contrast, measured near-zero real lift
-in production LOGO runs. So the few-shot path here is now exactly that dumb
-estimator, shrunk (empirical Bayes / James-Stein) to fix the T5-identified
-k=1 regression:
+The predictor maintains the legacy neural context representation solely for
+MC-dropout uncertainty estimation. Point predictions do not depend on the
+neural memory representation; instead, they use the exact zero-shot decoder
+path as their prior and add the validated local residual correction.
 
-    prediction = prior(x) + offset_hat
-    offset_hat = shrink(mean_{context}(y - prior(x)))
+Descriptor out-of-distribution protection is applied after preprocessing by
+clipping scaled numeric features to a configured standard-deviation range.
+The same policy is expected to be applied during model training so that
+training and inference feature handling remain symmetric.
 
-`prior(x)` is deliberately the CURRENT zero-shot prediction path (decode_from_
-memory at literal r=0), not an isolated prior_head call -- Rung 1's entire
-residual table was built by scoring predictor.predict() with
-memory_vector=None (see build_residuals.py), so the delta corrector has to be
-defined against the exact same baseline the T5 estimator was validated
-against for the "matches the T5 curve" pass criterion to mean anything.
-offset_hat defaults to 0.0 whenever memory_vector is reset to None (see the
-`memory_vector` property below), so an empty/absent context is bit-for-bit
-identical to the existing zero-shot path -- it cannot regress it.
+Notes:
+    The fitted `preprocessor.pkl` may have been serialized with a different
+    scikit-learn version. A compatibility implementation of the removed
+    `_RemainderColsList` wrapper is installed before loading the artifact
+    when necessary.
 
-`.learn()` still also populates `self.memory_vector` via the old neural
-encode_memory() path; that's kept ONLY for predict_with_uncertainty's MC-
-dropout sampling (a genuinely different, still-useful tool: epistemic
-uncertainty over the full decoder, orthogonal to the point-estimate few-shot
-mechanism above), not because `.predict()` still needs it.
-
-SLOPE TERM (T-R3.4)
---------------------
-Offset-first: T-R3.1/T-R3.2 shipped and were validated alone before this was
-added. For ~4 proteins (vudalimab, etanercept, pembrolizumab, belatacept)
-Rung 1's T3 found the within-protein residual isn't purely a flat offset --
-a shear-dependent slope explains a further 12-25% of variance beyond it --
-and confirmed (via a real LOGO run) the offset-only corrector was already
-matching its own offset-only oracle for these groups while still leaving a
-consistent ~0.011-0.018 log MAE gap versus the offset+slope oracle. So:
-
-    prediction = prior(x) + offset_hat + slope_hat * (log_shear(x) - x_bar)
-
-`slope_hat` is fit on (log_shear, resid - offset_hat) pairs from context --
-i.e. AFTER the already-validated offset_hat is subtracted, so the offset
-mechanism is completely unchanged; slope is a pure additive term on top, and
-`x_bar` (the context's own mean log_shear) is the point the line pivots
-around so the offset and slope corrections don't fight each other at
-prediction time. Both offset_hat and slope_hat are independently
-empirical-Bayes shrunk (see _shrink_offset / _fit_offset_slope). Offline
-simulation against the Rung 1 residual table (200 repeats/k, both the 4
-flagged proteins and the full 12) confirmed this beats offset-only at every
-k>=1 for the flagged proteins (99.9% oracle recovery at k=8) and is neutral
-to slightly positive for the offset-dominated majority.
-
-FORMULATION-LEVEL VARIANCE + CONFIDENCE GATE (T-R3.6/T-R3.7)
-----------------------------------------------------------------
-The full 29-group LOGO re-eval that validated T-R3.1-3.4 still showed a real
-outlier: nivolumab at -0.028 lift. Root cause, found by comparing point-level
-vs formulation-level ANOVA on the Rung 1 table: _shrink_offset's sigma2 was
-being estimated from up to 5 raw SHEAR POINTS per context formulation, but
-those points are NOT independent samples -- they share that formulation's own
-bias (see T6's stability_ratio; nivolumab's is 0.91, the highest of the
-board, meaning its residual is driven far more by WHICH formulation than by
-protein identity). Pooling them as if independent inflated the effective
-sample size ~5x and understated offset_hat's true uncertainty by roughly the
-same factor, so shrinkage was systematically too weak in exactly the noisy
-cases it exists to protect against.
-
-The fix: sigma2/tau2 and the sample size `n` used for shrinkage are now
-computed from PER-FORMULATION MEAN residuals (one number per context row),
-not raw points -- SIGMA2_WITHIN/TAU2_BETWEEN below are recalibrated on that
-basis. Two additional gates layer on top:
-  - T-R3.7 (hard k>=2): offset_hat is 0.0 whenever context has fewer than 2
-    distinct formulations -- a single formulation can't distinguish "this
-    protein has a real offset" from "this one formulation is atypical," so
-    k=1 no longer corrects at all. This trivially guarantees k=1 lift >= 0
-    (identical to zero-shot) rather than relying on shrinkage magnitude to
-    get there approximately.
-  - T-R3.6 (confidence gate): even at k>=2, offset_hat is zeroed unless
-    |raw_mean| >= its own standard error (mean / SE >= 1) -- i.e. the context
-    residuals have to be consistently non-zero, not just averaging to a
-    number that shrinkage hasn't fully squashed. This is what turns
-    marginal/noisy groups into deliberate abstention instead of a small
-    wrong correction.
-Offline simulation (300 repeats/k) confirmed: k=1 negative-lift count across
-all 12 proteins drops from 6 to 0 (exactly 0.0 lift everywhere, by
-construction), and nivolumab's k=8 worst-case lift improves from -0.011 to
--0.0096 -- a real but partial improvement, since nivolumab's instability
-looks like genuine formulation-level noise (T6 stability_ratio 0.91) rather
-than an under-shrunk estimate, and no amount of shrinkage sophistication
-recovers signal that isn't consistently there.
-
-WITHIN-CONTEXT TRANSFER CHECK (T-R3.8)
------------------------------------------
-T-R3.6's confidence gate tests "is this number distinguishable from zero" --
-but nivolumab's offset largely WAS distinguishable from zero (it has a real,
-non-trivial mean), it just doesn't reliably describe the protein: T6's
-stability_ratio (0.91, the highest of the whole board) means the "offset"
-varies substantially by which formulation you're looking at. A magnitude
-test can't see that; it only sees a mean and a variance. So T-R3.6's
-confidence gate is REPLACED (not supplemented) by a direct generalization
-test: leave-one-formulation-out within the context itself. For each context
-formulation held back in turn, estimate the offset from the OTHER k-1
-formulations (raw mean, unshrunk -- shrinking a k-1 LOO estimate would make
-it too conservative to discriminate transfer from non-transfer) and check
-whether applying it actually reduces error on the held-back formulation
-versus doing nothing. Only if >= TRANSFER_CHECK_FRAC (2/3) of the k LOO
-folds show improvement does the corrector fire at all -- using the FULL,
-properly shrunk (T-R3.2) k-formulation offset, not the LOO estimates
-themselves. This directly answers "does this offset transfer to a formulation
-it wasn't estimated from," which is exactly what a real per-protein constant
-must do and what nivolumab's noisy, formulation-dependent residual can't.
-Both offset_hat and slope_hat are gated together -- if the flat offset
-doesn't even transfer, a slope on top of it isn't more trustworthy.
-
-Offline simulation (300 repeats/k) at frac=2/3: nivolumab's k=8 lift improves
-from -0.0096 (T-R3.6) to -0.0017; the worst k=8 group across all 12 proteins
-becomes belatacept at -0.0024, clearing the -0.005 bar. Mean k=8 lift drops
-from +0.0355 to +0.0178 -- a real cost (more groups abstain more often) for
-eliminating the worst-case failure.
-
-QUERY-CONDITIONED LOCAL RESIDUAL (Task 1.1, issue1_query_conditioned_correction_plan.md)
-------------------------------------------------------------------------------------------
-Everything above (T-R3.1-3.8) is a corrector that is CONSTANT over the
-formulation feature space: offset_hat/slope_hat depend only on the
-within-curve shear axis, so context can shift a protein's curve up/down and
-tilt its shear-thinning, but it cannot correct how that protein responds to
-a *new condition* (e.g. a query at a higher concentration than anything in
-context). That is Weakness #1 the plan names first. The fix generalizes the
-scalar offset to a shrunk linear model on context residuals with basis
-`b = [1, (log_shear - sbar), (conc - cbar)]`:
-
-    prediction = prior(x) + offset_hat + conc_hat*(conc(x) - conc_center)
-                 + slope_hat*(log_shear(x) - slope_center)
-
-`offset_hat`/`conc_hat`/`conc_center` are identified TOGETHER at the
-FORMULATION level (see `_fit_formulation_level`): one number per context
-formulation (pseudoreplication fix, rule 3) regressed on `[1, conc-cbar]`,
-ridge-shrunk with `Î = sigma2 * diag(1/TAU2_BETWEEN, 1/TAU2_CONC)` -- the
-same empirical-Bayes construction `_shrink_offset` used, just 2-dimensional.
-`slope_hat` is fit exactly as T-R3.4 did, but on residuals AFTER subtracting
-the FULL formulation-level correction (intercept + conc term), not just the
-old scalar offset, so it never competes with the new conc term.
-
-FALLBACK (hard guarantee): when context spans <2 distinct `Protein_conc`
-values, `_fit_formulation_level`'s conc branch never fires -- conc_hat is
-exactly 0.0 and offset_hat collapses to the OLD scalar `_shrink_offset`
-formula bit-for-bit, so a context that doesn't vary concentration reproduces
-the pre-Task-1.1 offset+slope corrector exactly (see
-test_predictor_local_residual.py's fallback test).
-
-T-R3.8's within-context transfer check is likewise generalized (not just
-supplemented): each LOO fold now fits the WHOLE formulation-level model
-(`_fit_formulation_level_raw`, unshrunk -- same reasoning as before, a
-shrunk k-1 estimate would be too conservative to discriminate transfer from
-non-transfer) and tests whether it reduces the held-back formulation's
-error, gating offset_hat/conc_hat/slope_hat together exactly like before.
-
-TAU2_CONC is calibrated the same way TAU2_SLOPE was -- population variance
-(ddof=1) of PER-PROTEIN OLS slopes of (formulation-mean resid) vs.
-Protein_conc, computed from the same leave-one-protein-out zero-shot
-residual table (models/experiments/rung1_context_learnability/residuals.csv)
-TAU2_SLOPE/TAU2_BETWEEN/SIGMA2_WITHIN were calibrated from -- a fold
-structure disjoint from the condition-shift acceptance eval (Task 0.1),
-per the plan's ground rule against training/calibrating on the acceptance
-metric itself. Unlike TAU2_SLOPE (fit on raw per-shear points, since shear
-varies within a formulation), the conc slope is fit on PER-FORMULATION MEAN
-residuals -- Protein_conc doesn't vary within a formulation, so this is
-already the correct unit of replication.
-
-DESCRIPTOR-OOD DOWN-WEIGHTING (parallel prior-side track, not corrector work)
-------------------------------------------------------------------------------
-Separate from the few-shot mechanism above: visqai.eval.cnp_logo's
-FOLD RANGE GUARD (_check_fold_feature_range, FOLD_RANGE_N_SIGMA=5.0) has
-been LOGGING, for every LOGO fold, which engineered feature columns a
-held-out group's real values exceed 5 standard deviations of the training
-fold's fitted distribution on -- e.g. nivolumab's prior_lysine/conc_sq_x_kP/
-nearpI_x_conc, all repeatedly flagged. That guard only had visibility; it
-never changed a prediction. DESCRIPTOR_OOD_CLIP_SIGMA turns it into an actual
-behavior change: _preprocess and _context_residuals now clip every SCALED
-numeric feature to +/- that many standard deviations (StandardScaler's
-output is already in those units, so this is a plain np.clip) before it
-reaches the network, both for query points (zero-shot AND few-shot
-predictions) and for context residual estimation. A held-out group's
-genuinely out-of-distribution descriptor value is capped at the training
-fold's own edge instead of injecting a raw, unbounded activation the network
-never learned to handle -- this is exactly the same idea as
-visqai.training.data's ZERO_VARIANCE_FALLBACK_SCALE (bounding a different
-failure mode of the same underlying problem: OOD activations at held-out
-time), just applied to every numeric column instead of only zero-variance
-ones. training.data.load_and_preprocess applies the identical clip at fit
-time for train/inference symmetry.
+    The empirical-Bayes constants and correction thresholds in this module
+    are calibrated model artifacts rather than general-purpose hyperparameters.
+    They should be recalibrated when the training data, feature representation,
+    or zero-shot model architecture changes materially.
 """
 
 from __future__ import annotations
 
 import copy
 import os
-from typing import Optional, Tuple
 import logging
 
 import joblib
@@ -227,8 +50,9 @@ import numpy as np
 import pandas as pd
 import torch
 
+from visqai.constants import DESCRIPTOR_OOD_CLIP_SIGMA, SHEAR_MAP
 from visqai.models.cnp import CrossSampleCNP
-from visqai.preprocessing.pipeline import build_feature_frame, SHEAR_MAP
+from visqai.features.dataprocessor import build_feature_frame
 
 logger = logging.getLogger(__name__)
 
@@ -246,9 +70,16 @@ try:
     from collections import UserList as _UserList
 
     if not hasattr(_sklearn_ct, "_RemainderColsList"):
+
         class _RemainderColsList(_UserList):
-            def __init__(self, columns=(), *, future_dtype=None,
-                         warning_was_emitted=False, warning_enabled=True):
+            def __init__(
+                self,
+                columns=(),
+                *,
+                future_dtype=None,
+                warning_was_emitted=False,
+                warning_enabled=True,
+            ):
                 super().__init__(columns)
                 self.future_dtype = future_dtype
                 self.warning_was_emitted = warning_was_emitted
@@ -311,18 +142,18 @@ TAU2_SLOPE: float = 0.000735
 TAU2_CONC: float = 5.473e-06
 
 # Descriptor-OOD down-weighting (prior-side, not corrector work): caps every
-# SCALED numeric feature to +/- this many standard deviations before it
-# reaches the network. StandardScaler's output IS already in
-# standard-deviation units, so this is a plain np.clip -- no extra stats
-# needed. Matches visqai.eval.cnp_logo.FOLD_RANGE_N_SIGMA (5.0), the
-# existing diagnostic threshold that LOGS a held-out group's OOD descriptor
-# values without acting on them; this constant is what turns that diagnostic
-# into an actual behavior change. A held-out group whose real feature value
-# sits past 5 sigma of what the training fold ever represented gets capped
-# at the fold's own edge instead of injecting a raw, unbounded activation
-# the network never learned to handle -- see PREDICTOR docstring section
-# "DESCRIPTOR-OOD DOWN-WEIGHTING".
-DESCRIPTOR_OOD_CLIP_SIGMA: float = 5.0
+# SCALED numeric feature to +/- DESCRIPTOR_OOD_CLIP_SIGMA (visqai.constants;
+# shared, single-sourced with visqai.training.data's identical use of it)
+# standard deviations before it reaches the network. StandardScaler's output
+# IS already in standard-deviation units, so this is a plain np.clip -- no
+# extra stats needed. Matches visqai.eval.logo_eval.FOLD_RANGE_N_SIGMA (5.0),
+# the existing diagnostic threshold that LOGS a held-out group's OOD
+# descriptor values without acting on them; this constant is what turns that
+# diagnostic into an actual behavior change. A held-out group whose real
+# feature value sits past 5 sigma of what the training fold ever represented
+# gets capped at the fold's own edge instead of injecting a raw, unbounded
+# activation the network never learned to handle -- see PREDICTOR docstring
+# section "DESCRIPTOR-OOD DOWN-WEIGHTING".
 
 # Task 1.2: candidate Gaussian kernel bandwidths (in SCALED-feature units --
 # same standard-deviation units DESCRIPTOR_OOD_CLIP_SIGMA already clips to)
@@ -340,7 +171,7 @@ DESCRIPTOR_OOD_CLIP_SIGMA: float = 5.0
 # 1.1 corrector) on the bad-prior stratum -- the stratum with a measurable
 # effect; the good-prior stratum's differences are all inside this eval's
 # ~0.017 log-MAE minimum detectable effect at n=11 protein clusters, see
-# visqai.eval.condition_shift's module docstring -- showed post-A.3 kernel
+# the (now-removed) condition-shift eval's module docstring -- showed post-A.3 kernel
 # captures only ~27% of linear's bad-prior gain (offset-only +0.054, linear
 # +0.075, kernel +0.020) in exchange for a good-prior "gain" (+0.008) that
 # is not distinguishable from noise at this sample size. Never pick a
@@ -350,30 +181,65 @@ KERNEL_BANDWIDTH_CANDIDATES: tuple = (0.25, 0.5, 1.0, 2.0, 4.0)
 
 
 class ViscosityPredictorCNP:
-    def __init__(self, model_dir: str, verbose: bool = False):
+    def __init__(self, model_dir: str, verbose: bool = False) -> None:
+        """Initialize a trained CNP viscosity predictor.
+
+        Loads the fitted preprocessing artifacts and model checkpoint from
+        `model_dir`, restores the model to its pristine evaluation state, and
+        initializes the state used by zero-shot prediction, few-shot residual
+        correction, and uncertainty estimation.
+
+        The predictor automatically selects CUDA when available and otherwise
+        falls back to CPU. No model weights are modified during initialization;
+        a deep copy of the loaded state is retained so that subsequent calls to
+        :meth:`learn` can restore the original model before adapting to a new
+        context.
+
+        Args:
+            model_dir: Directory containing the fitted preprocessing artifacts
+                (`preprocessor.pkl` and `physics_scaler.pkl`) and the trained
+                model checkpoint (`best_model.pth`).
+            verbose: Whether to enable informational logging for this predictor
+                instance. When `False`, the instance logger is restricted to
+                critical messages.
+
+        Raises:
+            FileNotFoundError: If the preprocessor, physics scaler, or model
+                checkpoint is missing from `model_dir`.
+            RuntimeError: If the checkpoint cannot be loaded or its state
+                dictionary is incompatible with the reconstructed model.
+            KeyError: If the checkpoint does not contain the expected `config`
+                or `static_dim` metadata.
+        """
         self._logger = logging.getLogger(f"{__name__}.{id(self)}")
         if not verbose:
             self._logger.setLevel(logging.CRITICAL)
         self._logger.info(f"Initializing ViscosityPredictorCNP with model_dir: {model_dir}")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model_dir = model_dir
-        self._memory_vector = None  # Stores the calibrated context (legacy neural path)
-        self.offset_hat = 0.0  # Delta corrector's shrunk offset (T-R3.1/T-R3.2) -- the actual few-shot signal
-        self.conc_hat = 0.0  # Query-conditioned corrector's shrunk Protein_conc coefficient (Task 1.1)
-        self.conc_center = 0.0  # Protein_conc pivot conc_hat is fit around (context's own mean conc)
-        self.conc_support_min = 0.0  # Task A.3: context's own min Protein_conc -- clamps predict()'s query conc
-        self.conc_support_max = 0.0  # Task A.3: context's own max Protein_conc -- see predict()'s docstring
-        self.slope_hat = 0.0  # Delta corrector's shrunk shear-slope (T-R3.4), additive on top of offset_hat
-        self.slope_center = 0.0  # log_shear pivot point slope_hat is fit around (context's own mean log_shear)
-        self.n_context_points = 0  # Real measured points offset_hat/slope_hat were estimated from
+        self._memory_vector = None  # Stores the calibrated context
+        self.offset_hat = 0.0  # Delta corrector's shrunk offset
+        self.conc_hat = 0.0  # Query-conditioned corrector's shrunk Protein_conc coefficient
+        self.conc_center = 0.0  # Protein_conc pivot conc_hat is fit around
+        self.conc_support_min = 0.0  # Context's own min Protein_conc
+        self.conc_support_max = 0.0  # Context's own max Protein_conc
+        self.slope_hat = 0.0  # Delta corrector's shrunk shear-slope
+        self.slope_center = 0.0  # log_shear pivot point slope_hat is fit around
 
-        # Task 1.2: kernel-weighted local residual corrector, an alternative
-        # to Task 1.1's linear (offset+conc) model for axes where a linear
-        # term is the wrong shape (additive/buffer identity). Selectable via
-        # `corrector_mode` ("linear" is the default/Task-1.1 behavior,
-        # unchanged; "kernel" opts into this path). See module docstring.
+        # Real measured points offset_hat/slope_hat were estimated from
+        self.n_context_points = 0
+
+        # Kernel-weighted local residual correction. This provides an
+        # alternative to the deployed linear offset-plus-concentration correction
+        # for feature relationships that are not well represented by a linear term,
+        # such as additive or buffer identity effects. The behavior is selected by
+        # `corrector_mode`: "linear" is the default deployed path, while "kernel"
+        # enables the experimental kernel-based correction described in the module
+        # documentation.
         self.corrector_mode = "linear"
-        self._kernel_ctx_phi = None  # (n_formulations, n_kernel_features) context similarity vectors
+        self._kernel_ctx_phi = (
+            None  # (n_formulations, n_kernel_features) context similarity vectors
+        )
         self._kernel_ctx_resid = None  # (n_formulations,) per-formulation mean residuals
         self.kernel_bandwidth = None  # chosen via LOO on context (_fit_local_residual_kernel)
         self._kernel_feat_idx = None  # cached column indices into the preprocessor's numeric block
@@ -406,29 +272,41 @@ class ViscosityPredictorCNP:
 
         self.model.load_state_dict(checkpoint["state_dict"])
         self.model.eval()
-
-        # Pristine copy of the weights, restored before each learn() call so
-        # successive calls for different proteins never contaminate each other.
         self._original_state = copy.deepcopy(self.model.state_dict())
-
-        # Raw context tensor from the last learn() call, used by
-        # predict_with_uncertainty for context-subsampling CI.
-        self.context_t: Optional[torch.Tensor] = None
-
+        self.context_t: torch.Tensor | None = None
         self.shear_map = dict(SHEAR_MAP)
 
-    # ------------------------------------------------------------------
     @property
-    def memory_vector(self):
+    def memory_vector(self) -> torch.Tensor | None:
+        """Return the encoded context memory used by the legacy neural path.
+
+        The memory vector is populated by :meth:`learn` from the current context
+        and is retained primarily for MC-dropout uncertainty estimation. It is
+        not used by the main point-prediction path, which applies the zero-shot
+        decoder prior together with the local residual correction.
+
+        Returns:
+            The encoded context memory tensor, or `None` when no context has
+            been learned or the predictor has been reset to zero-shot operation.
+        """
         return self._memory_vector
 
     @memory_vector.setter
-    def memory_vector(self, value):
-        """`predictor.memory_vector = None` is the established "reset to
-        zero-shot" idiom every existing caller uses (cnp_logo._shot_metrics,
-        cli.parity_eval, eval.predictor_harness.reset_memory) -- keep
-        offset_hat (the delta corrector's actual few-shot signal) in sync so
-        those callers get a real reset without needing to know it exists."""
+    def memory_vector(self, value: torch.Tensor | None) -> None:
+        """Set the encoded context memory and synchronize zero-shot state.
+
+        Assigning `None` is the established mechanism for resetting the
+        predictor to zero-shot operation. In addition to clearing the legacy
+        neural memory, this setter clears all few-shot residual-correction state,
+        including the concentration correction, shear-dependent correction, and
+        kernel-correction context. This keeps existing callers that reset only
+        `memory_vector` from retaining stale few-shot corrections.
+
+        Args:
+            value: Encoded context memory tensor to retain for subsequent
+                uncertainty estimation, or `None` to clear the learned context
+                and restore zero-shot correction state.
+        """
         self._memory_vector = value
         if value is None:
             self.offset_hat = 0.0
@@ -443,20 +321,32 @@ class ViscosityPredictorCNP:
             self._kernel_ctx_resid = None
             self.kernel_bandwidth = None
 
-    # ------------------------------------------------------------------
-    def _clip_descriptor_ood(self, X_static: np.ndarray) -> np.ndarray:
-        """Cap every SCALED numeric feature to +/- DESCRIPTOR_OOD_CLIP_SIGMA
-        standard deviations -- see that constant's docstring. Only the "num"
-        block (StandardScaler output) is meaningful to clip this way; the
-        "cat" one-hot block is already in {0,1} and clipping it would be a
-        no-op anyway, so this only touches the leading n_num columns."""
-        n_num = len(self.preprocessor.transformers_[0][2])
-        X_static[:, :n_num] = np.clip(
-            X_static[:, :n_num], -DESCRIPTOR_OOD_CLIP_SIGMA, DESCRIPTOR_OOD_CLIP_SIGMA
-        )
-        return X_static
+    def _clip_descriptor_ood(self, x_static: np.ndarray) -> np.ndarray:
+        """Clip scaled numeric descriptors to the configured OOD boundary.
 
-    def _preprocess(self, df: pd.DataFrame) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        The numeric portion of the preprocessed feature matrix is produced by a
+        standard scaler, so each value is expressed in standard-deviation units.
+        Values outside `±DESCRIPTOR_OOD_CLIP_SIGMA` are therefore clipped to
+        the nearest boundary before being passed to the model. This limits the
+        effect of descriptor values that are substantially outside the training
+        distribution while preserving the preprocessor's categorical one-hot
+        features unchanged.
+
+        Args:
+            x_static: Preprocessed static feature matrix whose leading columns
+                correspond to the numeric feature block.
+
+        Returns:
+            The same feature matrix with scaled numeric features clipped to the
+            configured OOD range. The input array is modified in place.
+        """
+        n_num = len(self.preprocessor.transformers_[0][2])
+        x_static[:, :n_num] = np.clip(
+            x_static[:, :n_num], -DESCRIPTOR_OOD_CLIP_SIGMA, DESCRIPTOR_OOD_CLIP_SIGMA
+        )
+        return x_static
+
+    def _preprocess(self, df: pd.DataFrame) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         df_proc = df.copy()
 
         for col in df_proc.select_dtypes(include=["object"]):
@@ -468,18 +358,38 @@ class ViscosityPredictorCNP:
         df_proc, _num_cols, _cat_cols = build_feature_frame(df_proc)
         return self._preprocess_built(df_proc)
 
-    def _preprocess_built(self, df_proc: pd.DataFrame) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """The back half of _preprocess: everything AFTER build_feature_frame
-        (missing-column fill, scale, clip, tensor construction). Split out so
-        visqai.eval.predictor_harness.predict_from_built can hand in a
-        DataFrame that's already been through build_feature_frame with one
-        ENGINEERED column deliberately mutated (permutation feature
-        importance on e.g. conc_sq or whole_charge) -- calling the full
-        _preprocess on such a frame would silently re-derive that column from
-        its raw inputs via another build_feature_frame pass and overwrite the
-        mutation before it ever reached the model."""
+    def _preprocess_built(
+        self, df_proc: pd.DataFrame
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Preprocess an already feature-engineered formulation DataFrame.
+
+        Completes the preprocessing pipeline after :func:`build_feature_frame` by
+        filling missing expected features, applying the fitted static-feature
+        preprocessor, replacing invalid numeric values, clipping descriptor
+        out-of-distribution values, and constructing the scaled shear-rate and
+        viscosity tensors expected by the CNP model.
+
+        This method is intentionally separate from :meth:`_preprocess` so callers
+        that have deliberately modified engineered features, such as permutation
+        feature-importance evaluations, can bypass feature reconstruction without
+        having their modifications overwritten by a second call to
+        :func:`build_feature_frame`.
+
+        Args:
+            df_proc: DataFrame that has already passed through
+                :func:`build_feature_frame`. Its engineered feature values are used
+                as provided and are not recomputed.
+
+        Returns:
+            A tuple containing:
+                static_t: Static formulation features as a batched float32 tensor.
+                shear_t: Scaled log10 shear-rate values as a batched float32 tensor.
+                visc_t: Scaled log10 viscosity values as a batched float32 tensor.
+        """
         feature_names = (
-            self.preprocessor.feature_names_in_ if hasattr(self.preprocessor, "feature_names_in_") else []
+            self.preprocessor.feature_names_in_
+            if hasattr(self.preprocessor, "feature_names_in_")
+            else []
         )
         expected_missing = ["ID"] + list(self.shear_map.keys())
         missing_feats = [c for c in feature_names if c not in df_proc.columns]
@@ -489,11 +399,11 @@ class ViscosityPredictorCNP:
         for c in missing_feats:
             df_proc[c] = 0.0
 
-        X_static = self.preprocessor.transform(df_proc)
-        if np.isnan(X_static).any():
+        x_static = self.preprocessor.transform(df_proc)
+        if np.isnan(x_static).any():
             self._logger.warning("NaNs found in X_static after preprocessing! Replacing with 0.")
-            X_static = np.nan_to_num(X_static)
-        X_static = self._clip_descriptor_ood(X_static)
+            x_static = np.nan_to_num(x_static)
+        x_static = self._clip_descriptor_ood(x_static)
 
         n_rows = len(df_proc)
         n_shears = len(self.shear_map)
@@ -511,19 +421,20 @@ class ViscosityPredictorCNP:
                     val = 1e-6
                 raw_points[row_idx, 0] = np.log10(shear_val)
                 raw_points[row_idx, 1] = np.log10(val)
-                static_list.append(X_static[i])
+                static_list.append(x_static[i])
                 row_idx += 1
 
         scaled_points = self.physics_scaler.transform(raw_points)
 
-        static_t = torch.tensor(np.array(static_list), dtype=torch.float32).unsqueeze(0).to(self.device)
+        static_t = (
+            torch.tensor(np.array(static_list), dtype=torch.float32).unsqueeze(0).to(self.device)
+        )
         points_t = torch.tensor(scaled_points.astype(np.float32)).unsqueeze(0).to(self.device)
 
         shear_t = points_t[:, :, [0]]
         visc_t = points_t[:, :, [1]]
         return static_t, shear_t, visc_t
 
-    # ------------------------------------------------------------------
     def learn(
         self,
         df: pd.DataFrame,
@@ -531,15 +442,56 @@ class ViscosityPredictorCNP:
         lr: float = 1e-3,  # kept for API compatibility — no longer used
         n_draws: int = 20,
         k: int = 8,
-    ):
-        """Adapts the predictor to a new protein group by encoding its context
-        samples into a stable latent memory vector (no weight updates)."""
+    ) -> None:
+        """Adapt the predictor to a new protein context without updating weights.
+
+        The context is first encoded into the legacy neural memory representation,
+        which is retained for :meth:`predict_with_uncertainty`. The primary
+        few-shot point-prediction path instead estimates a local residual correction
+        from the context, consisting of a formulation-level offset, an optional
+        concentration-dependent term, and a shear-dependent slope. These corrections
+        are fit using the configured transfer checks and empirical-Bayes shrinkage.
+
+        When `corrector_mode` is `"kernel"`, an additional kernel-weighted local
+        residual model is fitted from the context for use by :meth:`predict`. The
+        kernel path is gated by within-context transfer performance and is otherwise
+        left inactive. The default `"linear"` mode uses the query-conditioned
+        linear residual corrector.
+
+        Repeated calls restore the model to its original checkpoint state before
+        encoding the new context, preventing context-specific state from
+        contaminating subsequent learning calls.
+
+        Args:
+            df: DataFrame containing measured formulation samples for the protein
+                context. Each row represents a formulation and may contain measured
+                viscosity values at one or more configured shear rates.
+            steps: Retained for API compatibility with earlier implementations that
+                performed iterative adaptation. It is no longer used because learning
+                does not update model weights.
+            lr: Retained for API compatibility with earlier implementations. It is
+                no longer used because learning does not perform gradient-based
+                optimization.
+            n_draws: Number of random context subsets used to estimate the legacy
+                neural memory representation when the context contains more than
+                `k` available points.
+            k: Maximum number of context points sampled for each neural memory
+                encoding draw.
+
+        Returns:
+            None. The predictor is updated in place with the encoded context and
+            fitted few-shot correction state.
+
+        Notes:
+            If `df` is empty, learning is skipped and the existing predictor state
+            is left unchanged.
+        """
         if df.empty:
             self._logger.warning("Context DataFrame is empty. Skipping learning.")
             return
 
         self._logger.info(
-            f" > Learn triggered on {len(df)} samples (n_draws={n_draws}, k={k}, no weight updates)."
+            f" > Learn triggered on {len(df)} samples (n_draws={n_draws}, k={k}, no weight updates)"
         )
 
         self.model.load_state_dict(self._original_state)
@@ -551,8 +503,7 @@ class ViscosityPredictorCNP:
         n_ctx = context_t.size(1)
         k_eff = min(k, n_ctx)
 
-        # Legacy neural memory (kept only for predict_with_uncertainty --
-        # see module docstring). Not used by predict()'s main path anymore.
+        # Legacy neural memory
         self.model.eval()
         with torch.no_grad():
             if n_ctx <= k_eff:
@@ -566,21 +517,24 @@ class ViscosityPredictorCNP:
                     memory_draws.append(r)
                 self._memory_vector = torch.stack(memory_draws, dim=0).mean(dim=0)
 
-        # Delta corrector (T-R3.1/T-R3.2/T-R3.4/T-R3.6/T-R3.7, generalized by
-        # Task 1.1 to be query-conditioned on Protein_conc): the actual
-        # few-shot mechanism.
+        # Few-shot residual correction: the primary adaptation mechanism. The
+        # formulation-level offset, concentration-dependent term, and shear-dependent
+        # slope are estimated from context residuals and empirically shrunk to
+        # distinguish transferable protein-level signal from formulation-level noise.
         ctx_formulations, ctx_shear, ctx_resid, ctx_conc, ctx_static = self._context_residuals(df)
 
-        # Task A.2 (addendum): corrector_mode="offset_only" is the ABLATION
-        # arm for measuring whether Task 1.1/1.2 add anything over the
-        # pre-Task-1.1 corrector -- zeroing ctx_conc before the fit forces
-        # `_fit_formulation_level`'s conc branch to never fire (constant
-        # input -> zero variance -> conc_hat stays exactly 0.0, the same
-        # code path the Fallback guarantee already proves is bit-for-bit the
-        # old scalar-offset+slope corrector). This reuses the exact fitting
-        # code rather than a separate implementation, so there is no risk of
-        # the ablation arm silently drifting from what "pre-Task-1.1" means.
-        ctx_conc_for_fit = ctx_conc if self.corrector_mode != "offset_only" else np.zeros_like(ctx_conc)
+        # Ablation mode: "offset_only" provides a controlled baseline for evaluating
+        # whether the newer local-correction components provide measurable benefit
+        # over the preceding correction strategy. The conditioning variable is
+        # neutralized before fitting, which makes its coefficient unidentifiable and
+        # therefore leaves that component exactly zero while preserving the shared
+        # offset/slope fitting path. Reusing the production fitting implementation
+        # ensures the baseline remains definitionally aligned with the corresponding
+        # legacy correction rather than maintaining a separate implementation that
+        # could drift over time.
+        ctx_conc_for_fit = (
+            ctx_conc if self.corrector_mode != "offset_only" else np.zeros_like(ctx_conc)
+        )
         (
             self.offset_hat,
             self.conc_hat,
@@ -590,18 +544,12 @@ class ViscosityPredictorCNP:
         ) = self._fit_local_residual(ctx_formulations, ctx_shear, ctx_resid, ctx_conc_for_fit)
         self.n_context_points = len(ctx_resid)
 
-        # Task A.3: the context's own Protein_conc range -- predict() clamps
-        # every query's conc to this range before evaluating conc_hat's
-        # linear term, so the fit only ever INTERPOLATES within what it was
-        # estimated from. Real-run evidence for why this is needed: a linear
-        # trend fit on a context's lower/upper half, evaluated at a query
-        # OUTSIDE that half (the corrector's whole reason to exist), was
-        # extrapolating the line arbitrarily far -- harmless when the trend
-        # happens to be real and the query isn't too far out, but with no
-        # guardrail at all a noisy/short-range slope estimate can blow up
-        # for a query several times further from context than the context's
-        # own span. Harmless when conc_hat is 0 (clamping a term that's
-        # multiplied by zero changes nothing).
+        # Constrain concentration-dependent correction to the range represented by
+        # the context. Query concentrations are clipped to the observed context
+        # interval before evaluating the fitted concentration term, preventing a
+        # short-range or noisy trend estimate from producing unbounded extrapolation
+        # outside the evidence used to fit it. When the concentration coefficient is
+        # zero, this clipping has no effect on the resulting prediction.
         if len(ctx_conc) > 0:
             self.conc_support_min = float(np.min(ctx_conc))
             self.conc_support_max = float(np.max(ctx_conc))
@@ -609,11 +557,12 @@ class ViscosityPredictorCNP:
             self.conc_support_min = 0.0
             self.conc_support_max = 0.0
 
-        # Task 1.2: kernel-weighted local residual, an alternative to the
-        # linear model above for axes (additive/buffer identity) where a
-        # linear term is the wrong shape. Only fit when explicitly selected
-        # -- corrector_mode defaults to "linear", so this is a no-op (and
-        # predict() ignores kernel state entirely) unless a caller opts in.
+        # Optional kernel-based local residual correction. Provides an alternative
+        # to the linear correction model for feature relationships that may be
+        # nonlinear or localized, such as additive or buffer identity effects. The
+        # kernel path is fitted only when explicitly selected via `corrector_mode`;
+        # the default "linear" mode leaves this state inactive and ignores it during
+        # prediction.
         self._kernel_ctx_phi = None
         self._kernel_ctx_resid = None
         self.kernel_bandwidth = None
@@ -627,10 +576,21 @@ class ViscosityPredictorCNP:
                 self.kernel_bandwidth = bandwidth
 
     def _prior_log10(self, q_shear: torch.Tensor, q_static: torch.Tensor) -> np.ndarray:
-        """prior(x) from the delta-corrector spec: the CURRENT zero-shot
-        prediction path (decode_from_memory at literal r=0), in real
-        log10-viscosity space. See module docstring for why this -- not an
-        isolated prior_head call -- is the correct "prior"."""
+        """Generate the zero-shot log10-viscosity prior for query inputs.
+
+        Uses the predictor's current zero-shot decoder path with an explicitly zero
+        latent memory vector. This ensures the prior used by the few-shot residual
+        corrector is identical to the baseline prediction path rather than relying
+        on a separate or isolated prior head.
+
+        Args:
+            q_shear: Batched, scaled log10 shear-rate tensor for the query points.
+            q_static: Batched static formulation-feature tensor for the query points.
+
+        Returns:
+            NumPy array containing the predicted log10 viscosity values in the
+            original, unscaled physical space.
+        """
         zero_mem = torch.zeros((1, self.config["latent_dim"]), device=self.device)
         self.model.eval()
         with torch.no_grad():
@@ -639,28 +599,36 @@ class ViscosityPredictorCNP:
 
     def _context_residuals(
         self, df: pd.DataFrame
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """(formulation_idx, log_shear_raw, true_log10 - prior_log10,
-        Protein_conc_raw, static_features) for every REAL measured point in
-        `df`, masked exactly like Rung 1's T1
-        (models/experiments/rung1_context_learnability/build_residuals.py)
-        -- a context row missing a value at some shear rate must NOT
-        contribute a fabricated residual through _preprocess's
-        placeholder-fill (val=1.0) path. That placeholder is harmless on the
-        query side of predict() (there's no truth to compare against, we're
-        just predicting there); it would silently corrupt offset_hat/
-        slope_hat/conc_hat here. log_shear_raw is UNSCALED log10(shear rate)
-        -- matches Rung 1's T3 convention. Protein_conc_raw is UNSCALED (not
-        centered -- callers center on the context's own mean, mirroring how
-        log_shear is handled). static_features is the FULL scaled/one-hot
-        feature row (same block _preprocess produces) per point -- Task
-        1.2's kernel corrector selects its similarity subset from this via
-        `_kernel_feature_indices`. formulation_idx is `df`'s own row
-        position (0..len(df)-1, one integer per point, repeated for every
-        real shear measurement that row has) -- callers group by it to
-        collapse to per-formulation means for T-R3.6/T-R3.7/Task-1.1/Task-1.2
-        (see module docstring's "FORMULATION-LEVEL VARIANCE" section for why
-        raw points can't be pooled as if independent)."""
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Build residual-learning targets from the real measurements in a context set.
+
+        For each observed formulation/shear-rate pair, computes the residual between
+        the measured log10 viscosity and the model's zero-shot prior prediction.
+        Missing viscosity measurements are excluded rather than replaced with the
+        placeholder values used by query-side preprocessing.
+
+        Args:
+            df: Context DataFrame containing formulation descriptors and measured
+                viscosity values at the shear rates defined by `self.shear_map`.
+
+        Returns:
+            A tuple containing:
+                - `formulation_idx`: Integer formulation indices corresponding to
+                  the original row positions in `df`. Each formulation index is
+                  repeated for every valid measured shear point belonging to that
+                  row.
+                - `shear_logs`: Unscaled `log10` shear-rate values.
+                - `residuals`: Measured minus zero-shot prior `log10` viscosity
+                  values for each valid measurement.
+                - `concs`: Unscaled `Protein_conc` values associated with each
+                  measurement, or `0.0` when unavailable.
+                - `statics`: Scaled static feature vectors corresponding to each
+                  measurement. These contain the full preprocessed numeric and
+                  categorical feature representation used by the model.
+
+            If `df` is empty or contains no valid measured viscosity points, each
+            returned array is empty.
+        """
         if df.empty:
             return np.empty(0, dtype=int), np.empty(0), np.empty(0), np.empty(0), np.empty((0, 0))
 
@@ -672,15 +640,17 @@ class ViscosityPredictorCNP:
         df_proc, _num_cols, _cat_cols = build_feature_frame(df_proc)
 
         feature_names = (
-            self.preprocessor.feature_names_in_ if hasattr(self.preprocessor, "feature_names_in_") else []
+            self.preprocessor.feature_names_in_
+            if hasattr(self.preprocessor, "feature_names_in_")
+            else []
         )
         for c in feature_names:
             if c not in df_proc.columns:
                 df_proc[c] = 0.0
-        X_static = self.preprocessor.transform(df_proc)
-        if np.isnan(X_static).any():
-            X_static = np.nan_to_num(X_static)
-        X_static = self._clip_descriptor_ood(X_static)
+        x_static = self.preprocessor.transform(df_proc)
+        if np.isnan(x_static).any():
+            x_static = np.nan_to_num(x_static)
+        x_static = self._clip_descriptor_ood(x_static)
 
         has_conc = "Protein_conc" in df_proc.columns
         formulation_idx, shear_logs, true_logs, statics, concs = [], [], [], [], []
@@ -697,7 +667,7 @@ class ViscosityPredictorCNP:
                 formulation_idx.append(i)
                 shear_logs.append(np.log10(shear_val))
                 true_logs.append(np.log10(float(v)))
-                statics.append(X_static[i])
+                statics.append(x_static[i])
                 concs.append(conc_val)
 
         if not shear_logs:
@@ -706,7 +676,9 @@ class ViscosityPredictorCNP:
         statics_arr = np.array(statics)
         raw_points = np.column_stack([shear_logs, true_logs])
         scaled_points = self.physics_scaler.transform(raw_points)
-        shear_t = torch.tensor(scaled_points[:, [0]], dtype=torch.float32).unsqueeze(0).to(self.device)
+        shear_t = (
+            torch.tensor(scaled_points[:, [0]], dtype=torch.float32).unsqueeze(0).to(self.device)
+        )
         static_t = torch.tensor(statics_arr, dtype=torch.float32).unsqueeze(0).to(self.device)
 
         prior_log = self._prior_log10(shear_t, static_t)
@@ -720,22 +692,43 @@ class ViscosityPredictorCNP:
 
     def _fit_formulation_level(
         self, form_conc: np.ndarray, form_means: np.ndarray
-    ) -> Tuple[float, float, float]:
-        """Shrunk (empirical-Bayes) formulation-level fit of [offset,
-        conc_coeff] on basis [1, conc-cbar] (Task 1.1) -- generalizes
-        T-R3.2's `_shrink_offset` scalar shrinkage to 2 dimensions. Caller
-        (`_fit_local_residual`) already enforces T-R3.7's k>=2 formulation
-        gate and the LOO transfer check before calling this. `sigma2` is the
-        SAME per-formulation noise estimate the old `_shrink_offset` used
-        (blended with SIGMA2_WITHIN so a lucky low-variance draw at small k
-        can't collapse shrinkage to ~none). `Î = sigma2 * diag(1/TAU2_BETWEEN,
-        1/TAU2_CONC)` makes this exactly a 2D ridge/Bayesian-linear-
-        regression posterior mean; with k formulations and a constant conc
-        column it collapses ALGEBRAICALLY to the old scalar
-        `raw * (k*TAU2_BETWEEN)/(k*TAU2_BETWEEN+sigma2)` formula (see module
-        docstring's FALLBACK guarantee) -- when context spans <2 distinct
-        Protein_conc values, conc_coeff can't be separated from noise, so it
-        is returned as exactly 0.0 rather than fit."""
+    ) -> tuple[float, float, float]:
+        """Fit a formulation-level residual correction using empirical-Bayes shrinkage.
+
+        Fits the formulation means to an intercept plus a Protein_conc-centered
+        linear term. The intercept and concentration coefficient are jointly
+        regularized according to their respective between-formulation variance
+        scales, providing a two-parameter generalization of scalar offset shrinkage.
+
+        When the context contains fewer than two distinct concentration values, the
+        concentration effect is not identifiable. In that case, the method falls back
+        to the scalar formulation-level offset estimator and returns a zero
+        concentration coefficient.
+
+        Args:
+            form_conc: One-dimensional array containing the Protein_conc value for
+                each formulation. Values are centered internally around their context
+                mean before fitting the concentration effect.
+            form_means: One-dimensional array containing the mean residual for each
+                formulation. Must have the same length as `form_conc`.
+
+        Returns:
+            A tuple containing:
+                - `offset`: Shrunk formulation-level residual offset evaluated at
+                  the context mean concentration.
+                - `conc_coeff`: Shrunk linear residual coefficient with respect to
+                  centered Protein_conc. Returns `0.0` when the context does not
+                  contain sufficient concentration variation to identify the effect.
+                - `conc_center`: Mean Protein_conc of the context, used as the
+                  reference point for the fitted concentration effect.
+
+        Notes:
+            The regularization combines the estimated per-formulation residual
+            variance with the configured between-formulation and concentration
+            variance scales. With no identifiable concentration variation, the
+            estimator reduces algebraically to the scalar shrinkage used by the
+            formulation-level offset fallback.
+        """
         k = len(form_means)
         cbar = float(np.mean(form_conc))
         sigma2 = max(float(np.var(form_means, ddof=1)), SIGMA2_WITHIN * 0.5)
@@ -752,14 +745,37 @@ class ViscosityPredictorCNP:
 
     def _fit_formulation_level_raw(
         self, form_conc: np.ndarray, form_means: np.ndarray
-    ) -> Tuple[float, float, float]:
-        """Unshrunk formulation-level [offset, conc_coeff] fit used ONLY by
-        the LOO transfer check (`_transfer_check_passes`) -- shrinking a k-1
-        LOO estimate would make it too conservative to discriminate transfer
-        from non-transfer (same reasoning T-R3.8 always used for the scalar
-        offset). Plain least-squares, falling back to the raw per-formulation
-        mean (conc_coeff=0.0) when there are <2 formulations or the LOO
-        subset's conc column is degenerate."""
+    ) -> tuple[float, float, float]:
+        """Fit an unregularized formulation-level residual model.
+
+        Computes the ordinary least-squares fit of formulation-level mean residuals
+        to an intercept and a Protein_conc-centered linear term. This unshrunk
+        estimator is intended for transfer-validation checks, where applying the
+        production shrinkage would make leave-one-out estimates unnecessarily
+        conservative and could obscure whether the learned correction transfers
+        across formulations.
+
+        If fewer than two formulations are available, or if the context contains no
+        meaningful variation in Protein_conc, the concentration effect is treated as
+        unidentifiable and the method falls back to the raw mean residual with a
+        zero concentration coefficient.
+
+        Args:
+            form_conc: One-dimensional array containing the Protein_conc value for
+                each formulation.
+            form_means: One-dimensional array containing the mean residual for each
+                formulation. Must correspond element-wise to `form_conc`.
+
+        Returns:
+            A tuple containing:
+                - `offset`: Unshrunk residual offset evaluated at the mean context
+                  concentration.
+                - `conc_coeff`: Unshrunk linear residual coefficient with respect
+                  to centered Protein_conc, or `0.0` when the concentration effect
+                  is not identifiable.
+                - `conc_center`: Mean Protein_conc of the formulations, used as the
+                  reference point for the concentration term.
+        """
         k = len(form_means)
         if k == 0:
             return 0.0, 0.0, 0.0
@@ -774,18 +790,37 @@ class ViscosityPredictorCNP:
     def _transfer_check_passes(
         self, ctx_formulations: np.ndarray, ctx_resid: np.ndarray, ctx_conc: np.ndarray
     ) -> bool:
-        """T-R3.8, generalized by Task 1.1 to test the WHOLE local model
-        (offset + conc term), not just the scalar offset -- leave-one-
-        formulation-out transfer check. For each context formulation held
-        back in turn, fit the formulation-level model from the OTHER k-1
-        formulations (`_fit_formulation_level_raw`, unshrunk) and check
-        whether applying its prediction (evaluated at the held-back
-        formulation's own conc) actually reduces error there versus doing
-        nothing. Requires TRANSFER_CHECK_FRAC of the k folds to show
-        improvement. When context conc is constant this reduces exactly to
-        the old scalar-offset LOO check (conc_coeff is always 0.0 in that
-        case), preserving the Task-1.1 fallback guarantee. See module
-        docstring."""
+        """Evaluate whether the learned local residual correction transfers across formulations.
+
+        Performs a leave-one-formulation-out validation of the formulation-level
+        residual model. For each held-out formulation, the model is fit on the
+        remaining formulations using the unshrunk formulation-level estimator, then
+        evaluated at the held-out formulation's own Protein_conc value. The learned
+        correction is considered transferable when it reduces the held-out mean
+        absolute residual relative to applying no correction for the required
+        fraction of folds.
+
+        This validation is performed without production shrinkage so that the
+        transfer test measures whether the underlying local correction generalizes,
+        rather than whether regularization suppresses it. When Protein_conc is
+        constant across the context, the concentration coefficient is necessarily
+        zero and the procedure reduces to the scalar offset leave-one-out check.
+
+        Args:
+            ctx_formulations: One-dimensional integer array identifying the
+                formulation associated with each measured residual. Multiple
+                measurements may share the same formulation identifier.
+            ctx_resid: One-dimensional array of measured-minus-prior residuals,
+                corresponding element-wise to `ctx_formulations`.
+            ctx_conc: One-dimensional array of Protein_conc values corresponding to
+                the residual measurements. Values are aggregated to the
+                formulation level before fitting and evaluating the correction.
+
+        Returns:
+            `True` if the learned formulation-level correction reduces mean
+            absolute residual for at least `TRANSFER_CHECK_FRAC` of the
+            leave-one-formulation-out folds; otherwise `False`.
+        """
         unique_forms = np.unique(ctx_formulations)
         k = len(unique_forms)
         form_means_all = pd.Series(ctx_resid).groupby(ctx_formulations).mean()
@@ -814,25 +849,58 @@ class ViscosityPredictorCNP:
         ctx_shear: np.ndarray,
         ctx_resid: np.ndarray,
         ctx_conc: np.ndarray,
-    ) -> Tuple[float, float, float, float, float]:
-        """Task 1.1: query-conditioned local residual model. Generalizes the
-        old `_fit_offset_slope` (scalar offset, then shear slope) to a
-        shrunk multi-basis fit on [1, (log_shear-sbar), (conc-cbar)], so
-        context that spans a concentration RANGE can correct a query at a
-        DIFFERENT concentration -- not just shift/tilt the curve uniformly
-        (see module docstring). Order: T-R3.7 formulation-count gate ->
-        generalized T-R3.8 whole-model LOO transfer check -> formulation-
-        level [offset, conc_coeff] fit (shrunk, `_fit_formulation_level`) ->
-        shear-slope fit on raw points, AFTER subtracting the FULL
-        formulation-level correction (offset + conc_coeff term), same
-        empirical-Bayes shrinkage as before. Returns (offset_hat, conc_hat,
-        conc_center, slope_hat, slope_center).
+    ) -> tuple[float, float, float, float, float]:
+        """Fit the local residual correction model from context measurements.
 
-        FALLBACK (hard): with <2 distinct context Protein_conc values,
-        conc_hat is exactly 0.0 and offset_hat/slope_hat are bit-for-bit the
-        old offset+slope corrector's output (see `_fit_formulation_level`
-        and `_transfer_check_passes` docstrings for why each step
-        individually collapses to its pre-Task-1.1 form)."""
+        Builds a query-conditioned residual model consisting of a formulation-level
+        offset, a Protein_conc-dependent correction, and a shear-dependent slope.
+        The formulation-level terms are estimated first using empirical-Bayes
+        shrinkage, after which the shear slope is estimated from residuals remaining
+        after the full formulation-level correction has been removed.
+
+        The fit is accepted only when the context contains the minimum required
+        number of formulations and the leave-one-formulation-out transfer check
+        demonstrates sufficient out-of-formulation predictive benefit. This prevents
+        unstable or non-transferable context corrections from being applied.
+
+        The formulation-level correction is evaluated relative to the context's
+        mean Protein_conc, while the shear term is centered at the context's mean
+        log10 shear rate. The resulting parameters therefore represent corrections
+        around the empirical center of the context rather than an arbitrary origin.
+
+        For compatibility with the pre-concentration-conditioned correction, the
+        method has a hard fallback: when the context does not contain sufficient
+        concentration variation, the concentration coefficient is zero and the
+        offset/slope estimation reduces to the corresponding scalar
+        offset-plus-slope procedure.
+
+        Args:
+            ctx_formulations: One-dimensional array identifying the formulation
+                associated with each measured residual. Multiple shear measurements
+                may share the same formulation identifier.
+            ctx_shear: One-dimensional array of unscaled `log10` shear-rate values
+                corresponding to each measured residual.
+            ctx_resid: One-dimensional array of measured-minus-prior
+                `log10`-viscosity residuals.
+            ctx_conc: One-dimensional array of unscaled Protein_conc values
+                corresponding to each residual measurement.
+
+        Returns:
+            A tuple containing:
+                - `offset_hat`: Shrunk formulation-level residual offset evaluated
+                  at `conc_center`.
+                - `conc_hat`: Shrunk residual coefficient for centered
+                  Protein_conc.
+                - `conc_center`: Mean Protein_conc of the context used as the
+                  concentration pivot.
+                - `slope_hat`: Shrunk residual slope with respect to centered
+                  log10 shear rate.
+                - `slope_center`: Mean log10 shear rate of the context used as the
+                  shear pivot.
+
+            If the context is empty, contains too few formulations, or fails the
+            transfer check, all returned parameters are zero.
+        """
         if len(ctx_resid) == 0:
             return 0.0, 0.0, 0.0, 0.0, 0.0
 
@@ -866,37 +934,68 @@ class ViscosityPredictorCNP:
         shrink = TAU2_SLOPE / (TAU2_SLOPE + sigma2_slope)
         return offset_hat, conc_hat, conc_center, slope_raw * shrink, xbar
 
-    def _kernel_feature_indices(self) -> list:
-        """Task 1.2: column indices (into the preprocessor's leading SCALED
-        numeric block, same block `_clip_descriptor_ood` clips) used for the
-        kernel corrector's similarity metric -- Protein_conc plus every
-        ingredient/buffer physicochemical property column
-        (visqai.preprocessing.pipeline's property-space columns). This is
-        the "physically-meaningful subset" the plan calls for: restricting
-        to it keeps similarity from being diluted by inert dimensions (MW,
-        temperature, engineered cross-terms, etc. all sit in the same scaled
-        block but say nothing about which additive/buffer is present).
-        Cached per instance -- the preprocessor's column layout never
-        changes after __init__."""
+    def _kernel_feature_indices(self) -> list[int]:
+        """Return the preprocessed numeric feature indices used by the kernel metric.
+
+        Identifies the physically meaningful subset of the preprocessor's scaled
+        numeric feature block for use by the kernel-based local residual corrector.
+        The selected features include `Protein_conc` and the ingredient/buffer
+        physicochemical property columns defined by the feature-processing pipeline.
+
+        Restricting the similarity metric to these features prevents unrelated
+        numeric descriptors, engineered interactions, or other dimensions from
+        diluting the formulation similarity used by the kernel corrector.
+
+        The resulting indices are cached after the first call because the
+        preprocessor's feature layout is fixed for the lifetime of the predictor.
+
+        Returns:
+            A list of integer column indices into the preprocessor's leading scaled
+            numeric feature block corresponding to the features used by the kernel
+            similarity metric.
+        """
         if self._kernel_feat_idx is None:
-            from visqai.preprocessing.pipeline import _all_property_columns
+            from visqai.features.dataprocessor import _all_property_columns
 
             num_cols = list(self.preprocessor.transformers_[0][2])
             wanted = {"Protein_conc"} | _all_property_columns()
             self._kernel_feat_idx = [i for i, c in enumerate(num_cols) if c in wanted]
         return self._kernel_feat_idx
 
-    def _kernel_loo_scan(self, form_phi: np.ndarray, form_resid: np.ndarray, ell: float) -> Tuple[float, float]:
-        """For bandwidth `ell`: leave-one-formulation-out over the context,
-        predicting each held-back formulation's residual from a Gaussian-
-        kernel-weighted mean of the OTHER k-1 formulations' residuals (raw,
-        unshrunk -- same reasoning T-R3.8 always used: shrinking a k-1 LOO
-        estimate would make it too conservative to discriminate transfer
-        from non-transfer). Returns (mean_abs_loo_error, frac_improved) --
-        frac_improved is the fraction of formulations where the LOO
-        kernel prediction reduced error vs. doing nothing, used both to pick
-        `ell` (minimize mean_abs_loo_error) and to gate the corrector
-        (TRANSFER_CHECK_FRAC of frac_improved, mirroring T-R3.8)."""
+    def _kernel_loo_scan(
+        self, form_phi: np.ndarray, form_resid: np.ndarray, ell: float
+    ) -> tuple[float, float]:
+        """Evaluate a Gaussian-kernel residual corrector using leave-one-formulation-out validation.
+
+        For each formulation in the context, predicts its mean residual from the
+        remaining formulations using a Gaussian kernel over their similarity
+        features. The held-out formulation is never included in its own prediction,
+        providing an out-of-formulation estimate of how well the selected bandwidth
+        transfers to unseen context formulations.
+
+        The leave-one-out predictions are intentionally unshrunk so that bandwidth
+        selection and transfer gating measure the underlying local similarity signal
+        rather than the effect of regularization. The resulting error and improvement
+        fraction can be used both to select the kernel bandwidth and to determine
+        whether the kernel corrector provides sufficient transfer benefit.
+
+        Args:
+            form_phi: Two-dimensional array of formulation-level similarity feature
+                vectors. Each row represents one formulation in the context and must
+                correspond to the same row in `form_resid`.
+            form_resid: One-dimensional array of formulation-level mean residuals
+                associated with `form_phi`.
+            ell: Positive Gaussian kernel bandwidth controlling how rapidly similarity
+                weights decrease with feature-space distance.
+
+        Returns:
+            A tuple containing:
+                - `mean_abs_loo_error`: Mean absolute residual error across the
+                  leave-one-formulation-out predictions.
+                - `frac_improved`: Fraction of held-out formulations for which the
+                  kernel correction reduces absolute residual error relative to
+                  applying no correction.
+        """
         k = len(form_resid)
         abs_errs = []
         n_improved = 0
@@ -915,34 +1014,57 @@ class ViscosityPredictorCNP:
 
     def _fit_local_residual_kernel(
         self, ctx_formulations: np.ndarray, ctx_resid: np.ndarray, ctx_static: np.ndarray
-    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[float], bool]:
-        """Task 1.2: kernel-weighted local residual corrector -- an
-        alternative to `_fit_local_residual`'s linear model for axes
-        (additive/buffer identity) where a linear term is the wrong shape.
-        Weights each context FORMULATION's mean residual (pseudoreplication
-        fix, rule 3 -- one number per formulation) by Gaussian similarity, in
-        the physically-meaningful feature subset only (`_kernel_feature_
-        indices`), to the query. Bandwidth is chosen by leave-one-
-        formulation-out on the CONTEXT ITSELF (ground rule #1 -- never the
-        acceptance eval); the SAME LOO scan also serves as the transfer-check
-        gate (T-R3.7/T-R3.8's philosophy, generalized here): fires only if
-        some bandwidth's LOO reconstruction beats doing nothing on
-        >= TRANSFER_CHECK_FRAC of formulations. T-R3.7's k>=2 formulation
-        gate applies identically. Returns (form_phi, form_resid, bandwidth,
-        gate_passed) -- `predict()` uses form_phi/form_resid/bandwidth only
-        when gate_passed.
+    ) -> tuple[np.ndarray | None, np.ndarray | None, float | None, bool]:
+        """Fit and validate a formulation-level Gaussian-kernel residual corrector.
 
-        Task A.3: candidates are tried SMALLEST-first
-        (KERNEL_BANDWIDTH_CANDIDATES is ascending) and the FIRST one that
-        clears TRANSFER_CHECK_FRAC wins -- NOT whichever minimizes LOO MAE.
-        A wider bandwidth can win on raw within-context reconstruction error
-        while still being too wide to decay to ~0 for a query genuinely
-        outside context support (the kernel's whole safety mechanism against
-        extrapolation); preferring the smallest bandwidth that still clears
-        the transfer-check bar keeps the correction as localized as the
-        evidence allows, which is the more conservative (and more honestly
-        "this is what the context actually supports") choice whenever
-        several bandwidths are about equally good at LOO reconstruction."""
+        Constructs a local residual model that predicts a query formulation's
+        correction from context formulations with similar physically meaningful
+        descriptors. Residuals are first collapsed to one mean value per formulation
+        to prevent multiple shear-rate measurements from causing pseudoreplication.
+        Similarity is computed only over the feature subset selected by
+        `_kernel_feature_indices`.
+
+        The kernel bandwidth is selected using leave-one-formulation-out validation
+        within the context. This validation serves both as bandwidth selection and
+        as the transfer gate: the kernel corrector is enabled only when a candidate
+        bandwidth reduces absolute residual error for at least
+        `TRANSFER_CHECK_FRAC` of the held-out formulations. The acceptance test
+        therefore uses only context data and does not consume an external evaluation
+        set.
+
+        Bandwidth candidates are evaluated in ascending order, and the first
+        candidate that satisfies the transfer criterion is selected. This favors the
+        most localized correction supported by the context rather than selecting the
+        bandwidth with the lowest raw leave-one-out error, reducing the risk of
+        overly broad corrections being applied outside the region represented by the
+        context.
+
+        Args:
+            ctx_formulations: One-dimensional array identifying the formulation
+                associated with each measured residual. Multiple measurements may
+                share the same formulation identifier.
+            ctx_resid: One-dimensional array of residuals between measured and
+                zero-shot predicted log10 viscosity values, corresponding
+                element-wise to `ctx_formulations`.
+            ctx_static: Two-dimensional array of scaled static feature vectors,
+                corresponding to the context measurements. The physically meaningful
+                subset used for kernel similarity is selected internally.
+
+        Returns:
+            A tuple containing:
+                - `form_phi`: Formulation-level similarity feature vectors, with
+                  exactly one row per unique context formulation.
+                - `form_resid`: Mean residual for each formulation in `form_phi`.
+                - `bandwidth`: Selected Gaussian kernel bandwidth, or `None` when
+                  the transfer gate fails or too few formulations are available.
+                - `gate_passed`: `True` when a candidate bandwidth satisfies the
+                  required leave-one-formulation-out transfer criterion; otherwise
+                  `False`.
+
+            When the context does not contain the minimum required number of
+            formulations, all returned model arrays and the bandwidth are `None`
+            and `gate_passed` is `False`.
+        """
         form_means = pd.Series(ctx_resid).groupby(ctx_formulations).mean()
         unique_forms = form_means.index.values
         k = len(unique_forms)
@@ -956,7 +1078,7 @@ class ViscosityPredictorCNP:
 
         best_ell = float(KERNEL_BANDWIDTH_CANDIDATES[0])
         gate_passed = False
-        for ell in KERNEL_BANDWIDTH_CANDIDATES:  # ascending -- most localized first
+        for ell in KERNEL_BANDWIDTH_CANDIDATES:  # ascending
             _mae, frac = self._kernel_loo_scan(form_phi, form_resid, ell)
             if frac >= TRANSFER_CHECK_FRAC:
                 best_ell = float(ell)
@@ -966,24 +1088,37 @@ class ViscosityPredictorCNP:
         return form_phi, form_resid, best_ell, gate_passed
 
     def _predict_kernel_correction(self, q_phi: np.ndarray) -> np.ndarray:
-        """Task 1.2: shrunk kernel-weighted correction for each query row's
-        restricted feature vector `q_phi` (n_queries, n_kernel_features).
-        Returns 0.0 for every row when the kernel corrector hasn't fired
-        (`_kernel_ctx_phi` is None -- gate failed or memory_vector reset),
-        so this is a no-op exactly like offset_hat/conc_hat default to 0.
-        Empirical-Bayes shrinkage reuses TAU2_BETWEEN/SIGMA2_WITHIN (same
-        population priors as the linear corrector) with the kernel weights'
-        EFFECTIVE sample size (Kish's formula, (sum w)^2 / sum(w^2)) in
-        place of a plain formulation count -- a query far from every context
-        point (small effective n) gets shrunk hard toward 0, a query near a
-        cluster of context formulations (large effective n) gets to trust
-        the local mean more."""
+        """Predict kernel-weighted local residual corrections for query descriptors.
+
+        Args:
+            q_phi: Restricted kernel-feature representations for the query rows,
+                with shape `(n_queries, n_kernel_features)`.
+
+        Returns:
+            A NumPy array of shape `(n_queries,)` containing the shrunk
+            kernel-weighted residual correction for each query row. Returns zeros
+            when the kernel corrector is inactive because its context state is
+            unavailable or the transfer gate did not pass.
+
+        Notes:
+            The correction is computed from formulation-level context residuals,
+            avoiding pseudoreplication across multiple shear measurements from the
+            same formulation. Gaussian kernel weights determine the local residual
+            estimate, while empirical-Bayes shrinkage uses the kernel weights'
+            Kish effective sample size to reduce corrections supported by little
+            effective context evidence. Consequently, queries distant from the
+            calibrated context are shrunk more strongly toward zero.
+        """
         if self._kernel_ctx_phi is None or self._kernel_ctx_resid is None:
             return np.zeros(len(q_phi))
 
         ell = self.kernel_bandwidth
         sigma2 = max(
-            float(np.var(self._kernel_ctx_resid, ddof=1)) if len(self._kernel_ctx_resid) > 1 else SIGMA2_WITHIN,
+            (
+                float(np.var(self._kernel_ctx_resid, ddof=1))
+                if len(self._kernel_ctx_resid) > 1
+                else SIGMA2_WITHIN
+            ),
             SIGMA2_WITHIN * 0.5,
         )
         out = np.zeros(len(q_phi))
@@ -1000,40 +1135,70 @@ class ViscosityPredictorCNP:
         return out
 
     def predict(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Query-conditioned delta-corrector prediction (Task 1.1):
-        prior(x) + offset_hat + conc_hat*(Protein_conc(x) - conc_center) +
-        slope_hat*(log_shear(x) - slope_center) (see module docstring).
-        offset_hat/conc_hat/slope_hat are all 0.0 whenever memory_vector has
-        been reset to None (the memory_vector property setter keeps them in
-        sync), so this is bit-for-bit the existing zero-shot path when
-        there's no context. Uses each QUERY row's own Protein_conc -- not
-        the context's -- so a query at a different concentration than any
-        context formulation gets a real, distinct correction rather than the
-        flat per-protein constant the pre-Task-1.1 corrector applied
-        everywhere.
+        """Generate viscosity predictions for a query DataFrame.
 
-        Task A.3: the query's Protein_conc is CLAMPED to
-        [conc_support_min, conc_support_max] -- the context's own observed
-        range -- before evaluating conc_hat's linear term, so the fit only
-        ever interpolates within evidence it was actually estimated from. A
-        linear trend estimated from a handful of context formulations is not
-        trustworthy extrapolated arbitrarily far past them; clamping means a
-        query beyond context support gets exactly the correction at the
-        NEAREST edge of that support, not a runaway linear projection."""
+        Args:
+            df: Query formulations to predict. Each row is preprocessed into static
+                formulation features and shear-rate inputs before prediction.
+
+        Returns:
+            A DataFrame containing the model's viscosity predictions, with the
+            query-conditioned local residual correction applied when a calibrated
+            context is available.
+
+        Notes:
+            Predictions are formed from the zero-shot prior plus the learned local
+            correction terms for formulation offset, protein concentration, and
+            shear-rate dependence. The concentration term uses each query row's own
+            `Protein_conc` rather than the context concentration.
+
+            When the predictor has been reset to zero-shot mode, all learned
+            correction terms are zero and prediction reduces to the unadapted model
+            path.
+
+            When concentration correction is active, each query concentration is
+            clamped to the range observed in the calibration context before the
+            concentration-dependent correction is evaluated. This prevents the
+            local linear fit from extrapolating beyond the concentration range
+            supported by the context.
+        """
         q_static, q_shear, _ = self._preprocess(df)
         return self._predict_from_tensors(q_static, q_shear, df)
 
     def _predict_from_tensors(
         self, q_static: torch.Tensor, q_shear: torch.Tensor, df: pd.DataFrame
     ) -> pd.DataFrame:
-        """The back half of predict(): prior + delta-corrector terms +
-        results-frame assembly, given already-preprocessed static/shear
-        tensors. Split out so visqai.eval.predictor_harness.predict_from_built
-        can supply tensors built from a DataFrame that skipped predict()'s own
-        _preprocess (see _preprocess_built's docstring) while sharing this
-        exact corrector logic rather than re-implementing it. `df` is only
-        used for its raw Protein_conc column and row count -- same role it
-        plays in predict()'s own call."""
+        """Generate predictions from preprocessed static and shear tensors.
+
+        Args:
+            q_static: Preprocessed static formulation features with the same layout
+                produced by :meth:`_preprocess`.
+            q_shear: Preprocessed shear-rate inputs corresponding to `q_static`.
+            df: Original query DataFrame used for result-frame assembly and, for the
+                linear corrector, the raw `Protein_conc` values. Its row order must
+                match the formulation order represented by the input tensors.
+
+        Returns:
+            A copy of `df` with one `Pred_<shear>` column added for each shear
+            condition in :attr:`shear_map`. Predictions are returned in viscosity
+            units after combining the zero-shot prior with the active local
+            correction terms and transforming from log10 space.
+
+        Notes:
+            This method contains the prediction logic shared by :meth:`predict` and
+            evaluation paths that already have a built feature frame. The zero-shot
+            prior is computed first, followed by the shear-dependent correction.
+
+            When `corrector_mode` is `"kernel"` and a calibrated kernel context
+            is available, the kernel-weighted formulation-level correction replaces
+            the linear offset and concentration correction. Otherwise, the linear
+            correction uses the query formulation's own `Protein_conc` value,
+            clamped to the concentration range observed during calibration.
+
+            The shear correction is evaluated from the raw log10 shear rates and the
+            calibration context's fitted shear center. All correction terms are
+            combined in log10-viscosity space before conversion back to viscosity.
+        """
         prior_log10 = self._prior_log10(q_shear, q_static)
 
         n_shears = len(self.shear_map)
@@ -1041,12 +1206,11 @@ class ViscosityPredictorCNP:
         slope_term = self.slope_hat * (raw_log_shears - self.slope_center)
 
         if self.corrector_mode == "kernel" and self._kernel_ctx_phi is not None:
-            # Task 1.2: kernel-weighted level correction replaces the linear
-            # offset+conc term entirely (never both -- see module docstring).
-            # q_static repeats each row's static features once per shear (see
-            # _preprocess), so every n_shears-th entry is one row's own
-            # vector -- pull those out before restricting to the kernel's
-            # similarity subset.
+            # Kernel mode replaces the linear offset/concentration correction with a
+            # single formulation-level correction derived from context similarity.
+            # `_preprocess` repeats each formulation's static feature vector once per
+            # shear condition, so retain the first entry of each formulation's repeated
+            # block before selecting the feature subset used by the kernel metric.
             q_static_np = q_static.detach().cpu().numpy()[0]
             q_static_per_row = q_static_np[::n_shears]
             q_phi = q_static_per_row[:, self._kernel_feature_indices()]
@@ -1083,10 +1247,42 @@ class ViscosityPredictorCNP:
         self,
         df: pd.DataFrame,
         n_samples: int = 100,
-        ci_range: Tuple[float, float] = (2.5, 97.5),
-        k: Optional[int] = None,  # retained for API compatibility — no longer used
-    ):
-        """Estimates the model's predictive uncertainty via MC Dropout."""
+        ci_range: tuple[float, float] = (2.5, 97.5),
+        k: int | None = None,  # retained for API compatibility no longer used
+    ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+        """Estimate predictive uncertainty using Monte Carlo dropout.
+
+        Args:
+            df: Query formulations for which predictions and uncertainty estimates
+                are required.
+            n_samples: Number of stochastic forward passes used to approximate the
+                predictive distribution. Larger values generally provide more stable
+                uncertainty estimates at the cost of additional inference time.
+            ci_range: Lower and upper percentile bounds for the reported confidence
+                interval, expressed as percentages. For example, `(2.5, 97.5)`
+                produces a nominal 95% interval.
+            k: Retained for API compatibility with earlier context-subsampling
+                implementations. It is currently unused.
+
+        Returns:
+            A tuple `(mean_pred, stats)` where `mean_pred` contains the mean
+            predicted viscosity values in the original viscosity units and `stats`
+            is a dictionary containing the mean and standard deviation in log10
+            space together with the lower and upper confidence-interval bounds in
+            viscosity units.
+
+        Notes:
+            The model is evaluated with dropout enabled during inference while its
+            learned parameters remain fixed. If a calibrated memory vector is
+            available, it is held fixed across all stochastic forward passes;
+            otherwise, a zero latent memory is used for the zero-shot path.
+
+            Uncertainty is estimated from the distribution of stochastic
+            log10-viscosity predictions. Confidence bounds are computed as
+            percentiles in log10 space and then transformed back to viscosity space.
+            If the configured dropout rate is zero, all stochastic passes are
+            deterministic and the resulting interval has zero width.
+        """
         dropout_val = self.config.get("dropout", 0.0)
         if dropout_val == 0.0:
             self._logger.warning(
@@ -1129,7 +1325,21 @@ class ViscosityPredictorCNP:
         return mean_pred, stats
 
     def _inverse_to_log(self, q_shear: torch.Tensor, out_scaled: torch.Tensor) -> np.ndarray:
-        """Inverse-scales a decoder output tensor to log10 viscosity values."""
+        """Convert scaled decoder outputs back to log10 viscosity values.
+
+        Args:
+            q_shear: Scaled shear-rate values corresponding to `out_scaled`.
+            out_scaled: Scaled decoder predictions representing log10 viscosity.
+
+        Returns:
+            A one-dimensional NumPy array containing the predicted log10 viscosity
+            values in the original, unscaled physical space.
+
+        Notes:
+            The physics scaler was fitted jointly on log10 shear rate and log10
+            viscosity. Both quantities are therefore reconstructed together before
+            extracting the inverse-scaled viscosity component.
+        """
         q_shear_np = q_shear.cpu().numpy().reshape(-1, 1)
         out_np = out_scaled.cpu().numpy().reshape(-1, 1)
         combined = np.hstack([q_shear_np, out_np])

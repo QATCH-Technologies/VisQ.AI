@@ -7,13 +7,13 @@ import pytest
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-from visqai.eval.cnp_logo import (
+from visqai.eval.logo_eval import (
     CONTEXT_GATE_TOLERANCE,
     _assert_context_gate,
     _check_fold_feature_range,
     run_cnp_logo,
 )
-from visqai.eval.logo_splits import LogoGroup
+from visqai.eval.logo_eval import LogoGroup
 
 
 def _make_row(**overrides):
@@ -48,7 +48,7 @@ def _fit_fold_preprocessor(work_dir, train_df):
     """Minimal stand-in for training.data.load_and_preprocess -- builds and
     dumps a real preprocessor.pkl from train_df's engineered features,
     without the torch-training machinery the guard doesn't need."""
-    from visqai.preprocessing.pipeline import build_feature_frame
+    from visqai.features.dataprocessor import build_feature_frame
 
     built, num_cols, cat_cols = build_feature_frame(train_df.copy())
     preprocessor = ColumnTransformer(
@@ -150,7 +150,7 @@ def test_run_cnp_logo_propagates_context_gate_failure_uncaught(tmp_path, monkeyp
     def _fake_run_cnp_fold(train_df, held_df, group, work_dir, **kwargs):
         return {"axis": group.axis, "group": group.key, "lift": -1.0}
 
-    monkeypatch.setattr("visqai.eval.cnp_logo.run_cnp_fold", _fake_run_cnp_fold)
+    monkeypatch.setattr("visqai.eval.logo_eval.run_cnp_fold", _fake_run_cnp_fold)
 
     df = pd.DataFrame({"Protein_type": ["mab", "mab", "other", "other"], "dummy": [1, 2, 3, 4]})
     group = LogoGroup(axis="protein", key="mab", column="Protein_type", value="mab")

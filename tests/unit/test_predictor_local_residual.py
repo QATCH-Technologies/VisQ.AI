@@ -242,7 +242,7 @@ def test_zeroing_context_conc_removes_the_conc_effect_vs_real_variation():
 
 
 def test_predict_applies_per_query_concentration_term(monkeypatch):
-    from visqai.preprocessing.pipeline import SHEAR_MAP
+    from visqai.constants import SHEAR_MAP
 
     p = _make_predictor_stub()
     p.shear_map = dict(SHEAR_MAP)
@@ -271,7 +271,7 @@ def test_predict_is_bit_for_bit_zero_shot_when_corrector_is_zero(monkeypatch):
     """Rule 2 (never regress the safe path): offset_hat=conc_hat=slope_hat=0
     (the memory_vector=None state) must reproduce the prior exactly."""
     p = _make_predictor_stub()
-    from visqai.preprocessing.pipeline import SHEAR_MAP
+    from visqai.constants import SHEAR_MAP
 
     p.shear_map = dict(SHEAR_MAP)
     p.offset_hat = 0.0
@@ -306,7 +306,7 @@ def test_predict_is_bit_for_bit_zero_shot_when_corrector_is_zero(monkeypatch):
 
 
 def test_predict_clamps_query_conc_to_context_support_range(monkeypatch):
-    from visqai.preprocessing.pipeline import SHEAR_MAP
+    from visqai.constants import SHEAR_MAP
 
     p = _make_predictor_stub()
     p.shear_map = dict(SHEAR_MAP)
@@ -343,7 +343,7 @@ def test_predict_clamp_is_a_noop_when_conc_hat_is_zero(monkeypatch):
     """Even a degenerate [0, 0] support range (the reset/no-context default)
     must not perturb predictions when conc_hat is 0 -- clamping a term
     that's multiplied by zero changes nothing."""
-    from visqai.preprocessing.pipeline import SHEAR_MAP
+    from visqai.constants import SHEAR_MAP
 
     p = _make_predictor_stub()
     p.shear_map = dict(SHEAR_MAP)

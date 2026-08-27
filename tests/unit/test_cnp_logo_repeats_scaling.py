@@ -10,7 +10,7 @@ cnp_logo.py for the full empirical story: 5 repeats gave all_context_lift
 
 from __future__ import annotations
 
-from visqai.eval.cnp_logo import (
+from visqai.eval.logo_eval import (
     MAX_N_REPEATS_MULTIPLIER,
     REFERENCE_N_HELD_FOR_REPEATS,
     _effective_n_repeats,

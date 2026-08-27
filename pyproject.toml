@@ -6,31 +6,26 @@ build-backend = "setuptools.build_meta"
 name = "visqai"
 version = "1.0.0"
 description = "VisQ.AI: physics-informed viscosity prediction"
+readme = "README.md"
+license = { file = "LICENSE" }
 authors = [{ name = "Paul MacNichol", email = "paul.macnichol@qatchtech.com" }]
 requires-python = ">=3.10"
 dependencies = [
-    "torch",
-    "numpy",
-    "pandas",
-    "scikit-learn",
-    "scipy",
-    "joblib",
-    "matplotlib",
-    "optuna",
-    "cryptography",
-    "loguru",
+    "torch>=2.8",
+    "numpy>=2.0",
+    "pandas>=2.3",
+    "scikit-learn>=1.7",
+    "scipy>=1.16",
+    "joblib>=1.5",
+    "matplotlib>=3.10",
+    "optuna>=4.9",
+    "cryptography>=46",
+    "loguru>=0.7",
+    "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest"]
-
-[project.scripts]
-visqai-train = "visqai.cli.train:main"
-visqai-train-final = "visqai.cli.run_final_training:main"
-visqai-parity-eval = "visqai.cli.parity_eval:main"
-visqai-learning-curve = "visqai.cli.learning_curve:main"
-visqai-package = "visqai.cli.package_model:main"
-visqai-logo-eval = "visqai.cli.logo_eval:main"
+dev = ["pytest>=9.1", "pytest-cov>=7.1", "flake8"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

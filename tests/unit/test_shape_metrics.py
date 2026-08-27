@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from visqai.eval.shape_metrics import (
+from visqai.eval.learning_curve_eval import (
     _classify_slopes,
     compute_shape_metrics,
     _aggregate_shape,
