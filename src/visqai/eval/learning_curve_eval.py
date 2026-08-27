@@ -442,7 +442,7 @@ def plot_log_convergence(
     plot_df = df[valid_mask].head(max_steps + 1)
 
     if plot_df.empty:
-        logger.warning("No valid log10 data to plot — skipping log convergence plot.")
+        logger.warning("No valid log10 data to plot - skipping log convergence plot.")
         return None
 
     sx = plot_df["n_context"].values
@@ -612,13 +612,13 @@ def plot_shape_convergence(
 
     need = ["slope_sign_agree", "shape_rmse_log10"]
     if not all(c in df.columns for c in need):
-        logger.warning("Shape columns absent — skipping shape convergence plot.")
+        logger.warning("Shape columns absent - skipping shape convergence plot.")
         return None
     valid = ~df[need].isna().any(axis=1)
     valid.iloc[-1] = False
     plot_df = df[valid].head(max_steps + 1)
     if plot_df.empty:
-        logger.warning("No valid shape data to plot — skipping.")
+        logger.warning("No valid shape data to plot - skipping.")
         return None
 
     sx = plot_df["n_context"].values
@@ -723,7 +723,7 @@ def predict_profiles(predictor, samples_df: pd.DataFrame) -> dict:
     try:
         results = predictor.predict(query)
     except Exception as e:
-        logger.warning(f"  [profiles] predict failed — {e}")
+        logger.warning(f"  [profiles] predict failed - {e}")
         return {}
 
     pred_cols = [f"Pred_{c}" for c in SHEAR_COLS]
@@ -987,7 +987,7 @@ def run_convergence_replay(
     ordered_ids = [str(sid) for sid in ordered_ids if str(sid) in id_to_idx]
     if not ordered_ids:
         raise ValueError(
-            "No `ordered_ids` matched an ID in `ibal_df` — check that the order CSV's "
+            "No `ordered_ids` matched an ID in `ibal_df` - check that the order CSV's "
             "sample IDs line up with ibal_df's ID column."
         )
 
@@ -1023,7 +1023,7 @@ def run_convergence_replay(
             profs_0 = predict_profiles(predictor, holdout_df_0)
             shape_agg_0 = _aggregate_shape(profs_0)
         except Exception as e:
-            logger.warning(f"  Step 0: predict failed — {e}")
+            logger.warning(f"  Step 0: predict failed - {e}")
 
     records.append(
         {
@@ -1053,7 +1053,7 @@ def run_convergence_replay(
                 order_dir=order_dir,
             )
         except Exception as e:
-            logger.warning(f"  Step 0: profile render failed — {e}")
+            logger.warning(f"  Step 0: profile render failed - {e}")
 
     for step, sample_id in enumerate(ordered_ids, start=1):
         context_ids = ordered_ids[:step]
@@ -1084,7 +1084,7 @@ def run_convergence_replay(
                 results_df = predictor.predict(query_df)
                 metrics = compute_metrics(results_df, holdout_df)
             except Exception as e:
-                logger.warning(f"  Step {step}: predict failed — {e}")
+                logger.warning(f"  Step {step}: predict failed - {e}")
 
             try:
                 _, unc_stats = predictor.predict_with_uncertainty(
@@ -1092,7 +1092,7 @@ def run_convergence_replay(
                 )
                 std_log10 = float(np.mean(unc_stats.get("std_log10", [np.nan])))
             except Exception as e:
-                logger.warning(f"  Step {step}: uncertainty failed — {e}")
+                logger.warning(f"  Step {step}: uncertainty failed - {e}")
 
         shape_agg = dict(_NULL_SHAPE_AGG)
         if holdout_ids and not has_nan_weights(predictor):
@@ -1102,7 +1102,7 @@ def run_convergence_replay(
                 profs = predict_profiles(predictor, holdout_df)
                 shape_agg = _aggregate_shape(profs)
             except Exception as e:
-                logger.warning(f"  Step {step}: shape agg failed — {e}")
+                logger.warning(f"  Step {step}: shape agg failed - {e}")
 
         records.append(
             {
@@ -1136,7 +1136,7 @@ def run_convergence_replay(
                     order_dir=order_dir,
                 )
             except Exception as e:
-                logger.warning(f"  Step {step}: profile render failed — {e}")
+                logger.warning(f"  Step {step}: profile render failed - {e}")
 
     return pd.DataFrame(records)
 
@@ -1241,7 +1241,7 @@ def _init_clean_predictor(model_dir, pretrain_df, n_draws, k_context, max_ctx_po
             pred, pretrain_df, n_draws=n_draws, k_context=k_context, max_ctx_pool=max_ctx_pool
         )
         if has_nan_weights(pred):
-            logger.error("NaN weights detected — reloading clean model.")
+            logger.error("NaN weights detected - reloading clean model.")
             pred = ViscosityPredictorCNP(model_dir)
         else:
             logger.info("  Cross-protein prior encoded successfully.")

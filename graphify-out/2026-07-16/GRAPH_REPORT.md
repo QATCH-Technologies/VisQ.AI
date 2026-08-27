@@ -55,21 +55,21 @@
 
 ## Surprising Connections (you probably didn't know these)
 - `test_prepare_df_coerces_ints_and_id_to_str()` --calls--> `prepare_df()`  [INFERRED]
-  tests/unit/test_metrics.py → src/visqai/eval/data_prep.py
+  tests/unit/test_metrics.py -> src/visqai/eval/data_prep.py
 - `test_prepare_df_default_matches_no_drop_behavior()` --calls--> `prepare_df()`  [INFERRED]
-  tests/unit/test_metrics.py → src/visqai/eval/data_prep.py
+  tests/unit/test_metrics.py -> src/visqai/eval/data_prep.py
 - `test_prepare_df_drop_bad_rows_filters_invalid_viscosity_and_numerics()` --calls--> `prepare_df()`  [INFERRED]
-  tests/unit/test_metrics.py → src/visqai/eval/data_prep.py
+  tests/unit/test_metrics.py -> src/visqai/eval/data_prep.py
 - `test_calc_metrics_empty_after_masking_returns_nans()` --calls--> `calc_metrics()`  [INFERRED]
-  tests/unit/test_metrics.py → src/visqai/eval/metrics.py
+  tests/unit/test_metrics.py -> src/visqai/eval/metrics.py
 - `test_calc_metrics_masks_non_positive_and_nonfinite()` --calls--> `calc_metrics()`  [INFERRED]
-  tests/unit/test_metrics.py → src/visqai/eval/metrics.py
+  tests/unit/test_metrics.py -> src/visqai/eval/metrics.py
 
 ## Import Cycles
 - None detected.
 
 ## Hyperedges (group relationships)
-- **GitHub Actions CI Pipeline (CodeQL, Pylint, Python App)** — _github_workflows_codeql_workflow, _github_workflows_pylint_workflow, _github_workflows_python_app_workflow [INFERRED 0.85]
+- **GitHub Actions CI Pipeline (CodeQL, Pylint, Python App)** - _github_workflows_codeql_workflow, _github_workflows_pylint_workflow, _github_workflows_python_app_workflow [INFERRED 0.85]
 
 ## Communities (41 total, 6 thin omitted)
 
@@ -152,7 +152,7 @@ Nodes (4): Feature provenance: kP, HCI, C_Class (Phase 0 / P1), Recommendation, 
 ## Knowledge Gaps
 - **9 isolated node(s):** `visqai`, `graphify`, `What was checked`, `What this does NOT prove`, `Recommendation` (+4 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **6 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **6 thin communities (<3 nodes) omitted from report** - run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_

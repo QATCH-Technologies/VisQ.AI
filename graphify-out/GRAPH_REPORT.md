@@ -61,21 +61,21 @@
 
 ## Surprising Connections (you probably didn't know these)
 - `test_belatacept_sized_group_reaches_the_empirically_verified_30_repeats()` --calls--> `_effective_n_repeats()`  [INFERRED]
-  tests/unit/test_cnp_logo_repeats_scaling.py → src/visqai/eval/cnp_logo.py
+  tests/unit/test_cnp_logo_repeats_scaling.py -> src/visqai/eval/cnp_logo.py
 - `test_large_group_is_unchanged_not_reduced()` --calls--> `_effective_n_repeats()`  [INFERRED]
-  tests/unit/test_cnp_logo_repeats_scaling.py → src/visqai/eval/cnp_logo.py
+  tests/unit/test_cnp_logo_repeats_scaling.py -> src/visqai/eval/cnp_logo.py
 - `test_reference_sized_group_is_unchanged()` --calls--> `_effective_n_repeats()`  [INFERRED]
-  tests/unit/test_cnp_logo_repeats_scaling.py → src/visqai/eval/cnp_logo.py
+  tests/unit/test_cnp_logo_repeats_scaling.py -> src/visqai/eval/cnp_logo.py
 - `test_scaling_decreases_monotonically_with_group_size()` --calls--> `_effective_n_repeats()`  [INFERRED]
-  tests/unit/test_cnp_logo_repeats_scaling.py → src/visqai/eval/cnp_logo.py
+  tests/unit/test_cnp_logo_repeats_scaling.py -> src/visqai/eval/cnp_logo.py
 - `test_scaling_is_capped_at_max_multiplier()` --calls--> `_effective_n_repeats()`  [INFERRED]
-  tests/unit/test_cnp_logo_repeats_scaling.py → src/visqai/eval/cnp_logo.py
+  tests/unit/test_cnp_logo_repeats_scaling.py -> src/visqai/eval/cnp_logo.py
 
 ## Import Cycles
 - None detected.
 
 ## Hyperedges (group relationships)
-- **GitHub Actions CI Pipeline (CodeQL, Pylint, Python App)** — _github_workflows_codeql_workflow, _github_workflows_pylint_workflow, _github_workflows_python_app_workflow [INFERRED 0.85]
+- **GitHub Actions CI Pipeline (CodeQL, Pylint, Python App)** - _github_workflows_codeql_workflow, _github_workflows_pylint_workflow, _github_workflows_python_app_workflow [INFERRED 0.85]
 
 ## Communities (46 total, 7 thin omitted)
 
@@ -178,7 +178,7 @@ Nodes (18): DataFrame, test_coverage.py ================= Task 8 tests for visqa
 ## Knowledge Gaps
 - **7 isolated node(s):** `visqai`, `HeldoutPanel`, `graphify`, `CodeQL Advanced Workflow`, `Pylint Workflow` (+2 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **7 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **7 thin communities (<3 nodes) omitted from report** - run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_

@@ -71,21 +71,21 @@
 
 ## Surprising Connections (you probably didn't know these)
 - `main()` --calls--> `check_against_noise_band()`  [INFERRED]
-  analysis/bgg_ablation_eval.py → src/visqai/eval/metrics.py
+  analysis/bgg_ablation_eval.py -> src/visqai/eval/metrics.py
 - `criterion_3_lobo_gated_encoding()` --calls--> `load_heldout_panel()`  [INFERRED]
-  analysis/fv_regime_real_data_eval.py → src/visqai/eval/heldout_panels.py
+  analysis/fv_regime_real_data_eval.py -> src/visqai/eval/heldout_panels.py
 - `test_belatacept_sized_group_reaches_the_empirically_verified_30_repeats()` --calls--> `_effective_n_repeats()`  [INFERRED]
-  tests/unit/test_cnp_logo_repeats_scaling.py → src/visqai/eval/cnp_logo.py
+  tests/unit/test_cnp_logo_repeats_scaling.py -> src/visqai/eval/cnp_logo.py
 - `test_large_group_is_unchanged_not_reduced()` --calls--> `_effective_n_repeats()`  [INFERRED]
-  tests/unit/test_cnp_logo_repeats_scaling.py → src/visqai/eval/cnp_logo.py
+  tests/unit/test_cnp_logo_repeats_scaling.py -> src/visqai/eval/cnp_logo.py
 - `test_reference_sized_group_is_unchanged()` --calls--> `_effective_n_repeats()`  [INFERRED]
-  tests/unit/test_cnp_logo_repeats_scaling.py → src/visqai/eval/cnp_logo.py
+  tests/unit/test_cnp_logo_repeats_scaling.py -> src/visqai/eval/cnp_logo.py
 
 ## Import Cycles
 - None detected.
 
 ## Hyperedges (group relationships)
-- **GitHub Actions CI Pipeline (CodeQL, Pylint, Python App)** — _github_workflows_codeql_workflow, _github_workflows_pylint_workflow, _github_workflows_python_app_workflow [INFERRED 0.85]
+- **GitHub Actions CI Pipeline (CodeQL, Pylint, Python App)** - _github_workflows_codeql_workflow, _github_workflows_pylint_workflow, _github_workflows_python_app_workflow [INFERRED 0.85]
 
 ## Communities (57 total, 9 thin omitted)
 
@@ -220,7 +220,7 @@ Nodes (4): Few-shot held-out validation -- the metric that matches deployment.  
 ## Knowledge Gaps
 - **13 isolated node(s):** `run_bgg_ablation.sh script`, `PYTHONPATH`, `run_logo_before_after.sh script`, `PYTHONPATH`, `run_logo_multiseed.sh script` (+8 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **9 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **9 thin communities (<3 nodes) omitted from report** - run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_

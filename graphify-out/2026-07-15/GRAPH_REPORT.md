@@ -37,22 +37,22 @@
 
 ## Surprising Connections (you probably didn't know these)
 - `Python Application Workflow` --references--> `VisQAI: Physics-Informed Viscosity Prediction Library`  [INFERRED]
-  .github/workflows/python-app.yml → ml/README.md
+  .github/workflows/python-app.yml -> ml/README.md
 - `Root requirements.txt` --shares_data_with--> `ml/requirements.txt`  [INFERRED]
-  requirements.txt → ml/requirements.txt
+  requirements.txt -> ml/requirements.txt
 - `load_and_preprocess()` --calls--> `featurize_chemical_categoricals()`  [INFERRED]
-  ml/cnp_mk2/train_o_net_v4_rung1.py → ml/cnp_mk2/categorical_features.py
+  ml/cnp_mk2/train_o_net_v4_rung1.py -> ml/cnp_mk2/categorical_features.py
 - `_load_predictor_class()` --indirect_call--> `ViscosityPredictorCNP`  [INFERRED]
-  ml/cnp_mk2/ibal_parity_test.py → ml/cnp_mk2/inference_o_net.py
+  ml/cnp_mk2/ibal_parity_test.py -> ml/cnp_mk2/inference_o_net.py
 - `Pylint Workflow` --semantically_similar_to--> `Python Application Workflow`  [INFERRED] [semantically similar]
-  .github/workflows/pylint.yml → .github/workflows/python-app.yml
+  .github/workflows/pylint.yml -> .github/workflows/python-app.yml
 
 ## Import Cycles
 - None detected.
 
 ## Hyperedges (group relationships)
-- **GitHub Actions CI Pipeline (CodeQL, Pylint, Python App)** — _github_workflows_codeql_workflow, _github_workflows_pylint_workflow, _github_workflows_python_app_workflow [INFERRED 0.85]
-- **Physics-Informed ML Design Pattern (Priors + Loss Constraints)** — ml_readme_physics_informed_loss, ml_readme_learnable_physics_priors, ml_readme_learnablephysicsprior_layer, ml_readme_shear_thinning_constraint, ml_readme_input_gradient_constraints [INFERRED 0.85]
+- **GitHub Actions CI Pipeline (CodeQL, Pylint, Python App)** - _github_workflows_codeql_workflow, _github_workflows_pylint_workflow, _github_workflows_python_app_workflow [INFERRED 0.85]
+- **Physics-Informed ML Design Pattern (Priors + Loss Constraints)** - ml_readme_physics_informed_loss, ml_readme_learnable_physics_priors, ml_readme_learnablephysicsprior_layer, ml_readme_shear_thinning_constraint, ml_readme_input_gradient_constraints [INFERRED 0.85]
 
 ## Communities (19 total, 2 thin omitted)
 
@@ -103,7 +103,7 @@ Nodes (3): Data Scarcity in High-Viscosity Regions (design challenge), Learnable
 ## Knowledge Gaps
 - **8 isolated node(s):** `CodeQL Advanced Workflow`, `Pylint Workflow`, `Graphify Knowledge Graph Workflow Rules`, `ml/requirements.txt`, `Non-Linear Concentration Effects (design challenge)` (+3 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **2 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **2 thin communities (<3 nodes) omitted from report** - run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_

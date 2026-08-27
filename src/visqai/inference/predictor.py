@@ -438,8 +438,8 @@ class ViscosityPredictorCNP:
     def learn(
         self,
         df: pd.DataFrame,
-        steps: int = 50,  # kept for API compatibility — no longer used
-        lr: float = 1e-3,  # kept for API compatibility — no longer used
+        steps: int = 50,  # kept for API compatibility - no longer used
+        lr: float = 1e-3,  # kept for API compatibility - no longer used
         n_draws: int = 20,
         k: int = 8,
     ) -> None:

@@ -1,87 +1,109 @@
+<p align="center">
+  <img src="assets/visqai-logo.svg" alt="VisQ.AI logo" width="240">
+</p>
+
 # VisQ.AI
 
-Physics-informed viscosity prediction for protein/antibody formulations. A Conditional Neural
-Process (CNP) predicts a formulation's viscosity across shear rates from its physicochemical
-properties, combining a physics-informed zero-shot prior with an optional few-shot correction
-learned from a handful of real measurements on similar formulations.
+Physics-informed viscosity prediction for protein and antibody formulations. VisQ.AI uses a
+Conditional Neural Process (CNP) architecture to predict formulation viscosity across shear
+rates from fundamental physicochemical properties, combining a physics-informed zero-shot
+prior with an optional few-shot correction learned from a handful of real measurements.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for how the pieces fit together and
-[CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, test conventions, and code
-conventions used throughout this repo.
+[![Tests](https://github.com/QATCH-Technologies/VisQ.AI/actions/workflows/python-app.yml/badge.svg)](https://github.com/QATCH-Technologies/VisQ.AI/actions/workflows/python-app.yml)
+[![Pylint](https://github.com/QATCH-Technologies/VisQ.AI/actions/workflows/pylint.yml/badge.svg)](https://github.com/QATCH-Technologies/VisQ.AI/actions/workflows/pylint.yml)
+[![CodeQL](https://github.com/QATCH-Technologies/VisQ.AI/actions/workflows/codeql.yml/badge.svg)](https://github.com/QATCH-Technologies/VisQ.AI/actions/workflows/codeql.yml)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-## Setup
+## Overview
 
-Requires Python >= 3.10.
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - data flow, design rationale, and system components.
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** - development workflow, testing standards, code conventions.
 
-``
+## Installation
+
+Requires Python 3.10+.
+
+```bash
 pip install -e .[dev]
-``
+```
 
-Formulation data and trained checkpoints are **not** stored in this repo -- they live on the
-team's shared Dropbox folder (`QATCH Team Folder/Formulations ML`). Paths resolve automatically
-for anyone with that Dropbox mounted (see `src/visqai/constants.py`); override with the
-`VISQAI_DATA_ROOT` / `VISQAI_MODELS_ROOT` environment variables if your Dropbox is mounted
-somewhere nonstandard, or if you're pointing at a different data source entirely.
+## Data and Model Paths
 
-## Quick start
+By default, the package resolves training data and model checkpoints from a shared directory
+structure (`QATCH Team Folder/Formulations ML`) on the team's Dropbox.
 
-One command retrains the model on the newest data and runs a fast sanity-check eval:
+| Mode | Behavior |
+| --- | --- |
+| Standard | Paths resolve automatically when the shared Dropbox folder is mounted locally. |
+| Custom | Override with the `VISQAI_DATA_ROOT` / `VISQAI_MODELS_ROOT` environment variables. |
 
-``
+## Quick Start
+
+### Training and evaluation
+
+Run the full pipeline - data processing, optional Optuna hyperparameter tuning, model
+training, and sanity-check evaluation - from a single entrypoint:
+
+```bash
 python scripts/run.py
-``
+```
 
-This is the entrypoint aimed at a novice ML engineer -- it chains data-processing ->
-(optional Optuna tuning) -> training -> eval, in one process, and writes everything to a fresh
-`<checkpoints>/<date>/<time>/` directory. Checkpoints are never given a hand-picked name, so
-runs never collide and there's nothing to remember to invent. Run `python scripts/run.py --help`
-for tuning trials, which evals to run, and the (opt-in, data-hungry) LOGO/zero-shot/learning-curve
-evals.
+Outputs are written to a timestamped directory under the configured checkpoints folder
+(`<checkpoints>/<date>/<time>/`). See all options, including tuning trials and evaluation
+suites:
 
-Package the most recent checkpoint into a signed `.visq` deployment artifact:
+```bash
+python scripts/run.py --help
+```
 
-``
+### Deployment packaging
+
+Package the most recent model checkpoint into a signed deployment artifact (`.visq`):
+
+```bash
 python scripts/package.py
-``
+```
 
-Every eval also runs standalone, against an existing checkpoint (defaults to the most recently
-produced one if `--model_dir` is omitted):
+### Standalone evaluation
 
-``
+Each evaluation module can also run independently against an existing checkpoint (defaults to
+the most recent one if `--model_dir` is omitted):
+
+```bash
 python -m visqai.eval.parity_eval --help
 python -m visqai.eval.logo_eval --help
 python -m visqai.eval.zero_shot_eval --help
 python -m visqai.eval.learning_curve_eval --help
-``
+```
 
-## Repo layout
+## Repository Layout
 
-``
+```
 src/visqai/
-  constants.py, paths.py, validation.py, logging_config.py   # shared infrastructure
-  features/      # raw row -> engineered feature frame (physics priors, categorical/charge featurization)
-  training/      # data loading, the CrossSampleCNP training loop, Optuna tuning
-  models/        # the CrossSampleCNP architecture
-  inference/     # ViscosityPredictorCNP -- the served prediction API
-  eval/          # four self-contained evals: parity, LOGO, zero-shot, learning-curve
-  packaging/     # signed .visq deployment packages
+  ├── constants.py, paths.py, validation.py, logging_config.py  # Shared infrastructure
+  ├── features/      # Feature engineering and physics priors
+  ├── training/       # Data loaders, training loops, and Optuna tuning
+  ├── models/          # Conditional Neural Process (CNP) architecture
+  ├── inference/       # Prediction and serving API
+  ├── eval/             # Evaluation suites (parity, LOGO, zero-shot, learning-curve)
+  └── packaging/     # Deployment packaging utilities
 scripts/
-  run.py         # one-click retrain + evaluate
-  package.py     # build a signed .visq package
+  ├── run.py           # End-to-end training and evaluation pipeline
+  └── package.py    # Artifact packaging utility
 tests/
-  unit/, integration/
-``
+  ├── unit/             # Unit test suites
+  └── integration/    # Integration test suites
+```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full data flow and design rationale.
+## Testing
 
-## Tests
-
-``
+```bash
 pytest
-``
+```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for coverage tooling and test-writing conventions.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for coverage tooling and test-writing guidelines.
 
 ## License
 
-GPLv3 -- see [LICENSE](LICENSE).
+Licensed under the GNU General Public License v3.0 (GPLv3). See [LICENSE](LICENSE) for details.

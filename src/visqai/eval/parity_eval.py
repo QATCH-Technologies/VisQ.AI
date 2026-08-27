@@ -254,7 +254,7 @@ def make_parity_plot(long_df, shear_subset, title, out_path, single_shear=False,
     sub = long_df[long_df["shear_col"].isin(shear_subset)].copy()
     sub = sub[(sub["actual_cP"] > 0) & (sub["pred_cP"] > 0)].dropna(subset=["actual_cP", "pred_cP"])
     if sub.empty:
-        logger.warning(f"No valid data for {out_path} — skipping.")
+        logger.warning(f"No valid data for {out_path} - skipping.")
         return
 
     m = calc_metrics(sub["actual_cP"].values, sub["pred_cP"].values)
@@ -380,7 +380,7 @@ def make_profile_plot(results_df, sample_id, out_path):
     apply_style(plt)
     row = results_df[results_df["ID"] == str(sample_id)]
     if row.empty:
-        logger.warning(f"Profile: ID '{sample_id}' not found — skipping.")
+        logger.warning(f"Profile: ID '{sample_id}' not found - skipping.")
         return
     row = row.iloc[0]
     measured = [row.get(sc, np.nan) for sc in SHEAR_COLS]
@@ -443,7 +443,7 @@ def make_profile_plot(results_df, sample_id, out_path):
     ax.set_xlabel("Shear Rate (s⁻¹)", fontsize=14, labelpad=10, color=C_TEXT)
     ax.set_ylabel("Viscosity (cP)", fontsize=14, labelpad=10, color=C_TEXT)
     ax.set_title(
-        f"Ibalizumab — Viscosity Profile  (ID {sample_id})\n{subtitle}",
+        f"Ibalizumab - Viscosity Profile  (ID {sample_id})\n{subtitle}",
         fontsize=14,
         pad=12,
         color=C_TEXT,
@@ -523,7 +523,7 @@ def run(
         data = paths.latest_data_file()
     for path in (model_dir, data):
         if not os.path.exists(path):
-            sys.exit(f"ERROR: path not found — {path}")
+            sys.exit(f"ERROR: path not found - {path}")
     if out_dir is None:
         out_dir = os.path.join(model_dir, "benchmarks")
     os.makedirs(out_dir, exist_ok=True)
@@ -637,7 +637,7 @@ def run(
     make_parity_plot(
         long_df,
         SHEAR_COLS,
-        f"Ibalizumab — All Shear Rates\n{subtitle}",
+        f"Ibalizumab - All Shear Rates\n{subtitle}",
         os.path.join(out_dir, "parity_ibal_all_shears.png"),
         single_shear=False,
         context_ids=context_id_set,
@@ -645,7 +645,7 @@ def run(
     make_parity_plot(
         long_df,
         ["Viscosity_1000"],
-        f"Viscosity @ 1 000 s⁻¹ — Ibalizumab\n{subtitle}",
+        f"Viscosity @ 1 000 s⁻¹ - Ibalizumab\n{subtitle}",
         os.path.join(out_dir, "parity_ibal_1000.png"),
         single_shear=True,
         context_ids=context_id_set,
