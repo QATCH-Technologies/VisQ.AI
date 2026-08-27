@@ -42,8 +42,8 @@ structure.
 
 ### Training and evaluation
 
-Run the full pipeline - data processing, optional Optuna hyperparameter tuning, model
-training, and sanity-check evaluation - from a single entrypoint:
+Run the full pipeline including data processing, hyperparameter tuning, model
+training, and sanity-check evaluation from a single entrypoint:
 
 ```bash
 python scripts/run.py
@@ -84,9 +84,9 @@ src/visqai/
   ├── constants.py, paths.py, validation.py, logging_config.py  # Shared infrastructure
   ├── features/      # Feature engineering and physics priors
   ├── training/       # Data loaders, training loops, and Optuna tuning
-  ├── models/          # Conditional Neural Process (CNP) architecture
+  ├── models/          # Model architecture (s)
   ├── inference/       # Prediction and serving API
-  ├── eval/             # Evaluation suites (parity, LOGO, zero-shot, learning-curve)
+  ├── eval/             # Evaluation suites
   └── packaging/     # Deployment packaging utilities
 scripts/
   ├── run.py           # End-to-end training and evaluation pipeline
