@@ -29,7 +29,7 @@ flowchart TD
     F --> I --> J
 ```
 
-[`scripts/run.py`](scripts/run.py) chains data-processing -> training -> eval in one process;
+[`scripts/run.py`](scripts/run.py) chains data-processing, training, and evaluation into one process;
 [`scripts/package.py`](scripts/package.py) runs the packaging step. Each stage is also
 independently callable (see [CONTRIBUTING.md](CONTRIBUTING.md#adding-a-new-evaluation-suite)
 for the eval-module shape).
@@ -52,12 +52,12 @@ under it.
 
 Shared input-validation helpers (`require_dataframe`, `require_path_exists`,
 `require_positive`, `require_in`, ...) applied at the functions an external caller can reach
-directly with bad input - not inside `training.loop`'s hot path or `models.cnp`'s forward
+directly with bad input not inside `training.loop`'s hot path or `models.cnp`'s forward
 methods. See its module docstring and [CONTRIBUTING.md](CONTRIBUTING.md#code-conventions).
 
 ### `visqai.features`
 
-Raw row -> engineered feature frame, the shared input-processing layer both training and
+Converts raw features into an engineered feature frame, the shared input-processing layer both training and
 inference go through (previously duplicated and divergent between the two - see
 `dataprocessor.py`'s module docstring for the bug that caused):
 
@@ -69,19 +69,19 @@ inference go through (previously duplicated and divergent between the two - see
   feature explored in earlier iterations was dropped, only this one made the final model.
 - **`priors.py`** - the charge-coupling-index (CCI) / regime classification and the
   concentration-threshold prior table that select a formulation's excipient-interaction prior.
-- **`dataprocessor.py`** - `build_feature_frame` (the full pipeline: numeric defaults,
+- **`dataprocessor.py`** - `build_feature_frame` (the full pipeline of numeric defaults,
   categorical/charge featurization, unit normalization, engineered physics columns, per-row
   priors) and `prepare_df` (row-level cleanup: int->float coercion, ID->str, optional bad-row
   filtering).
 
 ### `visqai.training`
 
-- **`data.py`** - `load_and_preprocess`: fits the `ColumnTransformer` (StandardScaler + one-hot)
+- **`data.py`** - `load_and_preprocess`: fits the `ColumnTransformer` (StandardScaler & one-hot)
   and a separate `physics_scaler` (on log-shear/log-viscosity pairs), PCHIP-interpolates each
   formulation's curve and resamples it onto a fixed shear grid, and packages everything into
   `{static, points, group, id}` sample dicts. Also patches sklearn's degenerate zero-variance
-  `scale_=1` (a real held-out-fold hazard) to a fixed fallback scale.
-- **`loop.py`** - `train_epoch` (the combined prior-MSE + correction-MSE + contrastive-triplet +
+  `scale_=1` to a fixed fallback scale.
+- **`loop.py`** - `train_epoch` (the combined prior-MSE, correction-MSE, contrastive-triplet, and
   consistency + context-utility + norm-penalty loss, with hard-group EMA oversampling and
   separate gradient clipping for `prior_head`) and the validation functions
   (`validate`/`validate_zero_shot`/`validate_fewshot`) plus latent-collapse diagnostics
@@ -90,7 +90,7 @@ inference go through (previously duplicated and divergent between the two - see
 - **`run.py`** - `train_final_model`: the outer training loop (stratified per-group early-stopping
   split, checkpoint selection on a 50/50 mix of context-informed and zero-shot validation loss).
 - **`tuning.py`** - `objective_cv`: Optuna's hyperparameter-search objective, scored on few-shot
-  held-out error (the metric that matches deployment) rather than full-context error.
+  held-out error rather than full-context error.
 
 ### `visqai.models`
 
@@ -105,7 +105,7 @@ inference go through (previously duplicated and divergent between the two - see
 
 This split exists because a single combined decoder let a bad/OOD context actively make a good
 zero-shot prediction *worse*. With the split, `training.loop.train_epoch` fits `prior_head`
-directly to `y` and `correction_head` to the **residual** `y - prior_head(query).detach()` - the
+directly to `y` and `correction_head` to the **residual** `y - prior_head(query).detach()`, the
 `.detach()` is load-bearing, it's what stops the correction head from ever being rewarded for
 re-deriving `y` on its own instead of explaining what the prior gets wrong. The hard backstop one
 layer up is `eval.logo_eval`'s **context gate**: the LOGO harness asserts few-shot never scores
