@@ -115,7 +115,7 @@ def parse_args(argv=None):
         help="Path to the training CSV/XLSX. Defaults to the newest file in data/latest.",
     )
     p.add_argument(
-        "--trials", type=int, default=0, help="Optuna trials (0 to skip tuning and use defaults)."
+        "--trials", type=int, default=50, help="Optuna trials (0 to skip tuning and use defaults)."
     )
     p.add_argument("--max-epochs", type=int, default=500, help="Max epochs for the final retrain.")
     p.add_argument(
