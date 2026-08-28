@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/visqai-logo.svg" alt="VisQ.AI logo" width="240">
+  <img src="assets/visqai-logo.png" alt="VisQ.AI logo" width="240">
 </p>
 
 # VisQ.AI
@@ -9,9 +9,10 @@ Conditional Neural Process (CNP) architecture to predict formulation viscosity a
 rates from fundamental physicochemical properties, combining a physics-informed zero-shot
 prior with an optional few-shot correction learned from a handful of real measurements.
 
-[![Tests](https://github.com/QATCH-Technologies/VisQ.AI/actions/workflows/python-app.yml/badge.svg)](https://github.com/QATCH-Technologies/VisQ.AI/actions/workflows/python-app.yml)
-[![Pylint](https://github.com/QATCH-Technologies/VisQ.AI/actions/workflows/pylint.yml/badge.svg)](https://github.com/QATCH-Technologies/VisQ.AI/actions/workflows/pylint.yml)
+[![Build](https://github.com/QATCH-Technologies/VisQ.AI/actions/workflows/build.yml/badge.svg)](https://github.com/QATCH-Technologies/VisQ.AI/actions/workflows/build.yml)
 [![CodeQL](https://github.com/QATCH-Technologies/VisQ.AI/actions/workflows/codeql.yml/badge.svg)](https://github.com/QATCH-Technologies/VisQ.AI/actions/workflows/codeql.yml)
+[![Style](https://github.com/QATCH-Technologies/VisQ.AI/actions/workflows/style.yml/badge.svg)](https://github.com/QATCH-Technologies/VisQ.AI/actions/workflows/style.yml)
+[![Test](https://github.com/QATCH-Technologies/VisQ.AI/actions/workflows/test.yml/badge.svg)](https://github.com/QATCH-Technologies/VisQ.AI/actions/workflows/test.yml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 

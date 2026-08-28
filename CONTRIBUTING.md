@@ -96,10 +96,12 @@ the guidance below, defer to that file's own convention.
 
 ## Continuous Integration
 
-- **[python-app.yml](.github/workflows/python-app.yml)** - installs `requirements.txt`, lints
-  with `flake8`, runs `pytest --cov=visqai --cov-report=term-missing`.
-- **[pylint.yml](.github/workflows/pylint.yml)** - informational `pylint --exit-zero` pass.
+- **[build.yml](.github/workflows/build.yml)** - installs `requirements.txt` and verifies the
+  package imports.
 - **[codeql.yml](.github/workflows/codeql.yml)** - CodeQL security analysis.
+- **[style.yml](.github/workflows/style.yml)** - lints with `flake8` and informational
+  `pylint --exit-zero`.
+- **[test.yml](.github/workflows/test.yml)** - runs `pytest --cov=visqai --cov-report=term-missing`.
 
 Treat a local `pytest` run as the source of truth for whether your change is correct; CI is the
 same command run automatically on every push and PR.
