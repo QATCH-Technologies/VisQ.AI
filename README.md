@@ -37,7 +37,7 @@ structure.
 
 | Mode | Behavior |
 | --- | --- |
-| Standard | Paths resolve automatically when the shared Dropbox folder is mounted locally. |
+| Standard | Paths resolve automatically when the shared cloud folder is mounted locally. |
 | Custom | Override with the `VISQAI_DATA_ROOT` / `VISQAI_MODELS_ROOT` environment variables. |
 
 ## Quick Start
